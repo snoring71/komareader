@@ -38,14 +38,22 @@ jobs:
           xcrun simctl boot "$UDID" || true
           mkdir -p screenshots build
           set -o pipefail
-          xcodebuild test \
+          # TEST_RUNNER_ variables must be in the environment to reach the UI test process.
+          TEST_RUNNER_SCREENSHOT_DIR="$PWD/screenshots" xcodebuild test \
             -project ComicReader.xcodeproj \
             -scheme ComicReader \
             -destination "id=$UDID" \
             -resultBundlePath build/UITests.xcresult \
             CODE_SIGNING_ALLOWED=NO \
-            TEST_RUNNER_SCREENSHOT_DIR="$PWD/screenshots" \
             | tee build/xcodebuild.log | grep -E "error:|warning: unhandled|Test Case|\*\* (BUILD|TEST)" || exit ${PIPESTATUS[0]}
+
+      - name: Collect screenshots from the test results
+        if: always()
+        run: |
+          if [ -z "$(ls -A screenshots 2>/dev/null)" ] && [ -d build/UITests.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/UITests.xcresult --output-path screenshots || true
+          fi
+          ls -la screenshots || true
 
       - name: Upload screenshots
         if: always()
