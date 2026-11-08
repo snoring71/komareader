@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build, test and screenshot
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: scripts/select-xcode.sh
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Package tests (ComicKit on macOS)
+        working-directory: Packages/ComicKit
+        run: swift test
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build and run UI tests on iPad simulator
+        run: |
+          UDID=$(scripts/pick-simulator.sh)
+          echo "Simulator: $UDID"
+          xcrun simctl boot "$UDID" || true
+          mkdir -p screenshots build
+          set -o pipefail
+          xcodebuild test \
+            -project ComicReader.xcodeproj \
+            -scheme ComicReader \
+            -destination "id=$UDID" \
+            -resultBundlePath build/UITests.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            TEST_RUNNER_SCREENSHOT_DIR="$PWD/screenshots" \
+            | tee build/xcodebuild.log | grep -E "error:|warning: unhandled|Test Case|\*\* (BUILD|TEST)" || exit ${PIPESTATUS[0]}
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            build/UITests.xcresult
+            build/xcodebuild.log
+          if-no-files-found: ignore
