@@ -12,6 +12,15 @@ public struct ScannedBook: Sendable, Hashable {
     public var modified: Date?
     public var isDownloaded: Bool
 
+    public init(url: URL, relativePath: String, format: BookFormat, size: Int64?, modified: Date?, isDownloaded: Bool) {
+        self.url = url
+        self.relativePath = relativePath
+        self.format = format
+        self.size = size
+        self.modified = modified
+        self.isDownloaded = isDownloaded
+    }
+
     public var title: String { ((relativePath as NSString).lastPathComponent as NSString).deletingPathExtension }
     public var folder: String { (relativePath as NSString).deletingLastPathComponent }
 }
