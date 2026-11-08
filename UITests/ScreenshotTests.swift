@@ -21,23 +21,23 @@ final class ScreenshotTests: XCTestCase {
 
         XCUIDevice.shared.orientation = .landscapeLeft
         sleep(2)
-        save(app, "02-library-landscape", landscape: true)
+        save(app, "02-library-landscape")
 
         firstBook.tap()
         let page = app.otherElements["reader-page"].firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 20), "Reader did not open")
         sleep(2)
-        save(app, "03-reader-cover-with-controls", landscape: true)
+        save(app, "03-reader-cover-with-controls")
 
         // Turn to the first two-page spread with the right tap zone.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         sleep(2)
-        save(app, "04-reader-spread", landscape: true)
+        save(app, "04-reader-spread")
 
         // Hide the controls with a tap in the middle.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         sleep(1)
-        save(app, "05-reader-spread-no-controls", landscape: true)
+        save(app, "05-reader-spread-no-controls")
 
         XCUIDevice.shared.orientation = .portrait
         sleep(2)
@@ -51,7 +51,7 @@ final class ScreenshotTests: XCTestCase {
         save(app, "07-library-continue-reading")
     }
 
-    private func save(_ app: XCUIApplication, _ name: String, landscape: Bool = false) {
+    private func save(_ app: XCUIApplication, _ name: String) {
         // The screen-level capture keeps landscape shots the right way up.
         let screenshot = XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
@@ -61,21 +61,18 @@ final class ScreenshotTests: XCTestCase {
         if let dir = ProcessInfo.processInfo.environment["SCREENSHOT_DIR"], !dir.isEmpty {
             let url = URL(fileURLWithPath: dir, isDirectory: true)
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            var image = screenshot.image
-            // The simulator captures in portrait; turn landscape shots the right way up.
-            if landscape && image.size.height > image.size.width { image = rotatedCounterClockwise(image) }
+            // Landscape captures carry their rotation as image orientation metadata, which
+            // pngData() drops; redrawing bakes the rotation into the pixels.
+            let image = upright(screenshot.image)
             try? image.pngData()?.write(to: url.appendingPathComponent("\(name).png"))
         }
     }
 
-    private func rotatedCounterClockwise(_ image: UIImage) -> UIImage {
-        let size = CGSize(width: image.size.height, height: image.size.width)
+    private func upright(_ image: UIImage) -> UIImage {
         let format = UIGraphicsImageRendererFormat()
         format.scale = image.scale
-        return UIGraphicsImageRenderer(size: size, format: format).image { ctx in
-            ctx.cgContext.translateBy(x: 0, y: size.height)
-            ctx.cgContext.rotate(by: -.pi / 2)
-            image.draw(at: .zero)
+        return UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
         }
     }
 }
