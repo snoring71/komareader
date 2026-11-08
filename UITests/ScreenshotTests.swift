@@ -21,23 +21,23 @@ final class ScreenshotTests: XCTestCase {
 
         XCUIDevice.shared.orientation = .landscapeLeft
         sleep(2)
-        save(app, "02-library-landscape")
+        save(app, "02-library-landscape", landscape: true)
 
         firstBook.tap()
         let page = app.otherElements["reader-page"].firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 20), "Reader did not open")
         sleep(2)
-        save(app, "03-reader-cover-with-controls")
+        save(app, "03-reader-cover-with-controls", landscape: true)
 
         // Turn to the first two-page spread with the right tap zone.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         sleep(2)
-        save(app, "04-reader-spread")
+        save(app, "04-reader-spread", landscape: true)
 
         // Hide the controls with a tap in the middle.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         sleep(1)
-        save(app, "05-reader-spread-no-controls")
+        save(app, "05-reader-spread-no-controls", landscape: true)
 
         XCUIDevice.shared.orientation = .portrait
         sleep(2)
@@ -51,7 +51,7 @@ final class ScreenshotTests: XCTestCase {
         save(app, "07-library-continue-reading")
     }
 
-    private func save(_ app: XCUIApplication, _ name: String) {
+    private func save(_ app: XCUIApplication, _ name: String, landscape: Bool = false) {
         // The screen-level capture keeps landscape shots the right way up.
         let screenshot = XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
@@ -63,7 +63,7 @@ final class ScreenshotTests: XCTestCase {
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             var image = screenshot.image
             // The simulator captures in portrait; turn landscape shots the right way up.
-            if XCUIDevice.shared.orientation.isLandscape { image = rotatedCounterClockwise(image) }
+            if landscape && image.size.height > image.size.width { image = rotatedCounterClockwise(image) }
             try? image.pngData()?.write(to: url.appendingPathComponent("\(name).png"))
         }
     }
