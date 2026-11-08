@@ -51,7 +51,8 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func save(_ app: XCUIApplication, _ name: String) {
-        let screenshot = app.screenshot()
+        // The screen-level capture keeps landscape shots the right way up.
+        let screenshot = XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
         attachment.lifetime = .keepAlways

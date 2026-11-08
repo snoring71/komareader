@@ -29,7 +29,7 @@ struct ReaderScreen: View {
             .onChange(of: geo.size) { _, size in state.setLandscape(size.width > size.height) }
         }
         .animation(.easeInOut(duration: 0.2), value: state.showChrome)
-        .statusBarHidden(!state.showChrome)
+        .statusBarHidden(true)
         .persistentSystemOverlays(state.showChrome ? .automatic : .hidden)
         .onAppear {
             let bookId = state.book.id, count = state.pageCount
