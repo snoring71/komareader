@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Drives the app with a generated demo library and saves screenshots.
@@ -60,7 +61,21 @@ final class ScreenshotTests: XCTestCase {
         if let dir = ProcessInfo.processInfo.environment["SCREENSHOT_DIR"], !dir.isEmpty {
             let url = URL(fileURLWithPath: dir, isDirectory: true)
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            try? screenshot.pngRepresentation.write(to: url.appendingPathComponent("\(name).png"))
+            var image = screenshot.image
+            // The simulator captures in portrait; turn landscape shots the right way up.
+            if XCUIDevice.shared.orientation.isLandscape { image = rotatedCounterClockwise(image) }
+            try? image.pngData()?.write(to: url.appendingPathComponent("\(name).png"))
+        }
+    }
+
+    private func rotatedCounterClockwise(_ image: UIImage) -> UIImage {
+        let size = CGSize(width: image.size.height, height: image.size.width)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        return UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+            ctx.cgContext.translateBy(x: 0, y: size.height)
+            ctx.cgContext.rotate(by: -.pi / 2)
+            image.draw(at: .zero)
         }
     }
 }
