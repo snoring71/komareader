@@ -21,8 +21,7 @@ public final class PDFBookSource: BookSource, @unchecked Sendable {
     }
 
     public func pageSize(at index: Int) async throws -> CGSize {
-        lock.lock(); defer { lock.unlock() }
-        return document.page(at: index)?.bounds(for: .mediaBox).size ?? CGSize(width: 2, height: 3)
+        lock.withLock { document.page(at: index)?.bounds(for: .mediaBox).size } ?? CGSize(width: 2, height: 3)
     }
 
     func render(index: Int, maxPixelSize: CGFloat) throws -> CGImage {

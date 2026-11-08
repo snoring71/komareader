@@ -43,7 +43,8 @@ import Testing
 
     @Test func imageFolderIsABook() async throws {
         let dir = try tempDir()
-        let pngData = try Data(contentsOf: try ArchiveBookSource(url: try fixture("sample.cbz"), cacheRoot: try tempDir()).pageURL(at: 0))
+        let firstPage = try await ArchiveBookSource(url: try fixture("sample.cbz"), cacheRoot: try tempDir()).pageURL(at: 0)
+        let pngData = try Data(contentsOf: firstPage)
         for name in ["10.png", "2.png", "1.png"] { try pngData.write(to: dir.appendingPathComponent(name)) }
         let source = try FolderBookSource(url: dir)
         #expect(source.pageURLs.map(\.lastPathComponent) == ["1.png", "2.png", "10.png"])
