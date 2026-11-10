@@ -34,15 +34,17 @@ jobs:
       - name: Check the free-account (no iCloud) project
         run: |
           FREE_ACCOUNT=1 xcodegen generate
-          if plutil -extract com.apple.developer.icloud-services xml1 -o /dev/null App/ComicReader.entitlements \
-            || plutil -extract NSUbiquitousContainers xml1 -o /dev/null App/Info.plist; then
+          # grep, not plutil -extract: plutil reads the dots in entitlement keys as a key path.
+          if grep -q "icloud-services" App/ComicReader.entitlements \
+            || grep -q "NSUbiquitousContainers" App/Info.plist; then
             echo "::error::FREE_ACCOUNT=1 still generated iCloud settings"; exit 1
           fi
 
       - name: Generate Xcode project
         run: |
           xcodegen generate
-          plutil -extract com.apple.developer.icloud-services xml1 -o /dev/null App/ComicReader.entitlements
+          grep -q "icloud-services" App/ComicReader.entitlements
+          grep -q "NSUbiquitousContainers" App/Info.plist
 
       - name: Build and run UI tests on iPad simulator
         run: |
