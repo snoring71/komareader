@@ -29,6 +29,12 @@ xcodegen generate
 open ComicReader.xcodeproj
 ```
 
+To run on a real iPad with a free Apple ID (no paid developer account), generate with
+`FREE_ACCOUNT=1 xcodegen generate`. That leaves out iCloud, which free accounts cannot sign, so the
+app keeps its data on the device instead of syncing it; picking a comics folder in iCloud Drive
+still works. Free-account builds expire after 7 days. Run plain `xcodegen generate` to turn iCloud
+back on.
+
 Package tests run with `swift test` in `Packages/ComicKit`. Launch the app with the `-demo`
 argument to use a generated sample library.
 
