@@ -95,12 +95,15 @@ final class ScreenshotTests: XCTestCase {
         sleep(2)
         save(app, "11-book-info-edited-cover")
         app.buttons["info-done"].tap()
+        XCTAssertTrue(editCover.waitForNonExistence(timeout: 10), "Book Info did not close")
         sleep(1)
 
         // The Series view.
         let seriesRow = app.descendants(matching: .any)["sidebar-Series"].firstMatch
         if seriesRow.waitForExistence(timeout: 5) {
-            seriesRow.tap()
+            // The row's label, not its icon, is the reliable tap target.
+            let label = app.staticTexts["Series"].firstMatch
+            (label.isHittable ? label : seriesRow).tap()
             sleep(2)
             save(app, "12-series")
             let starfall = app.buttons["series-Starfall"]
@@ -113,7 +116,10 @@ final class ScreenshotTests: XCTestCase {
 
         // Another device read further: the reader offers to jump there.
         let allBooks = app.descendants(matching: .any)["sidebar-All Books"].firstMatch
-        if allBooks.waitForExistence(timeout: 5) { allBooks.tap() }
+        if allBooks.waitForExistence(timeout: 5) {
+            let label = app.staticTexts["All Books"].firstMatch
+            (label.isHittable ? label : allBooks).tap()
+        }
         let harbor = app.buttons["book-Harbor Lights 1"]
         XCTAssertTrue(harbor.waitForExistence(timeout: 10))
         harbor.tap()
