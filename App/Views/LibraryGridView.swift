@@ -293,7 +293,7 @@ struct SeriesCell: View {
                 // A hint of the volumes behind the first one.
                 if group.books.count > 1 {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color(.tertiarySystemFill))
+                        .fill(Color(.systemGray3))
                         .aspectRatio(2.0 / 3.0, contentMode: .fit)
                         .scaleEffect(0.92)
                         .offset(y: -10)
