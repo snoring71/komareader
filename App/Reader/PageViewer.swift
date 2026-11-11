@@ -57,7 +57,7 @@ struct PageViewer: UIViewControllerRepresentable {
         private func makeController(_ spread: Int) -> SpreadViewController {
             let controller = SpreadViewController(
                 spreadIndex: spread, pages: state.spreads[spread], rightToLeft: state.rightToLeft,
-                source: state.source, cache: state.cache
+                fit: state.fit, source: state.source, cache: state.cache
             )
             controller.onTap = { [weak self] fraction in self?.state.handleTap(atFraction: fraction) }
             return controller
@@ -91,6 +91,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     let spreadIndex: Int
     let pages: [Int]
     private let rightToLeft: Bool
+    private let fit: ReaderState.Fit
     private let source: BookSource
     private let cache: PageImageCache
     var onTap: ((CGFloat) -> Void)?
@@ -100,11 +101,13 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     private var imageViews: [UIImageView] = []
     private var loadTasks: [Task<Void, Never>] = []
     private var loadedSize: CGFloat = 0
+    private var laidOutContentSize: CGSize = .zero
 
-    init(spreadIndex: Int, pages: [Int], rightToLeft: Bool, source: BookSource, cache: PageImageCache) {
+    init(spreadIndex: Int, pages: [Int], rightToLeft: Bool, fit: ReaderState.Fit, source: BookSource, cache: PageImageCache) {
         self.spreadIndex = spreadIndex
         self.pages = pages
         self.rightToLeft = rightToLeft
+        self.fit = fit
         self.source = source
         self.cache = cache
         super.init(nibName: nil, bundle: nil)
@@ -152,29 +155,48 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if scrollView.zoomScale == 1 {
-            contentView.frame = CGRect(origin: .zero, size: scrollView.bounds.size)
-            scrollView.contentSize = scrollView.bounds.size
-        }
         layoutPages()
     }
 
-    /// Fits the page(s) into the screen, side by side, keeping each page's aspect ratio.
+    /// Sizes the page(s) for the fit setting, side by side, keeping each page's aspect ratio.
+    /// Fit Screen shows the whole spread; Fit Width and Fit Height can run past the screen,
+    /// and the spread then scrolls (down for width, sideways for height).
     private func layoutPages() {
-        let bounds = CGRect(origin: .zero, size: scrollView.bounds.size).insetBy(dx: 0, dy: 0)
+        let bounds = scrollView.bounds.size
         guard bounds.width > 0, bounds.height > 0 else { return }
         let aspects = imageViews.map { view -> CGFloat in
             guard let size = view.image?.size, size.height > 0 else { return 2.0 / 3.0 }
             return size.width / size.height
         }
-        let totalAspect = aspects.reduce(0, +)
-        let height = min(bounds.height, bounds.width / totalAspect)
-        var x = (bounds.width - height * totalAspect) / 2
-        let y = (bounds.height - height) / 2
+        let totalAspect = max(aspects.reduce(0, +), 0.01)
+        let height: CGFloat
+        switch fit {
+        case .screen: height = min(bounds.height, bounds.width / totalAspect)
+        case .width: height = bounds.width / totalAspect
+        case .height: height = bounds.height
+        }
+        let content = CGSize(width: max(bounds.width, (height * totalAspect).rounded()), height: max(bounds.height, height.rounded()))
+        if scrollView.zoomScale == 1 {
+            contentView.frame = CGRect(origin: .zero, size: content)
+            scrollView.contentSize = content
+            if content != laidOutContentSize {
+                laidOutContentSize = content
+                scrollToStart()
+            }
+        }
+        let area = contentView.bounds.size
+        var x = (area.width - height * totalAspect) / 2
+        let y = max(0, (area.height - height) / 2)
         for (view, aspect) in zip(imageViews, aspects) {
             view.frame = CGRect(x: x, y: y, width: height * aspect, height: height).integral
             x += height * aspect
         }
+    }
+
+    /// Where reading starts: the top, and the first page's side (the right in manga).
+    private func scrollToStart() {
+        let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
+        scrollView.contentOffset = CGPoint(x: rightToLeft ? maxX : 0, y: 0)
     }
 
     private func load(size: CGFloat) {

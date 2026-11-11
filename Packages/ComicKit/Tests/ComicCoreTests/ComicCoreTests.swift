@@ -206,18 +206,21 @@ import Testing
         #expect(try RecordCoding.decoder().decode(BookRecord.self, from: data) == a)
     }
 
-    @Test func handOffOffersANewerPositionFromAnotherDevice() {
+    @Test func handOffOffersTheFurthestPositionFromAnotherDevice() {
         var record = BookRecord(bookId: "A", file: .init(path: "x.cbz", size: 1, modified: nil))
-        record.progress["ipad-1"] = .init(page: 3, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 10))
+        record.progress["ipad-1"] = .init(page: 13, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 10))
+        // Only this device: nothing to offer.
         #expect(record.handOff(for: "ipad-1", openingAt: 3) == nil)
 
-        record.progress["mac-2"] = .init(page: 13, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 20))
+        record.progress["mac-2"] = .init(page: 9, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 5))
+        record.progress["iphone-3"] = .init(page: 3, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 30))
+        // Opening at the newest position (the iPhone's page 3), the Mac is further ahead.
         #expect(record.handOff(for: "ipad-1", openingAt: 3)?.device == "mac-2")
-        #expect(record.handOff(for: "ipad-1", openingAt: 3)?.progress.page == 13)
-        // Already opening there (the index took the newer position): nothing to offer.
-        #expect(record.handOff(for: "ipad-1", openingAt: 13) == nil)
-        // This device read it since: its own position stands.
-        record.progress["ipad-1"]?.updatedAt = Date(timeIntervalSince1970: 30)
+        #expect(record.handOff(for: "ipad-1", openingAt: 3)?.progress.page == 9)
+        // Already at or past every other device: nothing to offer.
+        #expect(record.handOff(for: "ipad-1", openingAt: 9) == nil)
+        // Finished elsewhere does not count as ahead.
+        record.progress["mac-2"]?.finished = true
         #expect(record.handOff(for: "ipad-1", openingAt: 3) == nil)
         #expect(DeviceIdentity.displayName(for: "mac-2") == "Mac")
         #expect(DeviceIdentity.displayName(for: "ipad-1a2b") == "iPad")

@@ -1,10 +1,15 @@
+import ComicCore
 import UIKit
 
 /// A generated sample library used for UI tests and screenshots (launch with `-demo`).
+/// Add `-demoCount 10000` for that many extra small books, to test the grid at scale.
 enum DemoLibrary {
-    static func make() -> URL {
+    static let dataRoot = FileManager.default.temporaryDirectory.appendingPathComponent("DemoData", isDirectory: true)
+
+    static func make(extraBooks: Int = 0) -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("DemoLibrary", isDirectory: true)
         try? FileManager.default.removeItem(at: root)
+        try? FileManager.default.removeItem(at: dataRoot)
         let series: [(String, Int, UIColor)] = [
             ("Starfall", 4, .systemIndigo), ("Harbor Lights", 3, .systemTeal),
             ("Night Market", 3, .systemOrange), ("Paper Moon", 2, .systemPink),
@@ -20,7 +25,38 @@ enum DemoLibrary {
                 }
             }
         }
+        makeMany(extraBooks, in: root.appendingPathComponent("More", isDirectory: true))
+        seedOtherDevices(folderName: root.lastPathComponent)
         return root
+    }
+
+    /// Small two-page books, ten to a series, written from a few pre-rendered pages.
+    private static func makeMany(_ count: Int, in folder: URL) {
+        guard count > 0 else { return }
+        let colors: [UIColor] = [.systemRed, .systemGreen, .systemBlue, .systemPurple, .systemBrown, .systemMint]
+        let pages = colors.map { color in
+            (render(title: "Demo", color: color, wide: false, cover: true).jpegData(compressionQuality: 0.6) ?? Data(),
+             render(title: "2", color: color, wide: false, cover: false).jpegData(compressionQuality: 0.6) ?? Data())
+        }
+        for index in 0..<count {
+            let series = index / 10 + 1
+            let book = folder.appendingPathComponent("Series \(series)").appendingPathComponent("Series \(series) \(index % 10 + 1)")
+            try? FileManager.default.createDirectory(at: book, withIntermediateDirectories: true)
+            let (cover, page) = pages[series % pages.count]
+            try? cover.write(to: book.appendingPathComponent("001.jpg"))
+            try? page.write(to: book.appendingPathComponent("002.jpg"))
+        }
+    }
+
+    /// Positions from "other devices" for Harbor Lights 1: the iPhone opened it last at page 3,
+    /// but the Mac had read on to page 6, so the reader offers to jump there.
+    private static func seedOtherDevices(folderName: String) {
+        guard let store = try? RecordStore.open(dataRoot: dataRoot, folderName: folderName) else { return }
+        let path = "Harbor Lights/Harbor Lights 1"
+        var record = BookRecord(bookId: StableID.book(path: path), file: .init(path: path, size: nil, modified: nil))
+        record.progress["mac-demo"] = .init(page: 5, pageCount: 8, finished: false, updatedAt: Date().addingTimeInterval(-86_400))
+        record.progress["iphone-demo"] = .init(page: 2, pageCount: 8, finished: false, updatedAt: Date().addingTimeInterval(-3_600))
+        try? store.write(record)
     }
 
     private static func render(title: String, color: UIColor, wide: Bool, cover: Bool) -> UIImage {

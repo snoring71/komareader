@@ -13,6 +13,19 @@ final class ReaderState {
         var id: String { rawValue }
     }
 
+    /// How a page is sized on screen. Width and height let a page run past the screen and scroll.
+    enum Fit: String, CaseIterable, Identifiable {
+        case screen = "Fit Screen", width = "Fit Width", height = "Fit Height"
+        var id: String { rawValue }
+        var systemImage: String {
+            switch self {
+            case .screen: return "arrow.up.left.and.arrow.down.right"
+            case .width: return "arrow.left.and.right"
+            case .height: return "arrow.up.and.down"
+            }
+        }
+    }
+
     let book: Book
     let source: BookSource
     let pageCount: Int
@@ -23,6 +36,9 @@ final class ReaderState {
     var layout: Layout {
         didSet { UserDefaults.standard.set(layout.rawValue, forKey: "readerLayout"); relayout() }
     }
+    var fit: Fit {
+        didSet { UserDefaults.standard.set(fit.rawValue, forKey: "readerFit"); layoutVersion += 1 }
+    }
     var showChrome = true
     /// Bumped whenever `spreads` is rebuilt, so the page view reloads.
     private(set) var layoutVersion = 0
@@ -32,6 +48,7 @@ final class ReaderState {
     @ObservationIgnored private var sizeTask: Task<Void, Never>?
     @ObservationIgnored private var prefetchTask: Task<Void, Never>?
     @ObservationIgnored let cache = PageImageCache()
+    @ObservationIgnored private let thumbnails = NSCache<NSNumber, UIImage>()
     @ObservationIgnored var onPageChange: ((_ page: Int, _ finished: Bool) -> Void)?
 
     init(book: Book, source: BookSource) {
@@ -40,6 +57,7 @@ final class ReaderState {
         self.pageCount = source.pageCount
         self.rightToLeft = book.direction == "rtl"
         self.layout = Layout(rawValue: UserDefaults.standard.string(forKey: "readerLayout") ?? "") ?? .auto
+        self.fit = Fit(rawValue: UserDefaults.standard.string(forKey: "readerFit") ?? "") ?? .screen
         let start = min(max(0, book.finished ? 0 : (book.currentPage ?? 0)), max(0, source.pageCount - 1))
         spreads = SpreadLayout.spreads(pageCount: pageCount, twoPage: false) { _ in false }
         currentSpread = SpreadLayout.spreadIndex(containing: start, in: spreads)
@@ -129,6 +147,18 @@ final class ReaderState {
         let finished = currentPages.contains(pageCount - 1)
         onPageChange?(currentPage, finished)
         prefetch()
+    }
+
+    /// A small picture of a page for the scrubber preview, decoded off the main thread.
+    func thumbnail(for page: Int) async -> UIImage? {
+        if let cached = thumbnails.object(forKey: NSNumber(value: page)) { return cached }
+        if let full = cache.image(for: page, minSize: 0) {
+            return full
+        }
+        guard let image = try? await source.image(at: page, maxPixelSize: 360) else { return nil }
+        let thumb = UIImage(cgImage: image)
+        thumbnails.setObject(thumb, forKey: NSNumber(value: page))
+        return thumb
     }
 
     /// Decodes two screens ahead and one behind at screen size.

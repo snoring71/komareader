@@ -129,13 +129,15 @@ public struct BookRecord: Codable, Equatable, Sendable {
     }
 
     /// Another device's position worth offering when this device opens the book at `page`:
-    /// the newest entry from any other device, if it is newer than this device's own entry,
-    /// unfinished, and on a different page.
+    /// the furthest unfinished position any other device has reached beyond `page`. The book
+    /// opens at the newest position (`latestProgress`); this catches the case where you read
+    /// further on one device and later glanced at an earlier page on another.
     public func handOff(for deviceId: String, openingAt page: Int) -> (device: String, progress: Progress)? {
-        guard let other = progress.filter({ $0.key != deviceId }).max(by: { $0.value.updatedAt < $1.value.updatedAt }) else { return nil }
-        if let mine = progress[deviceId], mine.updatedAt >= other.value.updatedAt { return nil }
-        if other.value.finished || other.value.page == page { return nil }
-        return (other.key, other.value)
+        let ahead = progress.filter { $0.key != deviceId && !$0.value.finished && $0.value.page > page }
+        guard let best = ahead.max(by: { a, b in
+            a.value.page != b.value.page ? a.value.page < b.value.page : a.value.updatedAt < b.value.updatedAt
+        }) else { return nil }
+        return (best.key, best.value)
     }
 }
 

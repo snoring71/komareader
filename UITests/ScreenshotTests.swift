@@ -51,6 +51,85 @@ final class ScreenshotTests: XCTestCase {
         save(app, "07-library-continue-reading")
     }
 
+    /// Book Info, the cover editor, the Series view and the hand-off prompt. Runs after
+    /// testLibraryAndReader (tests run in name order).
+    func testMoreScreens() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.launch()
+        XCUIDevice.shared.orientation = .landscapeLeft
+
+        let book = app.buttons["book-Night Market 2"]
+        XCTAssertTrue(book.waitForExistence(timeout: 30), "Demo library did not appear")
+        sleep(2)
+
+        // Book Info from the context menu.
+        book.press(forDuration: 1.2)
+        let infoItem = app.buttons["Book Info"]
+        XCTAssertTrue(infoItem.waitForExistence(timeout: 5), "No Book Info in the context menu")
+        infoItem.tap()
+        let editCover = app.buttons["info-edit-cover"]
+        XCTAssertTrue(editCover.waitForExistence(timeout: 10), "Book Info did not open")
+        let favorite = app.switches["info-favorite"]
+        if favorite.waitForExistence(timeout: 2) { favorite.tap() }
+        sleep(1)
+        save(app, "08-book-info")
+
+        // The cover editor: switch to 2:3, drag a corner, save.
+        editCover.tap()
+        let saveButton = app.buttons["cover-save"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 15), "Cover editor did not open")
+        sleep(2)
+        save(app, "09-cover-editor")
+        let comic = app.buttons["Comic 2:3"]
+        if comic.waitForExistence(timeout: 2) { comic.tap() }
+        let corner = app.otherElements["cover-handle-1-1"].firstMatch
+        if corner.waitForExistence(timeout: 2) {
+            corner.press(forDuration: 0.3, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+        }
+        sleep(1)
+        save(app, "10-cover-editor-cropped")
+        saveButton.tap()
+        XCTAssertTrue(editCover.waitForExistence(timeout: 15), "Did not return to Book Info")
+        sleep(2)
+        save(app, "11-book-info-edited-cover")
+        app.buttons["info-done"].tap()
+        sleep(1)
+
+        // The Series view.
+        let seriesRow = app.descendants(matching: .any)["sidebar-Series"].firstMatch
+        if seriesRow.waitForExistence(timeout: 5) {
+            seriesRow.tap()
+            sleep(2)
+            save(app, "12-series")
+            let starfall = app.buttons["series-Starfall"]
+            if starfall.waitForExistence(timeout: 5) {
+                starfall.tap()
+                sleep(2)
+                save(app, "13-series-starfall")
+            }
+        }
+
+        // Another device read further: the reader offers to jump there.
+        let allBooks = app.descendants(matching: .any)["sidebar-All Books"].firstMatch
+        if allBooks.waitForExistence(timeout: 5) { allBooks.tap() }
+        let harbor = app.buttons["book-Harbor Lights 1"]
+        XCTAssertTrue(harbor.waitForExistence(timeout: 10))
+        harbor.tap()
+        let jump = app.buttons["handoff-jump"]
+        XCTAssertTrue(jump.waitForExistence(timeout: 15), "No hand-off prompt")
+        sleep(1)
+        save(app, "14-reader-handoff")
+        jump.tap()
+        sleep(1)
+        let settings = app.buttons["reader-settings"]
+        if settings.waitForExistence(timeout: 3) {
+            settings.tap()
+            sleep(1)
+            save(app, "15-reader-settings-menu")
+        }
+    }
+
     private func save(_ app: XCUIApplication, _ name: String) {
         // The screen-level capture keeps landscape shots the right way up.
         let screenshot = XCUIScreen.main.screenshot()
