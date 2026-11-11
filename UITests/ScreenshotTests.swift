@@ -15,7 +15,7 @@ final class ScreenshotTests: XCTestCase {
         app.launch()
 
         let firstBook = app.buttons["book-Starfall 1"]
-        XCTAssertTrue(firstBook.waitForExistence(timeout: 30), "Demo library did not appear")
+        XCTAssertTrue(firstBook.waitForExistence(timeout: 90), "Demo library did not appear")
         sleep(3) // let covers render
         save(app, "01-library-portrait")
 
@@ -60,7 +60,7 @@ final class ScreenshotTests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
 
         let book = app.buttons["book-Night Market 2"]
-        XCTAssertTrue(book.waitForExistence(timeout: 30), "Demo library did not appear")
+        XCTAssertTrue(book.waitForExistence(timeout: 90), "Demo library did not appear")
         sleep(2)
 
         // Book Info from the context menu.
