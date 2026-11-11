@@ -6,6 +6,8 @@ options:
     iOS: "26.0"
   createIntermediateGroups: true
   developmentLanguage: en
+  # FREE_ACCOUNT=1 xcodegen generate  builds without iCloud, for signing with a free Apple ID.
+  postGenCommand: scripts/post-generate.sh
 settings:
   base:
     SWIFT_VERSION: "5.0"
