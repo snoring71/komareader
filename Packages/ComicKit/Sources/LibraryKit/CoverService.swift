@@ -15,18 +15,28 @@ public actor CoverService {
     private let store: RecordStore
     private let thumbnailDirectory: URL
     private let maxConcurrent: Int
-    private var pending: [String] = []
-    private var jobs: [String: (Book, URL)] = [:]
+    private struct Job { var book: Book; var fileURL: URL; var needsCloud: Bool }
+    /// Books on the device, or with a shared cover already: cheap, so they go first.
+    private var pendingLocal: [String] = []
+    /// Books that have to be fetched from iCloud: one at a time, with a pause in between.
+    private var pendingCloud: [String] = []
+    private var jobs: [String: Job] = [:]
     private var running: Set<String> = []
+    private var cloudRunning = 0
+    private var nextCloudStart = Date.distantPast
+    private var wakeTask: Task<Void, Never>?
     private var failed: Set<String> = []
     private var onCoverReady: (@Sendable (String, URL) -> Void)?
-    /// When false, books that are not on the device are skipped.
-    public var allowsCloudDownloads = true
+    /// When false, books that are not on the device wait (for Wi-Fi, a charger, and so on).
+    public private(set) var allowsCloudDownloads = true
+    /// Pause between two books fetched from iCloud, so a big library does not saturate the network.
+    public var cloudPause: TimeInterval
 
-    public init(store: RecordStore, thumbnailDirectory: URL, maxConcurrent: Int = 2) {
+    public init(store: RecordStore, thumbnailDirectory: URL, maxConcurrent: Int = 2, cloudPause: TimeInterval = 2) {
         self.store = store
         self.thumbnailDirectory = thumbnailDirectory
         self.maxConcurrent = maxConcurrent
+        self.cloudPause = cloudPause
         try? FileManager.default.createDirectory(at: thumbnailDirectory, withIntermediateDirectories: true)
     }
 
@@ -34,7 +44,14 @@ public actor CoverService {
         onCoverReady = handler
     }
 
-    public func setAllowsCloudDownloads(_ allowed: Bool) { allowsCloudDownloads = allowed }
+    public func setAllowsCloudDownloads(_ allowed: Bool) {
+        guard allowed != allowsCloudDownloads else { return }
+        allowsCloudDownloads = allowed
+        pump()
+    }
+
+    /// Books still waiting to be fetched from iCloud for their covers.
+    public var waitingForCloud: Int { pendingCloud.count }
 
     public nonisolated func thumbnailURL(bookId: String) -> URL {
         thumbnailDirectory.appendingPathComponent("\(bookId).jpg")
@@ -49,9 +66,22 @@ public actor CoverService {
     /// Queues cover work. `urgent` books (on screen now) jump to the front.
     public func request(_ book: Book, fileURL: URL, urgent: Bool) {
         guard !book.isMissing, existingThumbnail(bookId: book.id) == nil, !failed.contains(book.id), !running.contains(book.id) else { return }
-        jobs[book.id] = (book, fileURL)
-        pending.removeAll { $0 == book.id }
-        if urgent { pending.insert(book.id, at: 0) } else { pending.append(book.id) }
+        let needsCloud: Bool
+        if let job = jobs[book.id] {
+            needsCloud = job.needsCloud
+            // Already queued: only move it up if it is on screen now.
+            guard urgent else { return }
+        } else {
+            needsCloud = !book.isDownloaded && store.existingCoverURL(bookId: book.id) == nil
+        }
+        jobs[book.id] = Job(book: book, fileURL: fileURL, needsCloud: needsCloud)
+        if needsCloud {
+            pendingCloud.removeAll { $0 == book.id }
+            if urgent { pendingCloud.insert(book.id, at: 0) } else { pendingCloud.append(book.id) }
+        } else {
+            pendingLocal.removeAll { $0 == book.id }
+            if urgent { pendingLocal.insert(book.id, at: 0) } else { pendingLocal.append(book.id) }
+        }
         pump()
     }
 
@@ -62,21 +92,43 @@ public actor CoverService {
     }
 
     private func pump() {
-        while running.count < maxConcurrent, !pending.isEmpty {
-            let id = pending.removeFirst()
-            guard let job = jobs.removeValue(forKey: id) else { continue }
-            let (book, url) = job
-            if !book.isDownloaded && !allowsCloudDownloads && store.existingCoverURL(bookId: id) == nil { continue }
-            running.insert(id)
-            Task.detached(priority: .utility) { [store, thumbnailDirectory] in
-                let result = await Self.makeCover(book: book, fileURL: url, store: store, thumbnailDirectory: thumbnailDirectory)
-                await self.finish(id: id, thumbnail: result)
+        while running.count < maxConcurrent, !pendingLocal.isEmpty {
+            start(pendingLocal.removeFirst(), cloud: false)
+        }
+        guard allowsCloudDownloads, cloudRunning == 0, running.count < maxConcurrent, !pendingCloud.isEmpty else { return }
+        let wait = nextCloudStart.timeIntervalSinceNow
+        if wait > 0 {
+            guard wakeTask == nil else { return }
+            wakeTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(wait))
+                await self?.wake()
             }
+            return
+        }
+        start(pendingCloud.removeFirst(), cloud: true)
+    }
+
+    private func wake() {
+        wakeTask = nil
+        pump()
+    }
+
+    private func start(_ id: String, cloud: Bool) {
+        guard let job = jobs.removeValue(forKey: id) else { return }
+        running.insert(id)
+        if cloud { cloudRunning += 1 }
+        Task.detached(priority: .utility) { [store, thumbnailDirectory] in
+            let result = await Self.makeCover(book: job.book, fileURL: job.fileURL, store: store, thumbnailDirectory: thumbnailDirectory)
+            await self.finish(id: id, thumbnail: result, cloud: cloud)
         }
     }
 
-    private func finish(id: String, thumbnail: URL?) {
+    private func finish(id: String, thumbnail: URL?, cloud: Bool) {
         running.remove(id)
+        if cloud {
+            cloudRunning -= 1
+            nextCloudStart = Date().addingTimeInterval(cloudPause)
+        }
         if let thumbnail { onCoverReady?(id, thumbnail) } else { failed.insert(id) }
         pump()
     }

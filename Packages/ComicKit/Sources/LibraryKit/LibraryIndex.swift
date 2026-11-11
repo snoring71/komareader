@@ -22,6 +22,11 @@ public struct Book: Codable, FetchableRecord, PersistableRecord, Identifiable, H
     public var finished: Bool
     public var lastReadAt: Date?
     public var direction: String?
+    public var favorite: Bool
+    public var bookmarked: Bool
+    /// From the record's metadata, else worked out from the file name (`SeriesName`).
+    public var series: String
+    public var number: String?
 
     public enum Status: String, Sendable { case unread, reading, read }
 
@@ -75,6 +80,14 @@ public final class LibraryIndex: @unchecked Sendable {
                 t.column("finished", .boolean).notNull().defaults(to: false)
                 t.column("lastReadAt", .datetime)
                 t.column("direction", .text)
+            }
+        }
+        migrator.registerMigration("v2") { db in
+            try db.alter(table: "book") { t in
+                t.add(column: "favorite", .boolean).notNull().defaults(to: false)
+                t.add(column: "bookmarked", .boolean).notNull().defaults(to: false)
+                t.add(column: "series", .text).notNull().defaults(to: "")
+                t.add(column: "number", .text)
             }
         }
         return migrator
@@ -149,6 +162,9 @@ public final class LibraryIndex: @unchecked Sendable {
                 book.modified = found.modified ?? book.modified
                 book.isDownloaded = found.isDownloaded
                 book.isMissing = false
+                let parsed = SeriesName.parse(found.title)
+                book.series = parsed.series
+                book.number = parsed.number
                 if let record = recordById[book.id] { Self.applyRecord(record, to: &book) }
                 try book.save(db)
                 byPath[found.relativePath] = book
@@ -173,6 +189,14 @@ public final class LibraryIndex: @unchecked Sendable {
             book.lastReadAt = latest.updatedAt
         }
         if let direction = record.readerSettings?.direction { book.direction = direction.rawValue }
+        if let flags = record.flags {
+            book.favorite = flags.favorite
+            book.bookmarked = flags.bookmarked
+        }
+        if let series = record.metadata?.series?.trimmingCharacters(in: .whitespaces), !series.isEmpty {
+            book.series = series
+            book.number = record.metadata?.number
+        }
     }
 
     private static func newBook(id: String, from found: ScannedBook, now: Date) -> Book {
@@ -180,7 +204,8 @@ public final class LibraryIndex: @unchecked Sendable {
             id: id, relativePath: found.relativePath, title: found.title, folder: found.folder,
             format: found.format, size: found.size, modified: found.modified,
             isDownloaded: found.isDownloaded, isMissing: false, addedAt: now,
-            pageCount: nil, currentPage: nil, finished: false, lastReadAt: nil, direction: nil
+            pageCount: nil, currentPage: nil, finished: false, lastReadAt: nil, direction: nil,
+            favorite: false, bookmarked: false, series: found.title, number: nil
         )
     }
 }

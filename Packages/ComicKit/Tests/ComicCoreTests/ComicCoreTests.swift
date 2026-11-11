@@ -165,3 +165,61 @@ import Testing
         #expect(Set(merged.progress.keys) == ["ipad", "win"])
     }
 }
+
+@Suite struct SeriesNameTests {
+    @Test(arguments: [
+        ("ARIA 第02巻", "ARIA", "2"),
+        ("ARIA 第10巻", "ARIA", "10"),
+        ("よつばと! 15巻", "よつばと!", "15"),
+        ("Starfall 3", "Starfall", "3"),
+        ("Saga 001 (2012) (Digital) [Empire]", "Saga", "1"),
+        ("Saga - 054", "Saga", "54"),
+        ("Berserk Vol. 41", "Berserk", "41"),
+        ("Berserk v02", "Berserk", "2"),
+        ("One_Piece_Volume_100", "One Piece", "100"),
+        ("Batman #12", "Batman", "12"),
+        ("20th Century Boys 03", "20th Century Boys", "3"),
+        ("Chainsaw Man ch. 97.5", "Chainsaw Man", "97.5"),
+        ("ＡＲＩＡ 第０２巻", "ARIA", "2"),
+    ])
+    func parsesSeriesAndNumber(title: String, series: String, number: String) {
+        #expect(SeriesName.parse(title) == .init(series: series, number: number))
+    }
+
+    @Test func titlesWithoutANumberAreTheirOwnSeries() {
+        #expect(SeriesName.parse("Maus") == .init(series: "Maus", number: nil))
+        #expect(SeriesName.parse("1984") == .init(series: "1984", number: nil))
+        #expect(SeriesName.parse("Akira (Colour) [Kodansha]") == .init(series: "Akira", number: nil))
+    }
+}
+
+@Suite struct FlagsAndHandOffTests {
+    @Test func flagsMergeByDateAndRoundTrip() throws {
+        var a = BookRecord(bookId: "A", file: .init(path: "x.cbz", size: 1, modified: nil))
+        var b = a
+        a.flags = .init(favorite: true, bookmarked: false, updatedAt: Date(timeIntervalSince1970: 10))
+        b.flags = .init(favorite: false, bookmarked: true, updatedAt: Date(timeIntervalSince1970: 20))
+        #expect(a.merged(with: b).flags == b.flags)
+        #expect(b.merged(with: a).flags == b.flags)
+        let data = try RecordCoding.encoder().encode(a)
+        #expect(String(decoding: data, as: UTF8.self).contains("\"favorite\" : true"))
+        #expect(try RecordCoding.decoder().decode(BookRecord.self, from: data) == a)
+    }
+
+    @Test func handOffOffersANewerPositionFromAnotherDevice() {
+        var record = BookRecord(bookId: "A", file: .init(path: "x.cbz", size: 1, modified: nil))
+        record.progress["ipad-1"] = .init(page: 3, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 10))
+        #expect(record.handOff(for: "ipad-1", openingAt: 3) == nil)
+
+        record.progress["mac-2"] = .init(page: 13, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 20))
+        #expect(record.handOff(for: "ipad-1", openingAt: 3)?.device == "mac-2")
+        #expect(record.handOff(for: "ipad-1", openingAt: 3)?.progress.page == 13)
+        // Already opening there (the index took the newer position): nothing to offer.
+        #expect(record.handOff(for: "ipad-1", openingAt: 13) == nil)
+        // This device read it since: its own position stands.
+        record.progress["ipad-1"]?.updatedAt = Date(timeIntervalSince1970: 30)
+        #expect(record.handOff(for: "ipad-1", openingAt: 3) == nil)
+        #expect(DeviceIdentity.displayName(for: "mac-2") == "Mac")
+        #expect(DeviceIdentity.displayName(for: "ipad-1a2b") == "iPad")
+    }
+}

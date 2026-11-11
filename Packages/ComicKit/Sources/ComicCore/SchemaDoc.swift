@@ -38,6 +38,7 @@ picks a folder with the same name uses the same `libraryId`.
   "metadata": { "series": "Saga", "number": "1", "title": null, "writers": [], "year": 2012, "updatedAt": "..." },
   "tags": { "value": ["sci-fi"], "updatedAt": "..." },
   "cover": { "page": 0, "crop": [0.02, 0.0, 0.96, 1.0], "rotation": 0, "updatedAt": "..." },
+  "flags": { "favorite": true, "bookmarked": false, "updatedAt": "..." },
   "readerSettings": { "direction": "rtl", "layout": "auto", "updatedAt": "..." },
   "progress": {
     "apple-7a2c91d0": { "page": 14, "pageCount": 24, "finished": false, "updatedAt": "..." }
@@ -47,7 +48,11 @@ picks a folder with the same name uses the same `libraryId`.
 
 - `file.path` is relative to the library folder and uses `/`.
 - `page` values are zero-based.
-- `crop` is `[x, y, width, height]` as fractions of the page; `rotation` is degrees clockwise.
+- `crop` is `[x, y, width, height]` as fractions of the page after `rotation` (degrees
+  clockwise: 0, 90, 180 or 270) is applied. To re-render a cover: rotate the page, then crop.
+  `covers/<bookId>.custom.jpg` holds the result. A `cover` of page 0, uncropped and not rotated
+  means the user went back to the default cover; there is then no `.custom.jpg`.
+- `flags` holds the user's Favorite and Bookmarked marks.
 - `direction` is `ltr` or `rtl`; `layout` is `auto`, `single` or `double`.
 - Dates are ISO 8601 in UTC; writers should include milliseconds.
 - Groups that have never been set are left out.
@@ -79,7 +84,7 @@ record whose `bookId` is the worked-out id, else the lowest `bookId`, merge the 
 Two devices may change the same record at the same time. When two copies differ
 (for example an iCloud conflict copy), merge them like this:
 
-1. For `metadata`, `tags`, `cover` and `readerSettings`, keep whichever copy has the later `updatedAt`.
+1. For `metadata`, `tags`, `cover`, `flags` and `readerSettings`, keep whichever copy has the later `updatedAt`.
 2. For `progress`, keep every device key; for a key in both copies, keep the later `updatedAt`.
 3. Write files atomically (write a temporary file, then rename over the original).
 
