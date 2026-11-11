@@ -129,7 +129,7 @@ final class AppModel {
         do {
             let updated = try await Task.detached(priority: .userInitiated) {
                 let scanned = LibraryScanner.scan(root: libraryURL)
-                return try index.apply(scan: scanned, records: store.allRecords())
+                return try index.apply(scan: scanned, records: store.consolidatedRecords())
             }.value
             books = updated.sorted { $0.relativePath.naturalLess(than: $1.relativePath) }
             for book in books where thumbnails[book.id] == nil {

@@ -52,6 +52,28 @@ picks a folder with the same name uses the same `libraryId`.
 - Dates are ISO 8601 in UTC; writers should include milliseconds.
 - Groups that have never been set are left out.
 
+## Ids
+
+Two devices can meet the same library or book before iCloud has synced, so new ids are
+worked out from names rather than picked at random:
+
+- A new library's `libraryId` comes from its `folderName`.
+- A book seen for the first time gets its `bookId` from its `file.path`. A book that moves
+  keeps the id it already has.
+
+The id is SHA-256 of the UTF-8 text `komareader:library:<folderName>` or
+`komareader:book:<path>`, with the name in Unicode NFC. Take the first 16 bytes, set the high
+nibble of byte 6 to `8` and the top two bits of byte 8 to `10` (an RFC 9562 version 8 UUID),
+and write it as an upper-case UUID string. Ids made earlier at random stay valid.
+For example, the folder `Booklover` gives `352A9655-843C-82E4-BDCC-9A7C0DA6E14A` and the path
+`Saga/Saga 001.cbz` gives `D0E63AF5-7548-8B27-8544-DCCDDEB4C6FA`.
+
+If two `library.json` files name the same folder, use the one whose `libraryId` is the
+worked-out id, else the lowest `libraryId` (compared as text), and merge the other's records into it. If two
+records in one library have the same `file.path` and do not disagree on `file.size`, keep the
+record whose `bookId` is the worked-out id, else the lowest `bookId`, merge the other into it
+(rules below) and delete the other.
+
 ## Merge rules
 
 Two devices may change the same record at the same time. When two copies differ
