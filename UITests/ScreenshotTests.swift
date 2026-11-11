@@ -121,7 +121,8 @@ final class ScreenshotTests: XCTestCase {
             let label = app.staticTexts["All Books"].firstMatch
             (label.isHittable ? label : allBooks).tap()
         }
-        let harbor = app.buttons["book-Harbor Lights 1"]
+        // It is in Continue Reading too (the seeded progress), so take the first.
+        let harbor = app.buttons["book-Harbor Lights 1"].firstMatch
         XCTAssertTrue(harbor.waitForExistence(timeout: 10))
         harbor.tap()
         let jump = app.buttons["handoff-jump"]
