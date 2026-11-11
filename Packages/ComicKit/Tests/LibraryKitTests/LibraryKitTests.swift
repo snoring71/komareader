@@ -63,4 +63,27 @@ import Testing
         #expect(books.first?.currentPage == 7)
         #expect(books.first?.status == .reading)
     }
+
+    @Test func newBooksGetTheIdOtherDevicesWorkOut() throws {
+        let index = try LibraryIndex()
+        let scanned = ScannedBook(url: URL(fileURLWithPath: "/lib/x.cbz"), relativePath: "x.cbz", format: .zip, size: 5, modified: nil, isDownloaded: true)
+        #expect(try index.apply(scan: [scanned], records: []).first?.id == StableID.book(path: "x.cbz"))
+    }
+
+    @Test func indexSwitchesToASyncedIdThatArrivesLater() throws {
+        let index = try LibraryIndex()
+        let scanned = ScannedBook(url: URL(fileURLWithPath: "/lib/x.cbz"), relativePath: "x.cbz", format: .zip, size: 5, modified: nil, isDownloaded: true)
+        let localId = try #require(try index.apply(scan: [scanned], records: []).first?.id)
+
+        // Another device's record for the same file, under an id it made before stable ids.
+        var record = BookRecord(bookId: "FROM-WINDOWS", file: .init(path: "x.cbz", size: 5, modified: nil))
+        record.progress["win"] = .init(page: 3, pageCount: 10, finished: false, updatedAt: Date())
+        let books = try index.apply(scan: [scanned], records: [record])
+        #expect(books.map(\.id) == ["FROM-WINDOWS"])
+        #expect(books.first?.currentPage == 3)
+        #expect(try index.book(id: localId) == nil)
+
+        // Stays put on the next scan.
+        #expect(try index.apply(scan: [scanned], records: [record]).map(\.id) == ["FROM-WINDOWS"])
+    }
 }

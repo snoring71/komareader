@@ -1,4 +1,4 @@
-import ComicCore
+@testable import ComicCore
 import Foundation
 import Testing
 
@@ -81,5 +81,87 @@ import Testing
         let reopened = try RecordStore.open(dataRoot: root, folderName: "Booklover")
         #expect(reopened.info.libraryId == store.info.libraryId)
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("SCHEMA.md").path))
+    }
+
+    @Test func stableIdsMatchTheDocumentedRecipe() {
+        #expect(StableID.library(folderName: "Booklover") == "352A9655-843C-82E4-BDCC-9A7C0DA6E14A")
+        #expect(StableID.book(path: "Saga/Saga 001.cbz") == "D0E63AF5-7548-8B27-8544-DCCDDEB4C6FA")
+        // Decomposed and precomposed spellings of the same name give the same id.
+        #expect(StableID.book(path: "Cafe\u{301}.cbz") == StableID.book(path: "Caf\u{E9}.cbz"))
+        #expect(StableID.book(path: "a.cbz") != StableID.library(folderName: "a.cbz"))
+    }
+
+    func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    }
+
+    @Test func devicesThatPickTheSameFolderShareALibraryId() throws {
+        let a = try RecordStore.open(dataRoot: tempRoot(), folderName: "Booklover")
+        let b = try RecordStore.open(dataRoot: tempRoot(), folderName: "Booklover")
+        #expect(a.info.libraryId == b.info.libraryId)
+        #expect(a.info.libraryId == StableID.library(folderName: "Booklover"))
+    }
+
+    @Test func duplicateLibrariesAreFoldedTogether() throws {
+        let root = tempRoot()
+        // An older library made with a random id, as builds before stable ids did.
+        let oldInfo = LibraryInfo(libraryId: "0-OLD", folderName: "Booklover")
+        let old = try RecordStore(root: root.appendingPathComponent("Libraries/0-OLD"), info: oldInfo)
+        try RecordStore.coordinatedWrite(try RecordCoding.encoder().encode(oldInfo), to: old.root.appendingPathComponent("library.json"))
+        var record = BookRecord(bookId: "B", file: .init(path: "b.cbz", size: 1, modified: nil))
+        record.progress["ipad"] = .init(page: 3, pageCount: 9, finished: false)
+        try old.write(record)
+        try old.writeCover(Data([1]), bookId: "B")
+
+        // A second library for the same folder, made by another device.
+        let newInfo = LibraryInfo(libraryId: StableID.library(folderName: "Booklover"), folderName: "Booklover")
+        let other = try RecordStore(root: root.appendingPathComponent("Libraries/\(newInfo.libraryId)"), info: newInfo)
+        try RecordStore.coordinatedWrite(try RecordCoding.encoder().encode(newInfo), to: other.root.appendingPathComponent("library.json"))
+
+        let store = try RecordStore.open(dataRoot: root, folderName: "Booklover")
+        #expect(store.info.libraryId == newInfo.libraryId)
+        #expect(store.read(bookId: "B")?.progress["ipad"]?.page == 3)
+        #expect(store.existingCoverURL(bookId: "B") != nil)
+    }
+
+    @Test func recordsForTheSameFileAreFoldedTogether() throws {
+        let store = try RecordStore.open(dataRoot: tempRoot(), folderName: "Booklover")
+        let path = "Saga/Saga 001.cbz"
+        var mine = BookRecord(bookId: "ZZZ", file: .init(path: path, size: 10, modified: nil))
+        mine.progress["ipad"] = .init(page: 4, pageCount: 20, finished: false)
+        var theirs = BookRecord(bookId: StableID.book(path: path), file: .init(path: path, size: 10, modified: nil))
+        theirs.progress["win"] = .init(page: 8, pageCount: 20, finished: false)
+        // Same path but a different size: probably a different file, so it is left alone.
+        let stale = BookRecord(bookId: "AAA", file: .init(path: path, size: 99, modified: nil))
+        try store.write(mine)
+        try store.write(theirs)
+        try store.write(stale)
+        try store.writeCover(Data([1]), bookId: "ZZZ", custom: true)
+
+        let records = store.consolidatedRecords()
+        #expect(Set(records.map(\.bookId)) == [theirs.bookId, "AAA"])
+        let kept = try #require(store.read(bookId: theirs.bookId))
+        #expect(Set(kept.progress.keys) == ["ipad", "win"])
+        #expect(store.read(bookId: "ZZZ") == nil)
+        #expect(FileManager.default.fileExists(atPath: store.coverURL(bookId: theirs.bookId, custom: true).path))
+        #expect(Set(store.consolidatedRecords().map(\.bookId)) == [theirs.bookId, "AAA"])
+    }
+
+    @Test func localDataIsImportedIntoICloud() throws {
+        let local = tempRoot(), cloud = tempRoot()
+        let localStore = try RecordStore.open(dataRoot: local, folderName: "Books")
+        var record = BookRecord(bookId: "B", file: .init(path: "b.cbz", size: 1, modified: nil))
+        record.progress["ipad"] = .init(page: 2, pageCount: 9, finished: false)
+        try localStore.write(record)
+
+        let cloudStore = try RecordStore.open(dataRoot: cloud, folderName: "Books")
+        var synced = BookRecord(bookId: "B", file: .init(path: "b.cbz", size: 1, modified: nil))
+        synced.progress["win"] = .init(page: 6, pageCount: 9, finished: false)
+        try cloudStore.write(synced)
+
+        try RecordStore.importLibraries(from: local, into: cloud)
+        try RecordStore.importLibraries(from: local, into: cloud)
+        let merged = try #require(cloudStore.read(bookId: "B"))
+        #expect(Set(merged.progress.keys) == ["ipad", "win"])
     }
 }

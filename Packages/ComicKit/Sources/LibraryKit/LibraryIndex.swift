@@ -97,11 +97,15 @@ public final class LibraryIndex: @unchecked Sendable {
     ///
     /// - Known paths are updated in place.
     /// - New paths take the id from a synced record with the same path (another device saw the
-    ///   book first), or from a missing book with the same name and size (a move), or get a new id.
+    ///   book first), or from a missing book with the same name and size (a move), or get the id
+    ///   worked out from the path (`StableID.book`).
+    /// - Known paths whose book has no synced record switch to the id of a record with the same
+    ///   path, if one has arrived.
     /// - Books no longer found are marked missing, never deleted, so their data is kept.
     @discardableResult
     public func apply(scan: [ScannedBook], records: [BookRecord], now: Date = Date()) throws -> [Book] {
-        let recordByPath = Dictionary(records.map { ($0.file.path, $0) }, uniquingKeysWith: { a, _ in a })
+        // If two records still share a path, every device picks the same one (the lower id).
+        let recordByPath = Dictionary(records.map { ($0.file.path, $0) }, uniquingKeysWith: { a, b in a.bookId <= b.bookId ? a : b })
         let recordById = Dictionary(records.map { ($0.bookId, $0) }, uniquingKeysWith: { a, _ in a })
 
         return try db.write { db -> [Book] in
@@ -112,14 +116,27 @@ public final class LibraryIndex: @unchecked Sendable {
 
             for found in scan {
                 var book: Book
-                if let current = byPath[found.relativePath] {
+                if var current = byPath[found.relativePath] {
+                    // This device gave the book its own id before another device's record for the
+                    // same file arrived (or duplicates were folded into another id). Take the
+                    // synced id so both devices share progress and settings from now on.
+                    if recordById[current.id] == nil, let record = recordByPath[found.relativePath],
+                       record.bookId != current.id, !seen.contains(record.bookId),
+                       record.file.size == nil || found.size == nil || record.file.size == found.size,
+                       try Book.fetchOne(db, key: record.bookId) == nil {
+                        try Book.deleteOne(db, key: current.id)
+                        seen.insert(current.id)
+                        current.id = record.bookId
+                    }
                     book = current
                 } else if let record = recordByPath[found.relativePath], !seen.contains(record.bookId) {
                     book = try Book.fetchOne(db, key: record.bookId) ?? Self.newBook(id: record.bookId, from: found, now: now)
                 } else if let moved = existing.first(where: { $0.isMissing && !seen.contains($0.id) && $0.size == found.size && found.size != nil && $0.title == found.title }) {
                     book = moved
                 } else {
-                    var id = UUID().uuidString
+                    // The same id another device works out for this path, so records written
+                    // before either device has seen the other's still line up.
+                    var id = StableID.book(path: found.relativePath)
                     while takenIds.contains(id) { id = UUID().uuidString }
                     book = Self.newBook(id: id, from: found, now: now)
                 }
