@@ -30,6 +30,7 @@ targets:
         product: ArchiveKit
       - package: ComicKit
         product: LibraryKit
+      - target: ComicThumbnails
     info:
       path: App/Info.plist
       properties:
@@ -40,6 +41,32 @@ targets:
         LSRequiresIPhoneOS: true
         LSSupportsOpeningDocumentsInPlace: true
         UILaunchScreen: {}
+        # Comic archive types, so the thumbnail extension can claim them in the Files app.
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.zach.comicreader.cbz
+            UTTypeDescription: Comic Book (ZIP)
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cbz]
+              public.mime-type: [application/vnd.comicbook+zip, application/x-cbz]
+          - UTTypeIdentifier: com.zach.comicreader.cbr
+            UTTypeDescription: Comic Book (RAR)
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cbr]
+              public.mime-type: [application/vnd.comicbook-rar, application/x-cbr]
+          - UTTypeIdentifier: com.zach.comicreader.cb7
+            UTTypeDescription: Comic Book (7z)
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cb7]
+              public.mime-type: [application/x-cb7]
+          - UTTypeIdentifier: com.zach.comicreader.cbt
+            UTTypeDescription: Comic Book (TAR)
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cbt]
+              public.mime-type: [application/x-cbt]
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
         UISupportedInterfaceOrientations:
@@ -73,6 +100,42 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_PREVIEWS: YES
+  # Quick Look thumbnail extension: real covers for comic archives in the Files app.
+  ComicThumbnails:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ThumbnailExtension
+        excludes:
+          - Info.plist
+    dependencies:
+      - package: ComicKit
+        product: ComicCore
+      - package: ComicKit
+        product: ArchiveKit
+      - sdk: QuickLookThumbnailing.framework
+    info:
+      path: ThumbnailExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Comic Reader Thumbnails
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.quicklook.thumbnail
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ThumbnailProvider
+          NSExtensionAttributes:
+            QLSupportedContentTypes:
+              - com.zach.comicreader.cbz
+              - com.zach.comicreader.cbr
+              - com.zach.comicreader.cb7
+              - com.zach.comicreader.cbt
+            QLThumbnailMinimumDimension: 0
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zach.comicreader.thumbnails
+        PRODUCT_NAME: ComicThumbnails
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
   ComicReaderUITests:
     type: bundle.ui-testing
     platform: iOS
