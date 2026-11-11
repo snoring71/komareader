@@ -114,7 +114,8 @@ import Testing
                                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.9, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: 20, height: 30))
-        let jpeg = try #require(ImageDecoder.jpegData(try #require(context.makeImage())))
+        let image = try #require(context.makeImage())
+        let jpeg = try #require(ImageDecoder.jpegData(image))
         try jpeg.write(to: folder.appendingPathComponent("001.jpg"))
         return folder
     }
