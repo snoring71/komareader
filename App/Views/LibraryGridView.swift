@@ -45,7 +45,7 @@ struct LibraryGridView: View {
         var id: String { key }
     }
 
-    private func sections(_ books: [Book]) -> [LetterSection]? {
+    private func letterSections(_ books: [Book]) -> [LetterSection]? {
         guard sort == .title, search.isEmpty, books.count > 24 else { return nil }
         if case .seriesNamed = item { return nil }
         var order: [String] = []
@@ -70,7 +70,7 @@ struct LibraryGridView: View {
 
     var body: some View {
         let books = visibleBooks
-        let sections = sections(books)
+        let sections = letterSections(books)
         ScrollViewReader { proxy in
             ScrollView {
                 if item == .all, search.isEmpty, !continueReading.isEmpty {
