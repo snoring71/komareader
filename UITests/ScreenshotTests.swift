@@ -116,7 +116,11 @@ final class ScreenshotTests: XCTestCase {
 
         // Another device read further: the reader offers to jump there.
         let allBooks = app.descendants(matching: .any)["sidebar-All Books"].firstMatch
-        if allBooks.waitForExistence(timeout: 5) { allBooks.tap() }
+        if allBooks.waitForExistence(timeout: 5) {
+            // The row's label, not its icon, is the reliable tap target (the page title here is "Starfall").
+            let label = app.staticTexts["All Books"].firstMatch
+            (label.isHittable ? label : allBooks).tap()
+        }
         let harbor = app.buttons["book-Harbor Lights 1"]
         XCTAssertTrue(harbor.waitForExistence(timeout: 10))
         harbor.tap()
