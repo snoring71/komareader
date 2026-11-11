@@ -85,7 +85,8 @@ final class ScreenshotTests: XCTestCase {
         if comic.waitForExistence(timeout: 2) { comic.tap() }
         let corner = app.otherElements["cover-handle-1-1"].firstMatch
         if corner.waitForExistence(timeout: 2) {
-            corner.press(forDuration: 0.3, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+            corner.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.3, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
         }
         sleep(1)
         save(app, "10-cover-editor-cropped")
