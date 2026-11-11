@@ -1,0 +1,182 @@
+import ArchiveKit
+import ComicCore
+import LibraryKit
+import Observation
+import UIKit
+
+/// Everything the reader shows: which pages share the screen, where we are, and the settings.
+@MainActor
+@Observable
+final class ReaderState {
+    enum Layout: String, CaseIterable, Identifiable {
+        case auto = "Automatic", single = "Single Page", double = "Two Pages"
+        var id: String { rawValue }
+    }
+
+    let book: Book
+    let source: BookSource
+    let pageCount: Int
+
+    var spreads: [[Int]] = []
+    var currentSpread = 0
+    var rightToLeft: Bool
+    var layout: Layout {
+        didSet { UserDefaults.standard.set(layout.rawValue, forKey: "readerLayout"); relayout() }
+    }
+    var showChrome = true
+    /// Bumped whenever `spreads` is rebuilt, so the page view reloads.
+    private(set) var layoutVersion = 0
+
+    @ObservationIgnored private var isLandscape = false
+    @ObservationIgnored private var widePages: Set<Int> = []
+    @ObservationIgnored private var sizeTask: Task<Void, Never>?
+    @ObservationIgnored private var prefetchTask: Task<Void, Never>?
+    @ObservationIgnored let cache = PageImageCache()
+    @ObservationIgnored var onPageChange: ((_ page: Int, _ finished: Bool) -> Void)?
+
+    init(book: Book, source: BookSource) {
+        self.book = book
+        self.source = source
+        self.pageCount = source.pageCount
+        self.rightToLeft = book.direction == "rtl"
+        self.layout = Layout(rawValue: UserDefaults.standard.string(forKey: "readerLayout") ?? "") ?? .auto
+        let start = min(max(0, book.finished ? 0 : (book.currentPage ?? 0)), max(0, source.pageCount - 1))
+        spreads = SpreadLayout.spreads(pageCount: pageCount, twoPage: false) { _ in false }
+        currentSpread = SpreadLayout.spreadIndex(containing: start, in: spreads)
+        loadPageSizes()
+    }
+
+    var currentPages: [Int] { spreads.indices.contains(currentSpread) ? spreads[currentSpread] : [] }
+    var currentPage: Int { currentPages.first ?? 0 }
+
+    var pageLabel: String {
+        let pages = currentPages.map { String($0 + 1) }.joined(separator: "–")
+        return "\(pages) of \(pageCount)"
+    }
+
+    private var usesTwoPages: Bool {
+        switch layout {
+        case .auto: return isLandscape
+        case .single: return false
+        case .double: return true
+        }
+    }
+
+    func setLandscape(_ landscape: Bool) {
+        guard landscape != isLandscape else { return }
+        isLandscape = landscape
+        relayout()
+    }
+
+    private func relayout() {
+        let page = currentPage
+        let wide = widePages
+        spreads = SpreadLayout.spreads(pageCount: pageCount, twoPage: usesTwoPages) { wide.contains($0) }
+        currentSpread = SpreadLayout.spreadIndex(containing: page, in: spreads)
+        layoutVersion += 1
+        prefetch()
+    }
+
+    /// Reads page sizes in the background so wide pages can stand alone in two-page mode.
+    private func loadPageSizes() {
+        let source = source, count = pageCount
+        sizeTask = Task { [weak self] in
+            var wide: Set<Int> = []
+            for index in 0..<count {
+                if Task.isCancelled { return }
+                if let size = try? await source.pageSize(at: index), size.width > size.height * 1.1 { wide.insert(index) }
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.widePages = wide
+            if self.usesTwoPages { self.relayout() }
+        }
+    }
+
+    func cancel() {
+        sizeTask?.cancel()
+        prefetchTask?.cancel()
+    }
+
+    // MARK: Navigation
+
+    /// Called by the page view after the user swipes, or by the buttons and slider.
+    func show(spread: Int) {
+        let clamped = min(max(0, spread), max(0, spreads.count - 1))
+        guard clamped != currentSpread else { return }
+        currentSpread = clamped
+        pageDidChange()
+    }
+
+    func next() { show(spread: currentSpread + 1) }
+    func previous() { show(spread: currentSpread - 1) }
+
+    func jump(toPage page: Int) {
+        show(spread: SpreadLayout.spreadIndex(containing: page, in: spreads))
+    }
+
+    /// Tap zones: the outer thirds turn pages (mirrored for right-to-left), the middle shows controls.
+    func handleTap(atFraction x: CGFloat) {
+        if x < 0.3 {
+            rightToLeft ? next() : previous()
+        } else if x > 0.7 {
+            rightToLeft ? previous() : next()
+        } else {
+            showChrome.toggle()
+        }
+    }
+
+    private func pageDidChange() {
+        let finished = currentPages.contains(pageCount - 1)
+        onPageChange?(currentPage, finished)
+        prefetch()
+    }
+
+    /// Decodes two screens ahead and one behind at screen size.
+    func prefetch() {
+        prefetchTask?.cancel()
+        let indices = [currentSpread + 1, currentSpread + 2, currentSpread - 1]
+            .filter { spreads.indices.contains($0) }
+            .flatMap { spreads[$0] }
+        let source = source, cache = cache, size = PageImageCache.screenPixelSize
+        prefetchTask = Task.detached(priority: .utility) {
+            for page in indices where cache.image(for: page, minSize: size) == nil {
+                if Task.isCancelled { return }
+                if let image = try? await source.image(at: page, maxPixelSize: size) {
+                    cache.insert(UIImage(cgImage: image), for: page, size: size)
+                }
+            }
+        }
+    }
+}
+
+/// Decoded pages kept in memory, bounded by cost; the furthest pages go first under pressure.
+final class PageImageCache: @unchecked Sendable {
+    private let cache = NSCache<NSNumber, Entry>()
+
+    final class Entry {
+        let image: UIImage
+        let size: CGFloat
+        init(image: UIImage, size: CGFloat) { self.image = image; self.size = size }
+    }
+
+    init() {
+        cache.totalCostLimit = 300 * 1024 * 1024
+    }
+
+    /// Longest screen side in pixels, which is what pages are decoded at until the user zooms.
+    @MainActor static var screenPixelSize: CGFloat {
+        let screen = UIScreen.main
+        return max(screen.bounds.width, screen.bounds.height) * screen.scale
+    }
+
+    func image(for page: Int, minSize: CGFloat) -> UIImage? {
+        guard let entry = cache.object(forKey: NSNumber(value: page)), entry.size >= minSize * 0.99 else { return nil }
+        return entry.image
+    }
+
+    func insert(_ image: UIImage, for page: Int, size: CGFloat) {
+        if let existing = cache.object(forKey: NSNumber(value: page)), existing.size >= size { return }
+        let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+        cache.setObject(Entry(image: image, size: size), forKey: NSNumber(value: page), cost: cost)
+    }
+}

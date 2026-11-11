@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build, test and screenshot
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: scripts/select-xcode.sh
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Package tests (ComicKit on macOS)
+        working-directory: Packages/ComicKit
+        run: swift test
+
+      - name: Check the free-account (no iCloud) project
+        run: |
+          FREE_ACCOUNT=1 xcodegen generate
+          # grep, not plutil -extract: plutil reads the dots in entitlement keys as a key path.
+          if grep -q "icloud-services" App/ComicReader.entitlements \
+            || grep -q "NSUbiquitousContainers" App/Info.plist; then
+            echo "::error::FREE_ACCOUNT=1 still generated iCloud settings"; exit 1
+          fi
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+          grep -q "icloud-services" App/ComicReader.entitlements
+          grep -q "NSUbiquitousContainers" App/Info.plist
+
+      - name: Build and run UI tests on iPad simulator
+        run: |
+          UDID=$(scripts/pick-simulator.sh)
+          echo "Simulator: $UDID"
+          xcrun simctl boot "$UDID" || true
+          mkdir -p screenshots build
+          set -o pipefail
+          # TEST_RUNNER_ variables must be in the environment to reach the UI test process.
+          TEST_RUNNER_SCREENSHOT_DIR="$PWD/screenshots" xcodebuild test \
+            -project ComicReader.xcodeproj \
+            -scheme ComicReader \
+            -destination "id=$UDID" \
+            -resultBundlePath build/UITests.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee build/xcodebuild.log | grep -E "error:|warning: unhandled|Test Case|\*\* (BUILD|TEST)" || exit ${PIPESTATUS[0]}
+
+      - name: Collect screenshots from the test results
+        if: always()
+        run: |
+          if [ -z "$(ls -A screenshots 2>/dev/null)" ] && [ -d build/UITests.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/UITests.xcresult --output-path screenshots || true
+          fi
+          ls -la screenshots || true
+
+      # Also publish screenshots to the "screenshots" branch so they can be viewed on GitHub
+      # (one folder per branch, replaced on every run).
+      - name: Publish screenshots to the screenshots branch
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+        run: |
+          [ -n "$(ls -A screenshots 2>/dev/null)" ] || exit 0
+          DEST="$RUNNER_TEMP/shots"
+          git clone --quiet --depth 1 --branch screenshots "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" "$DEST" 2>/dev/null || {
+            git init --quiet "$DEST"
+            git -C "$DEST" checkout --quiet --orphan screenshots
+            git -C "$DEST" remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"
+          }
+          FOLDER="$DEST/${BRANCH_NAME//\//-}"
+          rm -rf "$FOLDER" && mkdir -p "$FOLDER"
+          cp screenshots/*.png "$FOLDER/"
+          cd "$DEST"
+          git add -A
+          git -c user.name="github-actions" -c user.email="github-actions@users.noreply.github.com" commit --quiet -m "Screenshots for $BRANCH_NAME at ${GITHUB_SHA::7}" || exit 0
+          git push --quiet origin screenshots
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            build/UITests.xcresult
+            build/xcodebuild.log
+          if-no-files-found: ignore

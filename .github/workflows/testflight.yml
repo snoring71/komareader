@@ -1,0 +1,82 @@
+name: TestFlight
+
+# Builds a signed release and uploads it to TestFlight.
+# Needs these repository secrets (Settings > Secrets and variables > Actions):
+#   APPLE_TEAM_ID         10-character Apple Developer team id
+#   ASC_KEY_ID            App Store Connect API key id
+#   ASC_ISSUER_ID         App Store Connect API issuer id
+#   ASC_KEY_P8_BASE64     the .p8 key file, base64 encoded
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+    steps:
+      - name: Check secrets
+        id: secrets
+        run: |
+          if [ -z "$APPLE_TEAM_ID" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$ASC_KEY_P8_BASE64" ]; then
+            echo "::notice::TestFlight secrets are not set yet; skipping upload."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.secrets.outputs.ready == 'true'
+
+      - name: Select Xcode
+        if: steps.secrets.outputs.ready == 'true'
+        run: scripts/select-xcode.sh
+
+      - name: Install XcodeGen and API key
+        if: steps.secrets.outputs.ready == 'true'
+        run: |
+          brew install xcodegen
+          mkdir -p "$RUNNER_TEMP/keys"
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+
+      - name: Archive
+        if: steps.secrets.outputs.ready == 'true'
+        run: |
+          DEVELOPMENT_TEAM="$APPLE_TEAM_ID" xcodegen generate
+          set -o pipefail
+          xcodebuild archive \
+            -project ComicReader.xcodeproj \
+            -scheme ComicReader \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/ComicReader.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            | grep -E "error:|\*\* ARCHIVE" || exit ${PIPESTATUS[0]}
+
+      - name: Upload to TestFlight
+        if: steps.secrets.outputs.ready == 'true'
+        run: |
+          plutil -replace teamID -string "$APPLE_TEAM_ID" scripts/ExportOptions.plist
+          xcodebuild -exportArchive \
+            -archivePath build/ComicReader.xcarchive \
+            -exportOptionsPlist scripts/ExportOptions.plist \
+            -exportPath build/export \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"

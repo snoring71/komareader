@@ -1,0 +1,96 @@
+# Xcode project definition. Generate the .xcodeproj with:  xcodegen generate
+name: ComicReader
+options:
+  bundleIdPrefix: com.zach
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+  # FREE_ACCOUNT=1 xcodegen generate  builds without iCloud, for signing with a free Apple ID.
+  postGenCommand: scripts/post-generate.sh
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+packages:
+  ComicKit:
+    path: Packages/ComicKit
+targets:
+  ComicReader:
+    type: application
+    platform: iOS
+    sources:
+      - App
+    dependencies:
+      - package: ComicKit
+        product: ComicCore
+      - package: ComicKit
+        product: ArchiveKit
+      - package: ComicKit
+        product: LibraryKit
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Comic Reader
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        LSRequiresIPhoneOS: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSUbiquitousContainers:
+          iCloud.com.zach.comicreader:
+            NSUbiquitousContainerIsDocumentScopePublic: true
+            NSUbiquitousContainerName: Comic Reader
+            NSUbiquitousContainerSupportedFolderLevels: Any
+    entitlements:
+      path: App/ComicReader.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.zach.comicreader
+        com.apple.developer.ubiquity-container-identifiers:
+          - iCloud.com.zach.comicreader
+        com.apple.developer.icloud-services:
+          - CloudDocuments
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zach.comicreader
+        PRODUCT_NAME: ComicReader
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_PREVIEWS: YES
+  ComicReaderUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    dependencies:
+      - target: ComicReader
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zach.comicreader.uitests
+        TEST_TARGET_NAME: ComicReader
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  ComicReader:
+    build:
+      targets:
+        ComicReader: all
+        ComicReaderUITests: [test]
+    test:
+      targets:
+        - ComicReaderUITests
