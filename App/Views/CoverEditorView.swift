@@ -75,6 +75,8 @@ struct CoverEditorView: View {
 
     // MARK: Canvas
 
+    private static let canvasSpace = "cover-canvas"
+
     private var canvas: some View {
         GeometryReader { geo in
             let canvasSize = geo.size
@@ -104,6 +106,9 @@ struct CoverEditorView: View {
                         loupe(at: loupePoint, display: display, cropView: cropView, canvas: canvasSize)
                     }
                 }
+                // Drags are measured on the canvas, not on the frame or handle being dragged: those move
+                // with the finger, and measuring in their own space made the crop shake back and forth.
+                .coordinateSpace(.named(Self.canvasSpace))
                 .simultaneousGesture(zoomGesture)
             } else if failedToOpen {
                 ContentUnavailableView("Could Not Open the Book", systemImage: "exclamationmark.triangle")
@@ -147,7 +152,7 @@ struct CoverEditorView: View {
         .contentShape(Rectangle())
         .offset(x: rect.minX, y: rect.minY)
         .gesture(
-            DragGesture()
+            DragGesture(coordinateSpace: .named(Self.canvasSpace))
                 .onChanged { value in
                     let start = cropAtStart ?? crop
                     cropAtStart = start
@@ -181,7 +186,7 @@ struct CoverEditorView: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
                 .gesture(
-                    DragGesture()
+                    DragGesture(coordinateSpace: .named(Self.canvasSpace))
                         .onChanged { value in
                             let start = cropAtStart ?? crop
                             cropAtStart = start
@@ -286,7 +291,7 @@ struct CoverEditorView: View {
     }
 
     private var panGesture: some Gesture {
-        DragGesture()
+        DragGesture(coordinateSpace: .named(Self.canvasSpace))
             .onChanged { value in
                 guard zoom > 1 else { return }
                 pan = CGSize(width: panAtStart.width + value.translation.width, height: panAtStart.height + value.translation.height)

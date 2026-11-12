@@ -13,7 +13,12 @@ final class AppModel {
 
     var phase: Phase = .starting
     var libraryName = ""
-    var books: [Book] = []
+    var books: [Book] = [] {
+        didSet { booksDidChange(from: oldValue) }
+    }
+    /// Facts about the library that only change when books are added, removed, renamed or
+    /// retitled (not on every page turn or download), worked out once instead of on every redraw.
+    private(set) var catalog = Catalog()
     var thumbnails: [String: URL] = [:]
     var downloading: Set<String> = []
     var isScanning = false
@@ -25,6 +30,31 @@ final class AppModel {
     /// Bumped when a book's cover changes, so the grid reloads its thumbnail.
     var coverRevision: [String: Int] = [:]
     let coverPolicy = CoverPolicy()
+
+    struct Catalog {
+        /// Position of each book when sorted by title.
+        var titleRank: [String: Int] = [:]
+        /// The letter each book is filed under in the index.
+        var indexKey: [String: String] = [:]
+        var series: [SeriesGroup] = []
+        var folders: [FolderNode] = []
+    }
+
+    private func booksDidChange(from old: [Book]) {
+        let structural = old.count != books.count || zip(old, books).contains { a, b in
+            a.id != b.id || a.title != b.title || a.series != b.series || a.number != b.number || a.isMissing != b.isMissing || a.relativePath != b.relativePath
+        }
+        guard structural else { return }
+        var catalog = Catalog()
+        let byTitle = books.sorted { $0.title == $1.title ? $0.relativePath.naturalLess(than: $1.relativePath) : $0.title.naturalLess(than: $1.title) }
+        for (rank, book) in byTitle.enumerated() {
+            catalog.titleRank[book.id] = rank
+            catalog.indexKey[book.id] = IndexKey.of(book.title)
+        }
+        catalog.series = SeriesGroup.groups(from: books)
+        catalog.folders = FolderNode.tree(from: books)
+        self.catalog = catalog
+    }
 
     struct OpenBook: Identifiable {
         let book: Book
@@ -122,8 +152,8 @@ final class AppModel {
             self.covers = covers
             self.books = (try? index.allBooks()) ?? []
             self.phase = .ready
-            watcher = FolderWatcher(url: url) { [weak self] in
-                Task { @MainActor in self?.rescanSoon() }
+            watcher = FolderWatcher(url: url) { [weak self] changed in
+                Task { @MainActor in self?.folderChanged(at: changed) }
             }
             await rescan()
         } catch {
@@ -134,23 +164,47 @@ final class AppModel {
 
     // MARK: Scanning
 
-    func rescanSoon() {
+    /// A change reported inside the library folder. Changes to books we already know (their
+    /// download state flipping while covers are made, for example) need no rescan; new or
+    /// moved files and folders do.
+    private func folderChanged(at url: URL?) {
+        if let url, let libraryURL {
+            let root = libraryURL.standardizedFileURL.path
+            var path = url.standardizedFileURL.path
+            if path.hasPrefix(root + "/") {
+                path = String(path.dropFirst(root.count + 1))
+                // Hidden ".Name.cbz.icloud" placeholders stand for "Name.cbz".
+                let name = (path as NSString).lastPathComponent
+                if name.hasPrefix("."), name.hasSuffix(".icloud") {
+                    let real = String(name.dropFirst().dropLast(".icloud".count))
+                    path = ((path as NSString).deletingLastPathComponent as NSString).appendingPathComponent(real)
+                }
+                let known = books.contains { !$0.isMissing && ($0.relativePath == path || path.hasPrefix($0.relativePath + "/")) }
+                if known, FileManager.default.fileExists(atPath: url.path) || CloudFiles.isInCloud(url) { return }
+            }
+        }
+        rescanSoon(delay: .seconds(2))
+    }
+
+    func rescanSoon(delay: Duration = .milliseconds(600)) {
         guard phase == .ready else { return }
         rescanTask?.cancel()
         rescanTask = Task {
-            try? await Task.sleep(for: .milliseconds(600))
+            try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            await rescan()
+            await rescan(showProgress: false)
         }
     }
 
-    func rescan() async {
+    /// Rescans the library folder. `showProgress` shows the spinner (for a rescan the user asked for).
+    func rescan(showProgress: Bool = true) async {
         guard let libraryURL, let store, let index else { return }
-        isScanning = true
-        defer { isScanning = false }
+        if showProgress { isScanning = true }
+        defer { if showProgress { isScanning = false } }
         let covers = covers
+        let known = thumbnails
         do {
-            let (updated, staleCovers) = try await Task.detached(priority: .userInitiated) { () throws -> ([Book], [String]) in
+            let (updated, staleCovers, found) = try await Task.detached(priority: .userInitiated) { () throws -> ([Book], [String], [String: URL]) in
                 let scanned = LibraryScanner.scan(root: libraryURL)
                 let records = store.consolidatedRecords()
                 // Covers edited on another device since this device made its thumbnail.
@@ -160,15 +214,25 @@ final class AppModel {
                           made < edited else { return nil }
                     return record.bookId
                 }
-                return (try index.apply(scan: scanned, records: records), stale)
+                let books = try index.apply(scan: scanned, records: records)
+                    .sorted { $0.relativePath.naturalLess(than: $1.relativePath) }
+                // Thumbnails already on disk, looked up here rather than on the main thread.
+                var found: [String: URL] = [:]
+                for book in books where known[book.id] == nil {
+                    if let thumb = covers?.existingThumbnail(bookId: book.id) { found[book.id] = thumb }
+                }
+                return (books, stale, found)
             }.value
-            books = updated.sorted { $0.relativePath.naturalLess(than: $1.relativePath) }
-            for id in staleCovers {
-                await covers?.invalidate(bookId: id)
-                thumbnails[id] = nil
-            }
-            for book in books where thumbnails[book.id] == nil {
-                if let thumb = covers?.existingThumbnail(bookId: book.id) { thumbnails[book.id] = thumb }
+            // Assigning redraws everything that shows books, so only do it when something changed.
+            if updated != books { books = updated }
+            if !found.isEmpty || !staleCovers.isEmpty {
+                var thumbs = thumbnails
+                thumbs.merge(found) { a, _ in a }
+                for id in staleCovers {
+                    await covers?.invalidate(bookId: id)
+                    thumbs[id] = nil
+                }
+                thumbnails = thumbs
             }
             // Queue covers for everything else in the background; on-screen books go first.
             for book in books where thumbnails[book.id] == nil && !book.isMissing {

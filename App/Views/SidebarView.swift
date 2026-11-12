@@ -6,12 +6,12 @@ struct SidebarView: View {
 
     var body: some View {
         @Bindable var model = model
-        let folders = FolderNode.tree(from: model.books)
+        let folders = model.catalog.folders
         List(selection: $model.selection) {
             Section {
                 row(.all)
                 row(.continueReading)
-                row(.series, count: SeriesGroup.groups(from: model.books).count)
+                row(.series, count: model.catalog.series.count)
             }
             Section("Status") {
                 row(.unread)

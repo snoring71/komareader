@@ -11,9 +11,9 @@ final class FolderWatcher: NSObject, NSFilePresenter, @unchecked Sendable {
         queue.qualityOfService = .utility
         return queue
     }()
-    private let onChange: @Sendable () -> Void
+    private let onChange: @Sendable (URL?) -> Void
 
-    init(url: URL, onChange: @escaping @Sendable () -> Void) {
+    init(url: URL, onChange: @escaping @Sendable (URL?) -> Void) {
         presentedItemURL = url
         self.onChange = onChange
         super.init()
@@ -24,12 +24,12 @@ final class FolderWatcher: NSObject, NSFilePresenter, @unchecked Sendable {
 
     deinit { NSFileCoordinator.removeFilePresenter(self) }
 
-    func presentedItemDidChange() { onChange() }
-    func presentedSubitemDidChange(at url: URL) { onChange() }
-    func presentedSubitem(at oldURL: URL, didMoveTo newURL: URL) { onChange() }
-    func presentedSubitemDidAppear(at url: URL) { onChange() }
+    func presentedItemDidChange() { onChange(nil) }
+    func presentedSubitemDidChange(at url: URL) { onChange(url) }
+    func presentedSubitem(at oldURL: URL, didMoveTo newURL: URL) { onChange(nil) }
+    func presentedSubitemDidAppear(at url: URL) { onChange(nil) }
     func accommodatePresentedSubitemDeletion(at url: URL, completionHandler: @escaping (Error?) -> Void) {
-        onChange()
+        onChange(nil)
         completionHandler(nil)
     }
 }

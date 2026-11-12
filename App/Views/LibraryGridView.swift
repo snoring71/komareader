@@ -6,6 +6,8 @@ struct LibraryGridView: View {
     let item: SidebarItem
 
     @State private var search = ""
+    /// The search text the grid filters by; follows `search` after a short pause in typing.
+    @State private var appliedSearch = ""
     @State private var showSettings = false
     @AppStorage("sortOrder") private var sort: SortOrder = .title
     @AppStorage("coverSize") private var coverSize: Double = 150
@@ -23,6 +25,7 @@ struct LibraryGridView: View {
     private var size: Double { pinchSize ?? coverSize }
 
     private var visibleBooks: [Book] {
+        let search = appliedSearch
         var books = model.books.filter(item.includes)
         if !search.isEmpty {
             books = books.filter { $0.title.localizedStandardContains(search) || $0.folder.localizedStandardContains(search) || $0.series.localizedStandardContains(search) }
@@ -31,7 +34,10 @@ struct LibraryGridView: View {
             return books.sorted(by: SeriesGroup.readingOrder)
         }
         switch sort {
-        case .title: books.sort { $0.title == $1.title ? $0.relativePath.naturalLess(than: $1.relativePath) : $0.title.naturalLess(than: $1.title) }
+        case .title:
+            // The natural-order ranks are worked out once per library change, so this is an integer compare.
+            let rank = model.catalog.titleRank
+            books.sort { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
         case .recentlyAdded: books.sort { $0.addedAt > $1.addedAt }
         case .recentlyRead: books.sort { ($0.lastReadAt ?? .distantPast) > ($1.lastReadAt ?? .distantPast) }
         }
@@ -46,12 +52,12 @@ struct LibraryGridView: View {
     }
 
     private func letterSections(_ books: [Book]) -> [LetterSection]? {
-        guard sort == .title, search.isEmpty, books.count > 24 else { return nil }
+        guard sort == .title, appliedSearch.isEmpty, books.count > 24 else { return nil }
         if case .seriesNamed = item { return nil }
         var order: [String] = []
         var grouped: [String: [Book]] = [:]
         for book in books {
-            let key = IndexKey.of(book.title)
+            let key = model.catalog.indexKey[book.id] ?? IndexKey.of(book.title)
             if grouped[key] == nil { order.append(key) }
             grouped[key, default: []].append(book)
         }
@@ -71,9 +77,10 @@ struct LibraryGridView: View {
     var body: some View {
         let books = visibleBooks
         let sections = letterSections(books)
+        let continueReading = item == .all && search.isEmpty ? continueReading : []
         ScrollViewReader { proxy in
             ScrollView {
-                if item == .all, search.isEmpty, !continueReading.isEmpty {
+                if !continueReading.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Continue Reading").font(.title3.bold())
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -124,8 +131,8 @@ struct LibraryGridView: View {
         .simultaneousGesture(pinchGesture)
         .overlay {
             if books.isEmpty && !model.isScanning {
-                if !search.isEmpty {
-                    ContentUnavailableView.search(text: search)
+                if !appliedSearch.isEmpty {
+                    ContentUnavailableView.search(text: appliedSearch)
                 } else if item == .favorites {
                     ContentUnavailableView("No Favorites", systemImage: "heart", description: Text("Books you mark as Favorite appear here."))
                 } else if item == .bookmarked {
@@ -137,6 +144,11 @@ struct LibraryGridView: View {
         }
         .navigationTitle(item.title)
         .searchable(text: $search, prompt: "Search books")
+        .task(id: search) {
+            // Filtering thousands of books on every keystroke makes typing lag, so wait for a pause.
+            if !search.isEmpty, (try? await Task.sleep(for: .milliseconds(200))) == nil { return }
+            appliedSearch = search
+        }
         .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: !isSeriesList) }
         .sheet(isPresented: $showSettings) { SettingsView() }
     }
@@ -190,8 +202,9 @@ struct LibraryToolbar: ToolbarContent {
             }
             .accessibilityIdentifier("library-options")
         }
+        // Top bar, not `.status`: a status item sits in the bottom bar and pushes the Resume button around.
         if model.isScanning {
-            ToolbarItem(placement: .status) { ProgressView() }
+            ToolbarItem(placement: .topBarTrailing) { ProgressView() }
         }
     }
 }
@@ -253,7 +266,7 @@ struct SeriesGridView: View {
     @AppStorage("coverSize") private var coverSize: Double = 150
 
     var body: some View {
-        let groups = SeriesGroup.groups(from: model.books).filter { search.isEmpty || $0.name.localizedStandardContains(search) }
+        let groups = model.catalog.series.filter { search.isEmpty || $0.name.localizedStandardContains(search) }
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: coverSize, maximum: coverSize * 1.35), spacing: 20, alignment: .top)], spacing: 24) {
                 ForEach(groups) { group in
@@ -305,7 +318,7 @@ struct SeriesCell: View {
             .onAppear { if let cover { model.requestCover(for: cover, urgent: true) } }
             Text(group.name)
                 .font(.footnote.weight(.medium))
-                .lineLimit(2)
+                .lineLimit(2, reservesSpace: true)
             Text(group.books.count == 1 ? "1 book" : "\(group.books.count) books")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -325,9 +338,11 @@ struct BookCell: View {
                 CoverImage(url: model.thumbnails[book.id], title: book.title, revision: model.coverRevision[book.id] ?? 0)
                     .overlay(alignment: .topTrailing) { badge }
                     .overlay(alignment: .bottom) { progressBar }
+                // Every cell keeps room for two title lines, so all rows are the same height and the
+                // scroll bar does not jump as rows of different heights come into view.
                 Text(book.title)
                     .font(.footnote.weight(.medium))
-                    .lineLimit(2)
+                    .lineLimit(2, reservesSpace: true)
                     .foregroundStyle(.primary)
                 HStack(spacing: 4) {
                     if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
@@ -335,6 +350,8 @@ struct BookCell: View {
                     Text(statusText).foregroundStyle(.secondary)
                 }
                 .font(.caption2)
+                .lineLimit(1)
+                .imageScale(.small)
             }
         }
         .buttonStyle(.plain)
