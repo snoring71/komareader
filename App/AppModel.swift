@@ -58,10 +58,18 @@ final class AppModel {
         }
         guard structural else { return }
         var catalog = Catalog()
-        let byTitle = books
-            .map { (title: NaturalSortKey($0.title), path: NaturalSortKey($0.relativePath), book: $0) }
-            .sorted { $0.title == $1.title ? $0.path < $1.path : $0.title < $1.title }
-            .map(\.book)
+        struct Keyed {
+            let title: NaturalSortKey
+            let path: NaturalSortKey
+            let book: Book
+        }
+        let keyed: [Keyed] = books.map { book in
+            Keyed(title: NaturalSortKey(book.title), path: NaturalSortKey(book.relativePath), book: book)
+        }
+        let byTitle: [Book] = keyed.sorted { (a: Keyed, b: Keyed) -> Bool in
+            if a.title == b.title { return a.path < b.path }
+            return a.title < b.title
+        }.map { (item: Keyed) -> Book in item.book }
         for (rank, book) in byTitle.enumerated() {
             catalog.titleRank[book.id] = rank
             catalog.indexKey[book.id] = IndexKey.of(book.title)
