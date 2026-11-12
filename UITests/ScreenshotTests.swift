@@ -99,8 +99,9 @@ final class ScreenshotTests: XCTestCase {
         sleep(2)
         save(app, "11-book-info-edited-cover")
         app.buttons["info-done"].tap()
+        sleep(3)
+        save(app, "11b-library-edited-cover")
         XCTAssertTrue(editCover.waitForNonExistence(timeout: 10), "Book Info did not close")
-        sleep(1)
 
         // The Series view.
         let seriesRow = app.descendants(matching: .any)["sidebar-Series"].firstMatch

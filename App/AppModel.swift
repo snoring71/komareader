@@ -258,13 +258,12 @@ final class AppModel {
             }.value
             // Assigning redraws everything that shows books, so only do it when something changed.
             if updated != books { books = updated }
+            for id in staleCovers { await covers?.invalidate(bookId: id) }
             if !found.isEmpty || !staleCovers.isEmpty {
+                // One assignment, made after the awaits above so covers finished meanwhile are kept.
                 var thumbs = thumbnails
-                thumbs.merge(found) { a, _ in a }
-                for id in staleCovers {
-                    await covers?.invalidate(bookId: id)
-                    thumbs[id] = nil
-                }
+                thumbs.merge(found) { current, _ in current }
+                for id in staleCovers { thumbs[id] = nil }
                 thumbnails = thumbs
             }
             // Queue covers for everything else in the background; on-screen books go first.
