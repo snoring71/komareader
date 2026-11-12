@@ -23,7 +23,19 @@ final class AppModel {
     var downloading: Set<String> = []
     var isScanning = false
     var errorMessage: String?
-    var openBook: OpenBook?
+    var openBook: OpenBook? {
+        didSet {
+            let reading = openBook != nil
+            guard reading != (oldValue != nil) else { return }
+            // Making covers competes with decoding pages for the processor and the disk.
+            Task { [covers] in await covers?.setPaused(reading) }
+            if !reading { applyReadingProgress() }
+        }
+    }
+    /// The open book with its latest position. It is kept out of `books` until the reader
+    /// closes: changing `books` redraws the library behind the reader, and doing that on
+    /// every page turn made page turns and the close button slow in a big library.
+    @ObservationIgnored private var readingBook: Book?
     var selection: SidebarItem? = .all
     /// The book whose Book Info sheet is showing in the library.
     var bookInfo: BookRef?
@@ -46,7 +58,10 @@ final class AppModel {
         }
         guard structural else { return }
         var catalog = Catalog()
-        let byTitle = books.sorted { $0.title == $1.title ? $0.relativePath.naturalLess(than: $1.relativePath) : $0.title.naturalLess(than: $1.title) }
+        let byTitle = books
+            .map { (title: NaturalSortKey($0.title), path: NaturalSortKey($0.relativePath), book: $0) }
+            .sorted { $0.title == $1.title ? $0.path < $1.path : $0.title < $1.title }
+            .map(\.book)
         for (rank, book) in byTitle.enumerated() {
             catalog.titleRank[book.id] = rank
             catalog.indexKey[book.id] = IndexKey.of(book.title)
@@ -83,6 +98,10 @@ final class AppModel {
     static let isDemo = ProcessInfo.processInfo.arguments.contains("-demo")
 
     private var cacheRoot: URL { URL.cachesDirectory }
+    /// Unpacked pages are stored by page number, so the folder is renamed whenever the page
+    /// order rules change; folders from earlier versions are removed at launch.
+    private static let pageCacheName = "Pages-2"
+    private static let oldPageCacheNames = ["Pages"]
 
     // MARK: Startup
 
@@ -152,6 +171,12 @@ final class AppModel {
             self.covers = covers
             self.books = (try? index.allBooks()) ?? []
             self.phase = .ready
+            let caches = cacheRoot, oldNames = Self.oldPageCacheNames
+            Task.detached(priority: .utility) {
+                for name in oldNames {
+                    try? FileManager.default.removeItem(at: caches.appendingPathComponent(name, isDirectory: true))
+                }
+            }
             watcher = FolderWatcher(url: url) { [weak self] changed in
                 Task { @MainActor in self?.folderChanged(at: changed) }
             }
@@ -215,7 +240,7 @@ final class AppModel {
                     return record.bookId
                 }
                 let books = try index.apply(scan: scanned, records: records)
-                    .sorted { $0.relativePath.naturalLess(than: $1.relativePath) }
+                    .naturallySorted(by: \.relativePath)
                 // Thumbnails already on disk, looked up here rather than on the main thread.
                 var found: [String: URL] = [:]
                 for book in books where known[book.id] == nil {
@@ -284,7 +309,7 @@ final class AppModel {
             guard CloudFiles.isDownloaded(url) else { return nil }
         }
         do {
-            let cache = cacheRoot.appendingPathComponent("Pages", isDirectory: true)
+            let cache = cacheRoot.appendingPathComponent(Self.pageCacheName, isDirectory: true)
             return try await BookSourceFactory.open(url: url, format: book.format, cacheDirectory: cache)
         } catch {
             errorMessage = "Could not open \(book.title): \(error.localizedDescription)"
@@ -344,20 +369,30 @@ final class AppModel {
     func saveProgress(bookId: String, page: Int, pageCount: Int, finished: Bool? = nil, immediately: Bool = false) {
         let isFinished = finished ?? (page >= pageCount - 1)
         let now = Date()
-        updateBook(bookId) {
+        let change: (inout Book) -> Void = {
             $0.currentPage = page
             $0.pageCount = pageCount
             $0.finished = isFinished
             $0.lastReadAt = now
         }
-        guard let store, let book = books.first(where: { $0.id == bookId }) else { return }
+        let whileReading = !immediately && openBook?.id == bookId
+        if whileReading, var reading = readingBook ?? books.first(where: { $0.id == bookId }) {
+            change(&reading)
+            readingBook = reading
+        } else {
+            if readingBook?.id == bookId { readingBook = nil }
+            updateBook(bookId, change)
+        }
+        guard let store, let book = (whileReading ? readingBook : nil) ?? books.first(where: { $0.id == bookId }) else { return }
         let deviceId = deviceId
+        let index = whileReading ? index : nil
         progressTasks[bookId]?.cancel()
         progressTasks[bookId] = Task.detached(priority: .utility) {
             if !immediately {
                 try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled { return }
             }
+            try? index?.save(book)
             var record = store.read(bookId: bookId) ?? BookRecord(bookId: bookId, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
             record.file = .init(path: book.relativePath, size: book.size, modified: book.modified, fingerprint: record.file.fingerprint)
             record.progress[deviceId] = .init(page: page, pageCount: pageCount, finished: isFinished, updatedAt: now)
@@ -470,9 +505,22 @@ final class AppModel {
         }
     }
 
+    /// Puts the position reached in the reader into `books`, once, when the reader closes.
+    private func applyReadingProgress() {
+        guard let reading = readingBook else { return }
+        readingBook = nil
+        updateBook(reading.id) {
+            $0.currentPage = reading.currentPage
+            $0.pageCount = reading.pageCount
+            $0.finished = reading.finished
+            $0.lastReadAt = reading.lastReadAt
+        }
+    }
+
     private func updateBook(_ id: String, _ change: (inout Book) -> Void) {
         guard let i = books.firstIndex(where: { $0.id == id }) else { return }
         change(&books[i])
+        if readingBook?.id == id { change(&readingBook!) }
         let book = books[i]
         try? index?.save(book)
     }

@@ -353,6 +353,8 @@ struct BookCell: View {
                 .lineLimit(1)
                 .imageScale(.small)
             }
+            // The whole cell is the tap target, and nothing outside it.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("book-\(book.title)")
@@ -427,16 +429,19 @@ struct CoverImage: View {
     let title: String
     /// Changes when the cover file is replaced at the same URL (after a cover edit).
     var revision: Int = 0
-    @State private var image: UIImage?
+    @State private var loaded: UIImage?
 
     private struct Key: Equatable { let url: URL?; let revision: Int }
 
     var body: some View {
+        // A cover seen before is shown at once from memory, with no placeholder in between.
+        let image = loaded ?? url.flatMap { CoverMemoryCache.shared.image(for: $0, revision: revision) }
         Color(.secondarySystemFill)
             .aspectRatio(2.0 / 3.0, contentMode: .fit)
             .overlay {
                 if let image {
-                    Image(uiImage: image).resizable().scaledToFill()
+                    // A wide cover is cropped to the cell, and must not take taps outside it either.
+                    Image(uiImage: image).resizable().scaledToFill().allowsHitTesting(false)
                 } else {
                     Text(title)
                         .font(.caption.bold())
@@ -446,13 +451,44 @@ struct CoverImage: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(Rectangle())
             .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
             .task(id: Key(url: url, revision: revision)) {
-                guard let url else { image = nil; return }
-                image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
-                    guard let data = try? Data(contentsOf: url) else { return nil }
-                    return UIImage(data: data)?.preparingForDisplay()
+                guard let url else { loaded = nil; return }
+                let revision = revision
+                if let cached = CoverMemoryCache.shared.image(for: url, revision: revision) {
+                    loaded = cached
+                    return
+                }
+                loaded = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                    guard let data = try? Data(contentsOf: url), let image = UIImage(data: data)?.preparingForDisplay() else { return nil }
+                    CoverMemoryCache.shared.insert(image, for: url, revision: revision)
+                    return image
                 }.value
             }
+    }
+}
+
+/// Decoded grid covers kept in memory, so scrolling back shows them at once instead of
+/// reading and decoding each file again. The system empties it if memory runs short.
+final class CoverMemoryCache: @unchecked Sendable {
+    static let shared = CoverMemoryCache()
+    private let cache = NSCache<NSString, UIImage>()
+
+    private init() {
+        // About 450 KB per cover: room for roughly 1,000 of them on devices with 6 GB or more.
+        let memory = ProcessInfo.processInfo.physicalMemory
+        cache.totalCostLimit = memory >= 6_000_000_000 ? 480 * 1024 * 1024 : 200 * 1024 * 1024
+    }
+
+    private func key(_ url: URL, _ revision: Int) -> NSString { "\(url.path)#\(revision)" as NSString }
+
+    func image(for url: URL, revision: Int) -> UIImage? {
+        cache.object(forKey: key(url, revision))
+    }
+
+    func insert(_ image: UIImage, for url: URL, revision: Int) {
+        let cost = Int(image.size.width * image.scale * image.size.height * image.scale * 4)
+        cache.setObject(image, forKey: key(url, revision), cost: cost)
     }
 }

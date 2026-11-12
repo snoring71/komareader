@@ -95,7 +95,7 @@ public final class LibraryIndex: @unchecked Sendable {
 
     public func allBooks() throws -> [Book] {
         try db.read { db in try Book.fetchAll(db) }
-            .sorted { $0.relativePath.naturalLess(than: $1.relativePath) }
+            .naturallySorted(by: \.relativePath)
     }
 
     public func book(id: String) throws -> Book? {

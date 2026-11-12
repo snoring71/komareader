@@ -76,7 +76,7 @@ struct FolderNode: Identifiable, Hashable {
             let prefix = parent.isEmpty ? "" : parent + "/"
             let direct = counts.keys.filter { $0.hasPrefix(prefix) && !$0.dropFirst(prefix.count).contains("/") && $0 != parent }
             guard !direct.isEmpty else { return nil }
-            return direct.sorted { $0.naturalLess(than: $1) }.map { path in
+            return direct.naturallySorted().map { path in
                 FolderNode(id: path, name: (path as NSString).lastPathComponent, count: counts[path] ?? 0, children: children(of: path))
             }
         }
@@ -97,7 +97,7 @@ struct SeriesGroup: Identifiable, Hashable {
             guard let first = sorted.first else { return nil }
             return SeriesGroup(name: first.series, books: sorted)
         }
-        .sorted { $0.name.naturalLess(than: $1.name) }
+        .naturallySorted(by: \.name)
     }
 
     /// Volume order: by number when both have one, else by title.

@@ -65,7 +65,7 @@ public final class FolderBookSource: BookSource, @unchecked Sendable {
         let contents = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
         pageURLs = contents
             .filter { PageFilter.isPage(path: $0.lastPathComponent) }
-            .sorted { $0.lastPathComponent.naturalLess(than: $1.lastPathComponent) }
+            .naturallySorted(by: \.lastPathComponent)
     }
 
     public func image(at index: Int, maxPixelSize: CGFloat) async throws -> CGImage {

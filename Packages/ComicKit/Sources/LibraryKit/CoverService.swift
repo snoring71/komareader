@@ -50,6 +50,16 @@ public actor CoverService {
         pump()
     }
 
+    /// While paused, no new cover is started (covers already being made finish). The app pauses
+    /// while a book is open, so making covers never competes with turning pages.
+    public private(set) var isPaused = false
+
+    public func setPaused(_ paused: Bool) {
+        guard paused != isPaused else { return }
+        isPaused = paused
+        pump()
+    }
+
     /// Books still waiting to be fetched from iCloud for their covers.
     public var waitingForCloud: Int { pendingCloud.count }
 
@@ -92,6 +102,7 @@ public actor CoverService {
     }
 
     private func pump() {
+        guard !isPaused else { return }
         while running.count < maxConcurrent, !pendingLocal.isEmpty {
             start(pendingLocal.removeFirst(), cloud: false)
         }

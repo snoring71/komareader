@@ -8,6 +8,23 @@ import Testing
         #expect(names.naturallySorted() == ["ARIA 第01巻", "ARIA 第02巻", "ARIA 第10巻", "page1.jpg", "Page2.jpg", "page10.jpg"])
     }
 
+    /// Punctuation before digits before letters, as in Explorer, Finder and other readers.
+    @Test func naturalSortPutsPunctuationFirst() {
+        let pages = ["01.jpg", "a.jpg", "_02.jpg", "10.jpg", "_01.jpg", "2.jpg", "-cover.jpg", "０3.jpg"]
+        #expect(pages.naturallySorted() == ["-cover.jpg", "_01.jpg", "_02.jpg", "01.jpg", "2.jpg", "０3.jpg", "10.jpg", "a.jpg"])
+        #expect("_01.jpg".naturalLess(than: "01.jpg"))
+        #expect(!"01.jpg".naturalLess(than: "_01.jpg"))
+        #expect("Page 9".naturalLess(than: "page 10"))
+        #expect("file99999999999999999999998".naturalLess(than: "file99999999999999999999999"))
+        // Names that differ only in case or leading zeros still have one fixed order.
+        #expect(["b", "001", "B", "1", "01"].naturallySorted() == ["001", "01", "1", "B", "b"])
+    }
+
+    @Test func pageOrderGoesFolderByFolder() {
+        let paths = ["a b/1.jpg", "a/2.jpg", "a/_1.jpg", "cover.jpg", "a/10.jpg", "ch10/1.jpg", "ch2/1.jpg"]
+        #expect(PageOrder.sorted(paths) == ["a/_1.jpg", "a/2.jpg", "a/10.jpg", "a b/1.jpg", "ch2/1.jpg", "ch10/1.jpg", "cover.jpg"])
+    }
+
     @Test func pageFilter() {
         #expect(PageFilter.isPage(path: "Vol 1/001.JPG"))
         #expect(PageFilter.isPage(path: "a.webp"))

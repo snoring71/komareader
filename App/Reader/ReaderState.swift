@@ -168,12 +168,10 @@ final class ReaderState {
             .filter { spreads.indices.contains($0) }
             .flatMap { spreads[$0] }
         let source = source, cache = cache, size = PageImageCache.screenPixelSize
-        prefetchTask = Task.detached(priority: .utility) {
-            for page in indices where cache.image(for: page, minSize: size) == nil {
+        prefetchTask = Task.detached(priority: .userInitiated) {
+            for page in indices {
                 if Task.isCancelled { return }
-                if let image = try? await source.image(at: page, maxPixelSize: size) {
-                    cache.insert(UIImage(cgImage: image), for: page, size: size)
-                }
+                _ = await cache.load(page: page, size: size, from: source)
             }
         }
     }
@@ -182,6 +180,10 @@ final class ReaderState {
 /// Decoded pages kept in memory, bounded by cost; the furthest pages go first under pressure.
 final class PageImageCache: @unchecked Sendable {
     private let cache = NSCache<NSNumber, Entry>()
+    private let lock = NSLock()
+    /// Pages being decoded now, so the page view and the prefetcher share one decode
+    /// instead of each doing the same work.
+    private var loading: [Int: (size: CGFloat, task: Task<UIImage?, Never>)] = [:]
 
     final class Entry {
         let image: UIImage
@@ -202,6 +204,26 @@ final class PageImageCache: @unchecked Sendable {
     func image(for page: Int, minSize: CGFloat) -> UIImage? {
         guard let entry = cache.object(forKey: NSNumber(value: page)), entry.size >= minSize * 0.99 else { return nil }
         return entry.image
+    }
+
+    /// The page at `size`, from memory if it is there, otherwise decoded (once, however many callers ask).
+    func load(page: Int, size: CGFloat, from source: BookSource) async -> UIImage? {
+        if let cached = image(for: page, minSize: size) { return cached }
+        let task: Task<UIImage?, Never> = lock.withLock {
+            if let running = loading[page], running.size >= size * 0.99 { return running.task }
+            let task = Task.detached(priority: .userInitiated) { [weak self] () -> UIImage? in
+                let image = (try? await source.image(at: page, maxPixelSize: size)).map { UIImage(cgImage: $0) }
+                guard let self else { return image }
+                if let image { self.insert(image, for: page, size: size) }
+                self.lock.withLock {
+                    if let running = self.loading[page], running.size == size { self.loading[page] = nil }
+                }
+                return image
+            }
+            loading[page] = (size, task)
+            return task
+        }
+        return await task.value
     }
 
     func insert(_ image: UIImage, for page: Int, size: CGFloat) {

@@ -77,7 +77,7 @@ enum LibArchive {
             if PageFilter.isPage(path: path) { paths.append(path) }
             return .next
         }
-        return paths.naturallySorted()
+        return PageOrder.sorted(paths)
     }
 
     fileprivate static func error(_ archive: OpaquePointer, _ fallback: String) -> ArchiveError {

@@ -99,6 +99,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     private let scrollView = UIScrollView()
     private let contentView = UIView()
     private var imageViews: [UIImageView] = []
+    private var spinners: [UIActivityIndicatorView] = []
     private var loadTasks: [Task<Void, Never>] = []
     private var loadedSize: CGFloat = 0
     private var laidOutContentSize: CGSize = .zero
@@ -138,6 +139,12 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             imageView.backgroundColor = UIColor(white: 0.08, alpha: 1)
             contentView.addSubview(imageView)
             imageViews.append(imageView)
+            let spinner = UIActivityIndicatorView(style: .large)
+            spinner.color = .white
+            spinner.hidesWhenStopped = true
+            spinner.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin, .flexibleBottomMargin]
+            imageView.addSubview(spinner)
+            spinners.append(spinner)
         }
 
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
@@ -189,6 +196,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         let y = max(0, (area.height - height) / 2)
         for (view, aspect) in zip(imageViews, aspects) {
             view.frame = CGRect(x: x, y: y, width: height * aspect, height: height).integral
+            view.subviews.first?.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
             x += height * aspect
         }
     }
@@ -207,12 +215,20 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
                 imageViews[slot].image = cached
                 continue
             }
+            // Until the page is decoded, show a smaller copy if there is one, or a spinner, rather than a black page.
+            if imageViews[slot].image == nil {
+                if let smaller = cache.image(for: page, minSize: 0) {
+                    imageViews[slot].image = smaller
+                } else {
+                    spinners[slot].startAnimating()
+                }
+            }
             let source = source, cache = cache
             loadTasks.append(Task { [weak self] in
-                guard let cgImage = try? await source.image(at: page, maxPixelSize: size), !Task.isCancelled else { return }
-                let image = UIImage(cgImage: cgImage)
-                cache.insert(image, for: page, size: size)
-                guard let self else { return }
+                let image = await cache.load(page: page, size: size, from: source)
+                guard let self, !Task.isCancelled else { return }
+                self.spinners[slot].stopAnimating()
+                guard let image else { return }
                 self.imageViews[slot].image = image
                 self.view.setNeedsLayout()
             })
