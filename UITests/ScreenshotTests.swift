@@ -13,6 +13,10 @@ final class ScreenshotTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
         app.launch()
+        // The first launch on a freshly booted CI simulator is slow (making the demo library and
+        // its covers while the simulator settles), and UI queries made meanwhile can time out.
+        // Give it time before the first query.
+        sleep(20)
 
         let firstBook = app.buttons["book-Starfall 1"]
         XCTAssertTrue(firstBook.waitForExistence(timeout: 90), "Demo library did not appear")
