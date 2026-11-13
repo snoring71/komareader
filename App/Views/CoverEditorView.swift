@@ -4,7 +4,7 @@ import LibraryKit
 import SwiftUI
 
 /// Edits a book's cover: pick any page, rotate it, crop it with handles (a loupe magnifies
-/// under your finger while you drag an edge), with comic 2:3, original or free proportions.
+/// under your finger while you drag an edge), with comic 2:3, manga B6, original or free proportions.
 /// Saving stores the recipe in the book's record and a rendered JPEG next to it.
 struct CoverEditorView: View {
     @Environment(AppModel.self) private var model
@@ -16,7 +16,7 @@ struct CoverEditorView: View {
     var initialEdit: BookRecord.CoverEdit?
 
     enum Aspect: String, CaseIterable, Identifiable {
-        case comic = "Comic 2:3", original = "Original", free = "Free"
+        case comic = "Comic 2:3", manga = "Manga B6", original = "Original", free = "Free"
         var id: String { rawValue }
     }
 
@@ -239,7 +239,8 @@ struct CoverEditorView: View {
         let pixelAspect: CGFloat
         switch aspect {
         case .free: return nil
-        case .comic: pixelAspect = 2.0 / 3.0
+        case .comic: pixelAspect = CoverShape.comic.aspect
+        case .manga: pixelAspect = CoverShape.manga.aspect
         case .original: pixelAspect = shown.size.width / shown.size.height
         }
         return shown.size.width / (pixelAspect * shown.size.height)
@@ -314,7 +315,7 @@ struct CoverEditorView: View {
                 ForEach(Aspect.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
-            .frame(maxWidth: 360)
+            .frame(maxWidth: 460)
 
             Button {
                 reset()

@@ -490,6 +490,25 @@ final class AppModel {
         }
     }
 
+    /// Throws away every cover this book has (an edit, the shared default cover, this device's
+    /// thumbnail) and makes it again from the first page, as for a book just added. The record
+    /// gets a fresh default recipe, so other devices see the newer date and rebuild theirs too.
+    func regenerateCover(_ book: Book) async {
+        guard let store else { return }
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try store.deleteCover(bookId: book.id, custom: true)
+                try store.deleteCover(bookId: book.id, custom: false)
+                var record = store.read(bookId: book.id) ?? BookRecord(bookId: book.id, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
+                record.cover = BookRecord.CoverEdit(page: 0)
+                try store.write(record)
+            }.value
+            await refreshCover(book)
+        } catch {
+            errorMessage = "Could not regenerate the cover: \(error.localizedDescription)"
+        }
+    }
+
     /// The cover saved for a book (edited or default), for the Book Info sheet.
     func sharedCoverURL(for book: Book) -> URL? {
         store?.existingCoverURL(bookId: book.id)
