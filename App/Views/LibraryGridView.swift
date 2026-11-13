@@ -119,6 +119,8 @@ struct LibraryGridView: View {
                     ContentUnavailableView.search(text: appliedSearch)
                 } else if item == .favorites {
                     ContentUnavailableView("No Favorites", systemImage: "heart", description: Text("Books you mark as Favorite appear here."))
+                } else if item == .downloaded {
+                    ContentUnavailableView("No Downloaded Books", systemImage: "arrow.down.circle", description: Text("Books that are downloaded to this iPad appear here. Long-press a book and choose Download to keep it on this iPad."))
                 } else if item == .bookmarked {
                     ContentUnavailableView("No Bookmarked Books", systemImage: "bookmark", description: Text("Books you bookmark appear here."))
                 } else {
@@ -279,6 +281,7 @@ struct SeriesGridView: View {
 
 struct SeriesCell: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.coverStyle) private var style
     let group: SeriesGroup
 
     var body: some View {
@@ -287,9 +290,9 @@ struct SeriesCell: View {
             ZStack {
                 // A hint of the volumes behind the first one.
                 if group.books.count > 1 {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: CoverStyle.cornerRadius, style: .continuous)
                         .fill(Color(.systemGray3))
-                        .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                        .aspectRatio(style.shape.aspect, contentMode: .fit)
                         .scaleEffect(0.92)
                         .offset(y: -10)
                 }
@@ -343,6 +346,7 @@ struct BookCell: View {
         .onAppear { model.requestCover(for: book, urgent: true) }
         .contextMenu {
             Button("Book Info", systemImage: "info.circle") { model.bookInfo = .init(id: book.id) }
+            Button("Regenerate Cover", systemImage: "arrow.triangle.2.circlepath") { Task { await model.regenerateCover(book) } }
             Section {
                 Button(book.favorite ? "Remove from Favorites" : "Favorite", systemImage: book.favorite ? "heart.slash" : "heart") {
                     model.setFavorite(book, !book.favorite)
@@ -411,6 +415,7 @@ struct CoverImage: View {
     let title: String
     /// Changes when the cover file is replaced at the same URL (after a cover edit).
     var revision: Int = 0
+    @Environment(\.coverStyle) private var style
     @State private var loaded: UIImage?
 
     private struct Key: Equatable { let url: URL?; let revision: Int }
@@ -418,8 +423,9 @@ struct CoverImage: View {
     var body: some View {
         // A cover seen before is shown at once from memory, with no placeholder in between.
         let image = loaded ?? url.flatMap { CoverMemoryCache.shared.image(for: $0, revision: revision) }
-        Color(.secondarySystemFill)
-            .aspectRatio(2.0 / 3.0, contentMode: .fit)
+        // Opaque, so the shadow behind it does not show through the placeholder.
+        Color(.systemGray5)
+            .aspectRatio(style.shape.aspect, contentMode: .fit)
             .overlay {
                 if let image {
                     // A wide cover is cropped to the cell, and must not take taps outside it either.
@@ -432,9 +438,9 @@ struct CoverImage: View {
                         .padding(8)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: CoverStyle.cornerRadius, style: .continuous))
             .contentShape(Rectangle())
-            .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+            .background { CoverShadow(strength: style.shadowStrength) }
             .task(id: Key(url: url, revision: revision)) {
                 guard let url else { loaded = nil; return }
                 let revision = revision

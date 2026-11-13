@@ -14,6 +14,7 @@ struct BookInfoView: View {
 
     @State private var editingCover = false
     @State private var coverEdit: BookRecord.CoverEdit?
+    @State private var confirmRegenerate = false
 
     private var book: Book? { model.books.first { $0.id == bookId } }
 
@@ -64,6 +65,21 @@ struct BookInfoView: View {
                             }
                             .buttonStyle(.borderless)
                             .font(.subheadline)
+                        }
+                        Button("Regenerate Cover", systemImage: "arrow.triangle.2.circlepath") {
+                            if coverEdit.map({ !$0.isDefault }) == true {
+                                confirmRegenerate = true
+                            } else {
+                                Task { await model.regenerateCover(book) }
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.subheadline)
+                        .accessibilityIdentifier("info-regenerate-cover")
+                        .confirmationDialog("Regenerate this cover?", isPresented: $confirmRegenerate, titleVisibility: .visible) {
+                            Button("Regenerate Cover", role: .destructive) { Task { await model.regenerateCover(book) } }
+                        } message: {
+                            Text("Your edited cover is removed on all your devices, and a new cover is made from the first page.")
                         }
                     }
                 }
