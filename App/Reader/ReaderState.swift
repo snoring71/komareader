@@ -40,6 +40,17 @@ final class ReaderState {
         didSet { UserDefaults.standard.set(fit.rawValue, forKey: "readerFit"); layoutVersion += 1 }
     }
     var showChrome = true
+    /// Select Text mode: Live Text finds the words on the page so they can be selected,
+    /// copied, looked up or translated. Off, the page takes no touches besides paging and zoom.
+    var selectingText = false {
+        didSet { if !selectingText { textStatus = .idle } }
+    }
+    /// What Live Text found on the screen showing now.
+    var textStatus: TextStatus = .idle
+
+    enum TextStatus: Equatable {
+        case idle, searching, found, none, failed
+    }
     /// Bumped whenever `spreads` is rebuilt, so the page view reloads.
     private(set) var layoutVersion = 0
 
@@ -49,6 +60,7 @@ final class ReaderState {
     @ObservationIgnored private var prefetchTask: Task<Void, Never>?
     @ObservationIgnored let cache = PageImageCache()
     @ObservationIgnored private let thumbnails = NSCache<NSNumber, UIImage>()
+    @ObservationIgnored let textAnalyzer: PageTextAnalyzer
     @ObservationIgnored var onPageChange: ((_ page: Int, _ finished: Bool) -> Void)?
 
     init(book: Book, source: BookSource) {
@@ -56,6 +68,7 @@ final class ReaderState {
         self.source = source
         self.pageCount = source.pageCount
         self.rightToLeft = book.direction == "rtl"
+        self.textAnalyzer = PageTextAnalyzer(rightToLeft: book.direction == "rtl")
         self.layout = Layout(rawValue: UserDefaults.standard.string(forKey: "readerLayout") ?? "") ?? .auto
         self.fit = Fit(rawValue: UserDefaults.standard.string(forKey: "readerFit") ?? "") ?? .screen
         let start = min(max(0, book.finished ? 0 : (book.currentPage ?? 0)), max(0, source.pageCount - 1))
@@ -142,6 +155,9 @@ final class ReaderState {
             showChrome.toggle()
         }
     }
+
+    /// All the text found on the pages showing now, in reading order.
+    var currentTranscript: String { textAnalyzer.transcript(pages: currentPages) }
 
     private func pageDidChange() {
         let finished = currentPages.contains(pageCount - 1)
