@@ -44,25 +44,25 @@ struct LibraryGridView: View {
         return books
     }
 
-    /// Letter sections, when sorted by title. Each letter appears once, in the order first met.
-    struct LetterSection: Identifiable {
+    /// A letter of the index and the first book filed under it, which the index scrolls to.
+    struct LetterAnchor {
         let key: String
-        let books: [Book]
-        var id: String { key }
+        let bookId: String
     }
 
-    private func letterSections(_ books: [Book]) -> [LetterSection]? {
+    /// The letters for the index, when sorted by title. The grid itself stays one flat run of
+    /// equal cells: a lazy grid split into sections has to guess the height of the sections it
+    /// has not drawn yet, and the scroll bar jumped each time a guess was corrected.
+    private func letterAnchors(_ books: [Book]) -> [LetterAnchor]? {
         guard sort == .title, appliedSearch.isEmpty, books.count > 24 else { return nil }
         if case .seriesNamed = item { return nil }
-        var order: [String] = []
-        var grouped: [String: [Book]] = [:]
+        var seen: Set<String> = []
+        var anchors: [LetterAnchor] = []
         for book in books {
             let key = model.catalog.indexKey[book.id] ?? IndexKey.of(book.title)
-            if grouped[key] == nil { order.append(key) }
-            grouped[key, default: []].append(book)
+            if seen.insert(key).inserted { anchors.append(LetterAnchor(key: key, bookId: book.id)) }
         }
-        guard order.count > 1 else { return nil }
-        return order.map { LetterSection(key: $0, books: grouped[$0] ?? []) }
+        return anchors.count > 1 ? anchors : nil
     }
 
     private var continueReading: [Book] {
@@ -76,7 +76,7 @@ struct LibraryGridView: View {
 
     var body: some View {
         let books = visibleBooks
-        let sections = letterSections(books)
+        let letters = letterAnchors(books)
         let continueReading = item == .all && search.isEmpty ? continueReading : []
         ScrollViewReader { proxy in
             ScrollView {
@@ -95,34 +95,18 @@ struct LibraryGridView: View {
                     .padding(.top, 8)
                 }
 
-                if let sections {
-                    LazyVGrid(columns: columns, spacing: 22) {
-                        ForEach(sections) { section in
-                            Section {
-                                ForEach(section.books) { BookCell(book: $0) }
-                            } header: {
-                                Text(section.key)
-                                    .font(.title3.bold())
-                                    .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.top, 6)
-                                    .id(LetterIndex.anchor(section.key))
-                            }
-                        }
-                    }
-                    .padding()
-                    .padding(.trailing, 14) // room for the letter index
-                } else {
-                    LazyVGrid(columns: columns, spacing: 22) {
-                        ForEach(books) { BookCell(book: $0) }
-                    }
-                    .padding()
+                LazyVGrid(columns: columns, spacing: 22) {
+                    ForEach(books) { BookCell(book: $0) }
                 }
+                .padding()
+                .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index
             }
             .overlay(alignment: .trailing) {
-                if let sections {
-                    LetterIndex(keys: sections.map(\.key)) { key in
-                        proxy.scrollTo(LetterIndex.anchor(key), anchor: .top)
+                if let letters {
+                    LetterIndex(keys: letters.map(\.key)) { key in
+                        if let anchor = letters.first(where: { $0.key == key }) {
+                            proxy.scrollTo(anchor.bookId, anchor: .top)
+                        }
                     }
                     .padding(.trailing, 2)
                 }
@@ -214,8 +198,6 @@ struct LetterIndex: View {
     let keys: [String]
     let onSelect: (String) -> Void
     @State private var current: String?
-
-    static func anchor(_ key: String) -> String { "letter-\(key)" }
 
     var body: some View {
         GeometryReader { geo in

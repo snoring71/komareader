@@ -108,8 +108,8 @@ final class AppModel {
     private var cacheRoot: URL { URL.cachesDirectory }
     /// Unpacked pages are stored by page number, so the folder is renamed whenever the page
     /// order rules change; folders from earlier versions are removed at launch.
-    private static let pageCacheName = "Pages-2"
-    private static let oldPageCacheNames = ["Pages"]
+    private static let pageCacheName = "Pages-3"
+    private static let oldPageCacheNames = ["Pages", "Pages-2"]
 
     // MARK: Startup
 

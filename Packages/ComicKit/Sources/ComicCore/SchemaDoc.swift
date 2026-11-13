@@ -52,7 +52,7 @@ picks a folder with the same name uses the same `libraryId`.
   entry paths are compared one folder name at a time; within a name, runs of ASCII digits
   compare as numbers ("2" before "10"); otherwise punctuation and spaces come before digits,
   and digits before letters ("_01.jpg" before "01.jpg" before "a.jpg"); case, full-width forms
-  and accents are ignored. This is the order Windows Explorer and Finder show.
+  and accents are ignored, and katakana sorts with hiragana. This is the order Windows Explorer and Finder show.
 - `crop` is `[x, y, width, height]` as fractions of the page after `rotation` (degrees
   clockwise: 0, 90, 180 or 270) is applied. To re-render a cover: rotate the page, then crop.
   `covers/<bookId>.custom.jpg` holds the result. A `cover` of page 0, uncropped and not rotated

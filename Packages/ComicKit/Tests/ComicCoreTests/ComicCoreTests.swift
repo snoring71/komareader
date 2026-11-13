@@ -20,6 +20,12 @@ import Testing
         #expect(["b", "001", "B", "1", "01"].naturallySorted() == ["001", "01", "1", "B", "b"])
     }
 
+    /// Katakana and hiragana titles share one kana order, so each index letter is one run.
+    @Test func naturalSortMixesKatakanaWithHiragana() {
+        let titles = ["カードキャプター", "あずまんが", "かぐや様", "アキラ", "さくら", "ｱﾘｱ", "Zoo"]
+        #expect(titles.naturallySorted() == ["Zoo", "アキラ", "あずまんが", "ｱﾘｱ", "かぐや様", "カードキャプター", "さくら"])
+    }
+
     @Test func pageOrderGoesFolderByFolder() {
         let paths = ["a b/1.jpg", "a/2.jpg", "a/_1.jpg", "cover.jpg", "a/10.jpg", "ch10/1.jpg", "ch2/1.jpg"]
         #expect(PageOrder.sorted(paths) == ["a/_1.jpg", "a/2.jpg", "a/10.jpg", "a b/1.jpg", "ch2/1.jpg", "ch10/1.jpg", "cover.jpg"])

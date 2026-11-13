@@ -7,7 +7,8 @@ import Foundation
 /// - Runs of digits compare as numbers, so "Page 2" comes before "Page 10".
 /// - Punctuation and spaces come before digits, and digits before letters, so "_01.jpg"
 ///   comes before "01.jpg", which comes before "a.jpg".
-/// - Case, full-width forms and accents are ignored.
+/// - Case, full-width forms and accents are ignored, and katakana sorts with hiragana
+///   ("ア" next to "あ"), so Japanese titles run in kana order.
 ///
 /// The rules do not depend on the device's language, so every device (and the Windows app)
 /// puts the pages of a book in the same order and a synced page number means the same page.
@@ -59,7 +60,9 @@ public struct NaturalSortKey: Comparable, Sendable {
             }
             flush()
             if scalar.properties.isAlphabetic || scalar.properties.numericType != nil {
-                parts.append(.letter(scalar.value))
+                // Katakana to hiragana, the same way upper case is folded to lower case.
+                let isKatakana = scalar.value >= 0x30A1 && scalar.value <= 0x30F6
+                parts.append(.letter(isKatakana ? scalar.value - 0x60 : scalar.value))
             } else {
                 parts.append(.symbol(scalar.value))
             }
