@@ -37,7 +37,10 @@ final class ScreenshotTests: XCTestCase {
         let selectText = app.buttons["reader-select-text"]
         if selectText.exists {
             selectText.tap()
-            sleep(4)
+            // The first Live Text run on a fresh simulator loads its models, which can take a while.
+            let copyAll = app.buttons["reader-copy-text"]
+            for _ in 0..<30 where !(copyAll.exists && copyAll.isEnabled) { sleep(1) }
+            sleep(1)
             save(app, "03b-reader-select-text")
             let done = app.buttons["reader-text-done"]
             if done.waitForExistence(timeout: 3) { done.tap() }
