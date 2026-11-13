@@ -6,16 +6,19 @@ struct SidebarView: View {
 
     var body: some View {
         @Bindable var model = model
-        let folders = FolderNode.tree(from: model.books)
+        let folders = model.catalog.folders
         List(selection: $model.selection) {
             Section {
                 row(.all)
                 row(.continueReading)
+                row(.series, count: model.catalog.series.count)
             }
             Section("Status") {
                 row(.unread)
                 row(.reading)
                 row(.read)
+                row(.favorites)
+                row(.bookmarked)
                 if model.books.contains(where: \.isMissing) { row(.missing) }
             }
             if !folders.isEmpty {
@@ -32,9 +35,9 @@ struct SidebarView: View {
         .refreshable { await model.rescan() }
     }
 
-    private func row(_ item: SidebarItem) -> some View {
+    private func row(_ item: SidebarItem, count: Int? = nil) -> some View {
         Label(item.title, systemImage: item.systemImage)
-            .badge(model.books.filter(item.includes).count)
+            .badge(count ?? model.books.filter(item.includes).count)
             .tag(item)
             .accessibilityIdentifier("sidebar-\(item.title)")
     }

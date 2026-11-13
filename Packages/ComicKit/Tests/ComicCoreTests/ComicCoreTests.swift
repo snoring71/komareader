@@ -8,6 +8,29 @@ import Testing
         #expect(names.naturallySorted() == ["ARIA 第01巻", "ARIA 第02巻", "ARIA 第10巻", "page1.jpg", "Page2.jpg", "page10.jpg"])
     }
 
+    /// Punctuation before digits before letters, as in Explorer, Finder and other readers.
+    @Test func naturalSortPutsPunctuationFirst() {
+        let pages = ["01.jpg", "a.jpg", "_02.jpg", "10.jpg", "_01.jpg", "2.jpg", "-cover.jpg", "０3.jpg"]
+        #expect(pages.naturallySorted() == ["-cover.jpg", "_01.jpg", "_02.jpg", "01.jpg", "2.jpg", "０3.jpg", "10.jpg", "a.jpg"])
+        #expect("_01.jpg".naturalLess(than: "01.jpg"))
+        #expect(!"01.jpg".naturalLess(than: "_01.jpg"))
+        #expect("Page 9".naturalLess(than: "page 10"))
+        #expect("file99999999999999999999998".naturalLess(than: "file99999999999999999999999"))
+        // Names that differ only in case or leading zeros still have one fixed order.
+        #expect(["b", "001", "B", "1", "01"].naturallySorted() == ["001", "01", "1", "B", "b"])
+    }
+
+    /// Katakana and hiragana titles share one kana order, so each index letter is one run.
+    @Test func naturalSortMixesKatakanaWithHiragana() {
+        let titles = ["カードキャプター", "あずまんが", "かぐや様", "アキラ", "さくら", "ｱﾘｱ", "Zoo"]
+        #expect(titles.naturallySorted() == ["Zoo", "アキラ", "あずまんが", "ｱﾘｱ", "かぐや様", "カードキャプター", "さくら"])
+    }
+
+    @Test func pageOrderGoesFolderByFolder() {
+        let paths = ["a b/1.jpg", "a/2.jpg", "a/_1.jpg", "cover.jpg", "a/10.jpg", "ch10/1.jpg", "ch2/1.jpg"]
+        #expect(PageOrder.sorted(paths) == ["a/_1.jpg", "a/2.jpg", "a/10.jpg", "a b/1.jpg", "ch2/1.jpg", "ch10/1.jpg", "cover.jpg"])
+    }
+
     @Test func pageFilter() {
         #expect(PageFilter.isPage(path: "Vol 1/001.JPG"))
         #expect(PageFilter.isPage(path: "a.webp"))
@@ -163,5 +186,66 @@ import Testing
         try RecordStore.importLibraries(from: local, into: cloud)
         let merged = try #require(cloudStore.read(bookId: "B"))
         #expect(Set(merged.progress.keys) == ["ipad", "win"])
+    }
+}
+
+@Suite struct SeriesNameTests {
+    @Test(arguments: [
+        ("ARIA 第02巻", "ARIA", "2"),
+        ("ARIA 第10巻", "ARIA", "10"),
+        ("よつばと! 15巻", "よつばと!", "15"),
+        ("Starfall 3", "Starfall", "3"),
+        ("Saga 001 (2012) (Digital) [Empire]", "Saga", "1"),
+        ("Saga - 054", "Saga", "54"),
+        ("Berserk Vol. 41", "Berserk", "41"),
+        ("Berserk v02", "Berserk", "2"),
+        ("One_Piece_Volume_100", "One Piece", "100"),
+        ("Batman #12", "Batman", "12"),
+        ("20th Century Boys 03", "20th Century Boys", "3"),
+        ("Chainsaw Man ch. 97.5", "Chainsaw Man", "97.5"),
+        ("ＡＲＩＡ 第０２巻", "ARIA", "2"),
+    ])
+    func parsesSeriesAndNumber(title: String, series: String, number: String) {
+        #expect(SeriesName.parse(title) == .init(series: series, number: number))
+    }
+
+    @Test func titlesWithoutANumberAreTheirOwnSeries() {
+        #expect(SeriesName.parse("Maus") == .init(series: "Maus", number: nil))
+        #expect(SeriesName.parse("1984") == .init(series: "1984", number: nil))
+        #expect(SeriesName.parse("Akira (Colour) [Kodansha]") == .init(series: "Akira", number: nil))
+    }
+}
+
+@Suite struct FlagsAndHandOffTests {
+    @Test func flagsMergeByDateAndRoundTrip() throws {
+        var a = BookRecord(bookId: "A", file: .init(path: "x.cbz", size: 1, modified: nil))
+        var b = a
+        a.flags = .init(favorite: true, bookmarked: false, updatedAt: Date(timeIntervalSince1970: 10))
+        b.flags = .init(favorite: false, bookmarked: true, updatedAt: Date(timeIntervalSince1970: 20))
+        #expect(a.merged(with: b).flags == b.flags)
+        #expect(b.merged(with: a).flags == b.flags)
+        let data = try RecordCoding.encoder().encode(a)
+        #expect(String(decoding: data, as: UTF8.self).contains("\"favorite\" : true"))
+        #expect(try RecordCoding.decoder().decode(BookRecord.self, from: data) == a)
+    }
+
+    @Test func handOffOffersTheFurthestPositionFromAnotherDevice() {
+        var record = BookRecord(bookId: "A", file: .init(path: "x.cbz", size: 1, modified: nil))
+        record.progress["ipad-1"] = .init(page: 13, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 10))
+        // Only this device: nothing to offer.
+        #expect(record.handOff(for: "ipad-1", openingAt: 3) == nil)
+
+        record.progress["mac-2"] = .init(page: 9, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 5))
+        record.progress["iphone-3"] = .init(page: 3, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 30))
+        // Opening at the newest position (the iPhone's page 3), the Mac is further ahead.
+        #expect(record.handOff(for: "ipad-1", openingAt: 3)?.device == "mac-2")
+        #expect(record.handOff(for: "ipad-1", openingAt: 3)?.progress.page == 9)
+        // Already at or past every other device: nothing to offer.
+        #expect(record.handOff(for: "ipad-1", openingAt: 9) == nil)
+        // Finished elsewhere does not count as ahead.
+        record.progress["mac-2"]?.finished = true
+        #expect(record.handOff(for: "ipad-1", openingAt: 3) == nil)
+        #expect(DeviceIdentity.displayName(for: "mac-2") == "Mac")
+        #expect(DeviceIdentity.displayName(for: "ipad-1a2b") == "iPad")
     }
 }

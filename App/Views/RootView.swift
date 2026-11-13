@@ -16,13 +16,26 @@ struct RootView: View {
                     SidebarView()
                 } detail: {
                     NavigationStack {
-                        LibraryGridView(item: model.selection ?? .all)
+                        Group {
+                            if model.selection == .series {
+                                SeriesGridView()
+                            } else {
+                                LibraryGridView(item: model.selection ?? .all)
+                            }
+                        }
+                        .navigationDestination(for: SidebarItem.self) { LibraryGridView(item: $0) }
                     }
+                    // Start from the top of the stack when another sidebar item is picked.
+                    .id(model.selection)
+                    .overlay(alignment: .bottomTrailing) { ResumeButton() }
                 }
             }
         }
         .fullScreenCover(item: $model.openBook) { open in
-            ReaderScreen(book: open.book, source: open.source)
+            ReaderScreen(book: open.book, source: open.source, handOff: open.handOff)
+        }
+        .sheet(item: $model.bookInfo) { ref in
+            BookInfoView(bookId: ref.id)
         }
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -55,6 +68,45 @@ struct WelcomeView: View {
             if case .success(let url) = result {
                 Task { await model.choose(folder: url) }
             }
+        }
+    }
+}
+
+/// One glass button that opens the last book; a long press lists recent books.
+struct ResumeButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let last = model.lastBook {
+            Menu {
+                Section("Recently Read") {
+                    ForEach(model.recentBooks(limit: 8)) { book in
+                        Button {
+                            Task { await model.open(book) }
+                        } label: {
+                            Label(book.title, systemImage: book.status == .read ? "checkmark.circle" : "book")
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "book.fill").font(.title3)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Resume").font(.headline)
+                        Text(last.title).font(.caption).lineLimit(1).opacity(0.85)
+                    }
+                }
+                .frame(maxWidth: 220, alignment: .leading)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+            } primaryAction: {
+                Task { await model.open(last) }
+            }
+            .menuStyle(.button)
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.capsule)
+            .padding(24)
+            .accessibilityIdentifier("resume-button")
         }
     }
 }

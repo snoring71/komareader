@@ -11,6 +11,7 @@ public struct BookRecord: Codable, Equatable, Sendable {
     public var metadata: Metadata?
     public var tags: Tags?
     public var cover: CoverEdit?
+    public var flags: Flags?
     public var readerSettings: ReaderSettings?
     /// Reading position per device id. Newest entry wins when opening a book.
     public var progress: [String: Progress]
@@ -78,6 +79,21 @@ public struct BookRecord: Codable, Equatable, Sendable {
             self.rotation = rotation
             self.updatedAt = updatedAt
         }
+
+        /// The first page, uncropped and upright: the same as having no edit.
+        public var isDefault: Bool { page == 0 && rotation % 360 == 0 && crop == [0, 0, 1, 1] }
+    }
+
+    /// The user's own marks on a book: Favorite and Bookmarked.
+    public struct Flags: Codable, Equatable, Sendable {
+        public var favorite: Bool
+        public var bookmarked: Bool
+        public var updatedAt: Date
+        public init(favorite: Bool = false, bookmarked: Bool = false, updatedAt: Date = Date()) {
+            self.favorite = favorite
+            self.bookmarked = bookmarked
+            self.updatedAt = updatedAt
+        }
     }
 
     public struct ReaderSettings: Codable, Equatable, Sendable {
@@ -111,6 +127,18 @@ public struct BookRecord: Codable, Equatable, Sendable {
     public var latestProgress: (device: String, progress: Progress)? {
         progress.max { $0.value.updatedAt < $1.value.updatedAt }.map { ($0.key, $0.value) }
     }
+
+    /// Another device's position worth offering when this device opens the book at `page`:
+    /// the furthest unfinished position any other device has reached beyond `page`. The book
+    /// opens at the newest position (`latestProgress`); this catches the case where you read
+    /// further on one device and later glanced at an earlier page on another.
+    public func handOff(for deviceId: String, openingAt page: Int) -> (device: String, progress: Progress)? {
+        let ahead = progress.filter { $0.key != deviceId && !$0.value.finished && $0.value.page > page }
+        guard let best = ahead.max(by: { a, b in
+            a.value.page != b.value.page ? a.value.page < b.value.page : a.value.updatedAt < b.value.updatedAt
+        }) else { return nil }
+        return (best.key, best.value)
+    }
 }
 
 // MARK: - Merge
@@ -125,6 +153,7 @@ public extension BookRecord {
         result.metadata = Self.newer(metadata, other.metadata) { $0.updatedAt }
         result.tags = Self.newer(tags, other.tags) { $0.updatedAt }
         result.cover = Self.newer(cover, other.cover) { $0.updatedAt }
+        result.flags = Self.newer(flags, other.flags) { $0.updatedAt }
         result.readerSettings = Self.newer(readerSettings, other.readerSettings) { $0.updatedAt }
         if result.file.fingerprint == nil { result.file.fingerprint = other.file.fingerprint }
         for (device, theirs) in other.progress {

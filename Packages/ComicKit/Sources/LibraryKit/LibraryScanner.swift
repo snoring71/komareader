@@ -36,7 +36,7 @@ public enum LibraryScanner {
         let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
         var books: [ScannedBook] = []
         walk(directory: root, rootPath: rootPath, into: &books)
-        return books.sorted { $0.relativePath.naturalLess(than: $1.relativePath) }
+        return books.naturallySorted(by: \.relativePath)
     }
 
     private static func walk(directory: URL, rootPath: String, into books: inout [ScannedBook]) {

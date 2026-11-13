@@ -217,6 +217,13 @@ public final class RecordStore: @unchecked Sendable {
         try Self.coordinatedWrite(jpeg, to: coverURL(bookId: bookId, custom: custom))
     }
 
+    /// Removes a cover file if it exists (used to go back to the default cover).
+    public func deleteCover(bookId: String, custom: Bool) throws {
+        let url = coverURL(bookId: bookId, custom: custom)
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try Self.coordinatedDelete(url)
+    }
+
     // MARK: File coordination
 
     static func coordinatedRead(_ url: URL) -> Data? {
