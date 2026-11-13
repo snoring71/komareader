@@ -423,7 +423,8 @@ struct CoverImage: View {
     var body: some View {
         // A cover seen before is shown at once from memory, with no placeholder in between.
         let image = loaded ?? url.flatMap { CoverMemoryCache.shared.image(for: $0, revision: revision) }
-        Color(.secondarySystemFill)
+        // Opaque, so the shadow behind it does not show through the placeholder.
+        Color(.systemGray5)
             .aspectRatio(style.shape.aspect, contentMode: .fit)
             .overlay {
                 if let image {
