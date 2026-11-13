@@ -33,6 +33,17 @@ final class ScreenshotTests: XCTestCase {
         sleep(2)
         save(app, "03-reader-cover-with-controls")
 
+        // Select Text (Live Text), where the simulator supports it.
+        let selectText = app.buttons["reader-select-text"]
+        if selectText.exists {
+            selectText.tap()
+            sleep(4)
+            save(app, "03b-reader-select-text")
+            let done = app.buttons["reader-text-done"]
+            if done.waitForExistence(timeout: 3) { done.tap() }
+            sleep(1)
+        }
+
         // Turn to the first two-page spread with the right tap zone.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         sleep(2)
