@@ -354,6 +354,13 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             self.slotStatus[slot] = hasText ? .found : .none
             self.reportTextStatus()
         }
+        // Live Text can stall (seen on the CI simulator); say so rather than spin forever.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(20))
+            guard let self, self.selectingText, self.analyzedImages[slot] === image, self.slotStatus[slot] == .searching else { return }
+            self.slotStatus[slot] = .failed
+            self.reportTextStatus()
+        }
     }
 
     /// Tells the reader what was found across this spread's pages.
@@ -365,6 +372,8 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             status = .found
         } else if slotStatus.contains(.searching) || slotStatus.contains(.idle) {
             status = .searching
+        } else if slotStatus.contains(.failed) {
+            status = .failed
         } else {
             status = .none
         }

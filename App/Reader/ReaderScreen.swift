@@ -227,6 +227,9 @@ struct ReaderScreen: View {
                     case .none:
                         Image(systemName: "text.badge.xmark")
                         Text("No text found on this page")
+                    case .failed:
+                        Image(systemName: "exclamationmark.triangle")
+                        Text("Couldn’t read the text on this page")
                     }
                 }
                 .font(.subheadline.weight(.medium))

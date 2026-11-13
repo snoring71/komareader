@@ -49,7 +49,7 @@ final class ReaderState {
     var textStatus: TextStatus = .idle
 
     enum TextStatus: Equatable {
-        case idle, searching, found, none
+        case idle, searching, found, none, failed
     }
     /// Bumped whenever `spreads` is rebuilt, so the page view reloads.
     private(set) var layoutVersion = 0
