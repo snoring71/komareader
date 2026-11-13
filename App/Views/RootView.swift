@@ -32,7 +32,7 @@ struct RootView: View {
             }
         }
         .fullScreenCover(item: $model.openBook) { open in
-            ReaderScreen(book: open.book, source: open.source, handOff: open.handOff)
+            ReaderScreen(book: open.book, source: open.source, options: open.options, defaults: model.readerDefaults, handOff: open.handOff)
         }
         .sheet(item: $model.bookInfo) { ref in
             BookInfoView(bookId: ref.id)

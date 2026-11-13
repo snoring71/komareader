@@ -89,7 +89,7 @@ struct BookInfoView: View {
 
             Section("Reader") {
                 Picker("Reading Direction", selection: Binding(
-                    get: { book.direction == "rtl" },
+                    get: { model.direction(of: book) == .rightToLeft },
                     set: { model.saveDirection(bookId: book.id, rightToLeft: $0) }
                 )) {
                     Text("Left to Right").tag(false)
