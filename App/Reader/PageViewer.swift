@@ -317,7 +317,6 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             } else {
                 textTasks[slot]?.cancel()
                 textTasks[slot] = nil
-                interaction.resetSelection()
                 interaction.selectableItemsHighlighted = false
                 interaction.preferredInteractionTypes = []
                 if slotStatus[slot] == .searching {
