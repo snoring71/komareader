@@ -40,6 +40,12 @@ picks a folder with the same name uses the same `libraryId`.
   "cover": { "page": 0, "crop": [0.02, 0.0, 0.96, 1.0], "rotation": 0, "updatedAt": "..." },
   "flags": { "favorite": true, "bookmarked": false, "updatedAt": "..." },
   "readerSettings": { "direction": "rtl", "layout": "auto", "updatedAt": "..." },
+  "readerOptions": {
+    "direction": "rtl", "landscapeLayout": "double", "fit": "width", "background": "#202020",
+    "bindingShadow": 0.6, "splitDoublePages": true,
+    "crop": { "odd": [0.06, 0.02, 0.9, 0.96], "even": [0.04, 0.02, 0.9, 0.96] },
+    "updatedAt": "..."
+  },
   "progress": {
     "apple-7a2c91d0": { "page": 14, "pageCount": 24, "finished": false, "updatedAt": "..." }
   }
@@ -58,7 +64,18 @@ picks a folder with the same name uses the same `libraryId`.
   `covers/<bookId>.custom.jpg` holds the result. A `cover` of page 0, uncropped and not rotated
   means the user went back to the default cover; there is then no `.custom.jpg`.
 - `flags` holds the user's Favorite and Bookmarked marks.
-- `direction` is `ltr` or `rtl`; `layout` is `auto`, `single` or `double`.
+- `readerSettings` holds the reading direction as version 0.1 wrote it: `direction` is `ltr` or
+  `rtl`; `layout` is `auto`, `single` or `double`. Once a record has `readerOptions`, use that
+  instead, but keep `readerSettings.direction` up to date for older versions.
+- `readerOptions` holds the book's own reader settings. Every key except `updatedAt` is optional,
+  and a key that is left out means "use the app's default for books":
+  `direction` (`ltr` or `rtl`); `portraitLayout` and `landscapeLayout` (`single` or `double`);
+  `fit` (`screen`, `width` or `height`); `background` (`black`, `gray`, `white`, `dynamic` for
+  the colour at the page's edges, or a colour as `#RRGGBB`); `bindingShadow` (0 for none to 1);
+  `splitDoublePages` (show an image that holds two pages as two pages); and `crop`.
+- `crop` trims every page by the same amount: `odd` is `[x, y, width, height]` as fractions of
+  the page, for odd pages, and for every page when `even` is left out; `even` is for even pages.
+  Pages are counted as shown, from 1: when double pages are split, each half counts as a page.
 - Dates are ISO 8601 in UTC; writers should include milliseconds.
 - Groups that have never been set are left out.
 
@@ -89,7 +106,7 @@ record whose `bookId` is the worked-out id, else the lowest `bookId`, merge the 
 Two devices may change the same record at the same time. When two copies differ
 (for example an iCloud conflict copy), merge them like this:
 
-1. For `metadata`, `tags`, `cover`, `flags` and `readerSettings`, keep whichever copy has the later `updatedAt`.
+1. For `metadata`, `tags`, `cover`, `flags`, `readerSettings` and `readerOptions`, keep whichever copy has the later `updatedAt`.
 2. For `progress`, keep every device key; for a key in both copies, keep the later `updatedAt`.
 3. Write files atomically (write a temporary file, then rename over the original).
 

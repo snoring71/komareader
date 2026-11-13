@@ -23,6 +23,15 @@ struct SettingsView: View {
                     Text("To make a cover for a book that is only in iCloud, Comic Reader downloads it once, saves the cover to iCloud Drive for your other devices, and removes the download again. It fetches one book at a time and pauses in Low Data Mode, in Low Power Mode and when the battery is low.")
                 }
 
+                Section {
+                    NavigationLink("Book Defaults") { ReaderDefaultsView() }
+                        .accessibilityIdentifier("settings-book-defaults")
+                } header: {
+                    Text("Reading")
+                } footer: {
+                    Text("How books open until you change a setting while reading one.")
+                }
+
                 Section("Library") {
                     LabeledContent("Folder", value: model.libraryName)
                     LabeledContent("Books", value: "\(model.books.filter { !$0.isMissing }.count)")

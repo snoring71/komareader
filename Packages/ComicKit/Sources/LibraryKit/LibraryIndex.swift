@@ -188,7 +188,12 @@ public final class LibraryIndex: @unchecked Sendable {
             book.finished = latest.finished
             book.lastReadAt = latest.updatedAt
         }
-        if let direction = record.readerSettings?.direction { book.direction = direction.rawValue }
+        // The book's own direction; nil follows the default for books.
+        if let options = record.readerOptions {
+            book.direction = options.direction?.rawValue
+        } else if let direction = record.readerSettings?.direction {
+            book.direction = direction.rawValue
+        }
         if let flags = record.flags {
             book.favorite = flags.favorite
             book.bookmarked = flags.bookmarked

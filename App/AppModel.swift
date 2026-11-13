@@ -42,6 +42,7 @@ final class AppModel {
     /// Bumped when a book's cover changes, so the grid reloads its thumbnail.
     var coverRevision: [String: Int] = [:]
     let coverPolicy = CoverPolicy()
+    let readerDefaults = ReaderDefaults()
 
     struct Catalog {
         /// Position of each book when sorted by title.
@@ -84,6 +85,8 @@ final class AppModel {
         let source: BookSource
         /// A newer position from another device, offered when the reader opens.
         var handOff: HandOff?
+        /// The book's own reader settings.
+        var options: ReaderOptions
         var id: String { book.id }
     }
 
@@ -345,7 +348,9 @@ final class AppModel {
             handOff = HandOff(deviceName: DeviceIdentity.displayName(for: other.device), page: other.progress.page)
         }
         bookInfo = nil
-        openBook = OpenBook(book: current, source: source, handOff: handOff)
+        var options = record?.effectiveReaderOptions ?? ReaderOptions(updatedAt: .distantPast)
+        if record == nil, let direction = current.direction { options.direction = ReaderOptions.Direction(rawValue: direction) }
+        openBook = OpenBook(book: current, source: source, handOff: handOff, options: options)
     }
 
     /// The book's synced record, read fresh from the data folder.
@@ -407,16 +412,32 @@ final class AppModel {
         }
     }
 
+    /// Sets a book's reading direction from Book Info (the reader saves its settings itself).
     func saveDirection(bookId: String, rightToLeft: Bool) {
-        updateBook(bookId) { $0.direction = rightToLeft ? "rtl" : "ltr" }
-        guard let store, let book = books.first(where: { $0.id == bookId }) else { return }
-        Task.detached(priority: .utility) {
-            var record = store.read(bookId: bookId) ?? BookRecord(bookId: bookId, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
-            var settings = record.readerSettings ?? .init()
-            settings.direction = rightToLeft ? .rightToLeft : .leftToRight
-            settings.updatedAt = Date()
-            record.readerSettings = settings
-            try? store.write(record)
+        let direction: ReaderOptions.Direction = rightToLeft ? .rightToLeft : .leftToRight
+        updateBook(bookId) { $0.direction = direction.rawValue }
+        Task {
+            var options = await record(for: bookId)?.effectiveReaderOptions ?? ReaderOptions()
+            options.direction = direction
+            options.updatedAt = Date()
+            saveReaderOptions(bookId: bookId, options: options)
+        }
+    }
+
+    /// The direction a book reads in: its own, else the default for books.
+    func direction(of book: Book) -> ReaderOptions.Direction {
+        book.direction.flatMap(ReaderOptions.Direction.init(rawValue:)) ?? readerDefaults.direction
+    }
+
+    /// Saves a book's own reader settings to its synced record.
+    func saveReaderOptions(bookId: String, options: ReaderOptions) {
+        updateBook(bookId) { $0.direction = options.direction?.rawValue }
+        guard let book = books.first(where: { $0.id == bookId }) else { return }
+        // Older versions only read `readerSettings`, so keep its direction current too.
+        let direction = options.direction ?? readerDefaults.direction
+        updateRecord(book) { record in
+            record.readerOptions = options
+            record.readerSettings = .init(direction: direction, layout: .auto, updatedAt: options.updatedAt)
         }
     }
 
