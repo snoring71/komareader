@@ -28,6 +28,29 @@ import Testing
         #expect(wide == CGSize(width: 400, height: 300))
     }
 
+    /// A white page of 200 × 300 with a dark block covering x 20..<180, y 30..<270.
+    func pageWithMargins() throws -> CGImage {
+        let context = try #require(CGContext(data: nil, width: 200, height: 300, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 200, height: 300))
+        context.setFillColor(CGColor(red: 0.1, green: 0.2, blue: 0.3, alpha: 1))
+        // Core Graphics counts y from the bottom: 30 from the top is 30 from the bottom here too.
+        context.fill(CGRect(x: 20, y: 30, width: 160, height: 240))
+        return try #require(context.makeImage())
+    }
+
+    @Test func findsMarginsAndEdgeColour() throws {
+        let page = try pageWithMargins()
+        let bounds = ImageAnalysis.contentBounds(of: page)
+        #expect(abs(bounds[0] - 0.1) < 0.02)
+        #expect(abs(bounds[1] - 0.1) < 0.02)
+        #expect(abs(bounds[2] - 0.8) < 0.03)
+        #expect(abs(bounds[3] - 0.8) < 0.03)
+        let edge = try #require(ImageAnalysis.edgeColor(of: page))
+        #expect(edge.red > 0.95 && edge.green > 0.95 && edge.blue > 0.95)
+    }
+
     @Test func reusesUnpackedPages() async throws {
         let cache = try tempDir()
         let url = try fixture("sample.cbz")

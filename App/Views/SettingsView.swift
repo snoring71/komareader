@@ -56,6 +56,15 @@ struct SettingsView: View {
                     Text("Covers are trimmed to this shape in the library. Manga B6 is a little wider than Comic 2:3 and fits most manga and digital comics better.")
                 }
 
+                Section {
+                    NavigationLink("Book Defaults") { ReaderDefaultsView() }
+                        .accessibilityIdentifier("settings-book-defaults")
+                } header: {
+                    Text("Reading")
+                } footer: {
+                    Text("How books open until you change a setting while reading one.")
+                }
+
                 Section("Library") {
                     LabeledContent("Folder", value: model.libraryName)
                     LabeledContent("Books", value: "\(model.books.filter { !$0.isMissing }.count)")

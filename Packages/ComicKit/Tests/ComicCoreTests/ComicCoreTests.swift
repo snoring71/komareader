@@ -87,6 +87,67 @@ import Testing
         #expect(SpreadLayout.spreadIndex(containing: 7, in: layout) == 4)
     }
 
+    @Test func splitPagesReadInOrder() {
+        let wide: Set<Int> = [3]
+        let ltr = SpreadLayout.displayPages(pageCount: 5, rightToLeft: false) { wide.contains($0) }
+        #expect(ltr.map(\.description) == ["0", "1", "2", "3L", "3R", "4"])
+        let rtl = SpreadLayout.displayPages(pageCount: 5, rightToLeft: true) { wide.contains($0) }
+        #expect(rtl.map(\.description) == ["0", "1", "2", "3R", "3L", "4"])
+
+        // One page per screen: every half is its own screen.
+        #expect(SpreadLayout.spreads(ltr, twoPage: false) { wide.contains($0) }.count == 6)
+        // Two pages: the halves of a split image stay together; page 2 stands alone before them.
+        let two = SpreadLayout.spreads(ltr, twoPage: true) { wide.contains($0) }
+        #expect(two.map { $0.map(\.description) } == [["0"], ["1", "2"], ["3L", "3R"], ["4"]])
+        let shifted = SpreadLayout.spreads(SpreadLayout.displayPages(pageCount: 6, rightToLeft: false) { $0 == 2 }, twoPage: true) { $0 == 2 }
+        #expect(shifted.map { $0.map(\.description) } == [["0"], ["1"], ["2L", "2R"], ["3", "4"], ["5"]])
+        #expect(SpreadLayout.spreadIndex(containing: 3, in: two) == 2)
+        #expect(SpreadLayout.spreadIndex(containing: 4, in: two) == 3)
+    }
+
+    @Test func pageSidesFollowTheTwoPageLayout() {
+        // Pairs [1,2] [3,4], wide 5 alone, then [6,7]; the cover is a right page.
+        let ltr = SpreadLayout.pageSides(pageCount: 8, rightToLeft: false) { $0 == 5 }
+        #expect(ltr == [.right, .left, .right, .left, .right, .both, .left, .right])
+        let rtl = SpreadLayout.pageSides(pageCount: 3, rightToLeft: true) { _ in false }
+        #expect(rtl == [.left, .right, .left])
+    }
+
+    @Test func readerOptionsRoundTripAndFallBack() throws {
+        var record = BookRecord(bookId: "R", file: .init(path: "r.cbz", size: 1, modified: nil))
+        record.readerSettings = .init(direction: .rightToLeft, updatedAt: Date(timeIntervalSince1970: 40))
+        #expect(record.effectiveReaderOptions.direction == .rightToLeft)
+        #expect(record.effectiveReaderOptions.fit == nil)
+
+        var options = BookRecord.ReaderOptions(updatedAt: Date(timeIntervalSince1970: 50))
+        options.fit = .width
+        options.background = .fromRGB(red: 1, green: 0.5, blue: 0)
+        options.crop = .init(left: [0.06, 0.02, 0.9, 0.96], right: BookRecord.ReaderOptions.PageCrop.mirror([0.06, 0.02, 0.9, 0.96]), link: .mirrored)
+        record.readerOptions = options
+        // Once the book has its own options, they win (here: direction back to the default).
+        #expect(record.effectiveReaderOptions.direction == nil)
+
+        let data = try RecordCoding.encoder().encode(record)
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(json.contains("\"background\" : \"#FF8000\""))
+        #expect(!json.contains("portraitLayout"))
+        let decoded = try RecordCoding.decoder().decode(BookRecord.self, from: data)
+        #expect(decoded == record)
+        let crop = try #require(decoded.readerOptions?.crop)
+        #expect(crop.rect(for: .left) == [0.06, 0.02, 0.9, 0.96])
+        #expect(abs(crop.rect(for: .right)[0] - 0.04) < 1e-9)
+        // A whole spread keeps the outer margins trimmed and the middle intact.
+        let spread = crop.rect(for: .both)
+        #expect(abs(spread[0] - 0.03) < 1e-9 && abs(spread[0] + spread[2] - 0.97) < 1e-9)
+        #expect(BookRecord.ReaderOptions.Background(code: "dynamic") == .dynamic)
+        #expect(BookRecord.ReaderOptions.Background(code: "plaid") == .black)
+
+        var newer = record
+        newer.readerOptions?.fit = .height
+        newer.readerOptions?.updatedAt = Date(timeIntervalSince1970: 60)
+        #expect(record.merged(with: newer).readerOptions?.fit == .height)
+    }
+
     @Test func recordStoreMergesWithDisk() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = try RecordStore.open(dataRoot: root, folderName: "Booklover")

@@ -8,63 +8,126 @@ import UIKit
 @MainActor
 @Observable
 final class ReaderState {
-    enum Layout: String, CaseIterable, Identifiable {
-        case auto = "Automatic", single = "Single Page", double = "Two Pages"
-        var id: String { rawValue }
-    }
-
-    /// How a page is sized on screen. Width and height let a page run past the screen and scroll.
-    enum Fit: String, CaseIterable, Identifiable {
-        case screen = "Fit Screen", width = "Fit Width", height = "Fit Height"
-        var id: String { rawValue }
-        var systemImage: String {
-            switch self {
-            case .screen: return "arrow.up.left.and.arrow.down.right"
-            case .width: return "arrow.left.and.right"
-            case .height: return "arrow.up.and.down"
-            }
-        }
-    }
+    typealias Fit = ReaderOptions.Fit
 
     let book: Book
     let source: BookSource
     let pageCount: Int
+    let defaults: ReaderDefaults
 
-    var spreads: [[Int]] = []
+    /// What this book sets for itself; anything left out follows `defaults`.
+    private(set) var options: ReaderOptions
+    /// Every page in reading order, with images that hold two pages split in two when asked.
+    private(set) var displayPages: [DisplayPage] = []
+    var spreads: [[DisplayPage]] = []
     var currentSpread = 0
-    var rightToLeft: Bool
-    var layout: Layout {
-        didSet { UserDefaults.standard.set(layout.rawValue, forKey: "readerLayout"); relayout() }
-    }
-    var fit: Fit {
-        didSet { UserDefaults.standard.set(fit.rawValue, forKey: "readerFit"); layoutVersion += 1 }
-    }
     var showChrome = true
-    /// Bumped whenever `spreads` is rebuilt, so the page view reloads.
+    /// Bumped whenever `spreads` is rebuilt or a setting changes, so the page view reloads.
     private(set) var layoutVersion = 0
 
+    /// Which side of a printed spread each image sits on, for the crop.
+    @ObservationIgnored private(set) var sides: [PageSide] = []
+    /// The images grouped as the two-page layout would show them, for the crop editor.
+    @ObservationIgnored private var pairs: [[Int]] = []
     @ObservationIgnored private var isLandscape = false
     @ObservationIgnored private var widePages: Set<Int> = []
     @ObservationIgnored private var sizeTask: Task<Void, Never>?
     @ObservationIgnored private var prefetchTask: Task<Void, Never>?
     @ObservationIgnored let cache = PageImageCache()
+    /// Edge colours for Match Page backgrounds, so a page shown again gets its colour at once.
+    @ObservationIgnored let edgeColors = NSCache<NSString, UIColor>()
     @ObservationIgnored private let thumbnails = NSCache<NSNumber, UIImage>()
     @ObservationIgnored var onPageChange: ((_ page: Int, _ finished: Bool) -> Void)?
+    /// Called with the book's own settings whenever they change, to save them.
+    @ObservationIgnored var onOptionsChange: ((ReaderOptions) -> Void)?
 
-    init(book: Book, source: BookSource) {
+    init(book: Book, source: BookSource, options: ReaderOptions, defaults: ReaderDefaults) {
         self.book = book
         self.source = source
         self.pageCount = source.pageCount
-        self.rightToLeft = book.direction == "rtl"
-        self.layout = Layout(rawValue: UserDefaults.standard.string(forKey: "readerLayout") ?? "") ?? .auto
-        self.fit = Fit(rawValue: UserDefaults.standard.string(forKey: "readerFit") ?? "") ?? .screen
+        self.options = options
+        self.defaults = defaults
         let start = min(max(0, book.finished ? 0 : (book.currentPage ?? 0)), max(0, source.pageCount - 1))
-        spreads = SpreadLayout.spreads(pageCount: pageCount, twoPage: false) { _ in false }
-        currentSpread = SpreadLayout.spreadIndex(containing: start, in: spreads)
+        rebuild(keeping: start)
         loadPageSizes()
     }
 
-    var currentPages: [Int] { spreads.indices.contains(currentSpread) ? spreads[currentSpread] : [] }
+    // MARK: Settings (the book's own, else the defaults)
+
+    var direction: ReaderOptions.Direction { options.direction ?? defaults.direction }
+    var rightToLeft: Bool { direction == .rightToLeft }
+    var portraitLayout: ReaderOptions.PageLayout { options.portraitLayout ?? defaults.portraitLayout }
+    var landscapeLayout: ReaderOptions.PageLayout { options.landscapeLayout ?? defaults.landscapeLayout }
+    var fit: Fit { options.fit ?? defaults.fit }
+    var background: ReaderOptions.Background { options.background ?? defaults.background }
+    var bindingShadow: Double { options.bindingShadow ?? defaults.bindingShadow }
+    var splitDoublePages: Bool { options.splitDoublePages ?? defaults.splitDoublePages }
+    var crop: ReaderOptions.PageCrop? { options.crop }
+
+    /// Whether the book sets anything itself (other than its crop, which has no default).
+    var hasOwnSettings: Bool {
+        var settings = options
+        settings.crop = nil
+        return !settings.isEmpty
+    }
+
+    /// Every setting as the reader uses it now.
+    var resolvedOptions: ReaderOptions {
+        var resolved = options
+        resolved.direction = direction
+        resolved.portraitLayout = portraitLayout
+        resolved.landscapeLayout = landscapeLayout
+        resolved.fit = fit
+        resolved.background = background
+        resolved.bindingShadow = bindingShadow
+        resolved.splitDoublePages = splitDoublePages
+        return resolved
+    }
+
+    /// Changes this book's own settings, saves them and redraws.
+    func change(_ edit: (inout ReaderOptions) -> Void) {
+        var updated = options
+        edit(&updated)
+        guard updated != options else { return }
+        updated.updatedAt = Date()
+        options = updated
+        onOptionsChange?(updated)
+        relayout()
+    }
+
+    /// The book goes back to following the defaults (its crop stays).
+    func resetToDefaults() {
+        change { options in
+            let crop = options.crop
+            options = ReaderOptions(updatedAt: options.updatedAt)
+            options.crop = crop
+        }
+    }
+
+    /// Makes this book's settings the defaults for every book, and lets this one follow them.
+    func useAsDefaults() {
+        defaults.adopt(resolvedOptions)
+        resetToDefaults()
+    }
+
+    /// Takes a direction changed elsewhere (Book Info) without saving it again.
+    func adoptDirection(_ direction: ReaderOptions.Direction?) {
+        guard direction != options.direction else { return }
+        options.direction = direction
+        relayout()
+    }
+
+    // MARK: Pages
+
+    var currentDisplayPages: [DisplayPage] { spreads.indices.contains(currentSpread) ? spreads[currentSpread] : [] }
+
+    /// The book's images on screen (one image twice in a row when both its halves are shown).
+    var currentPages: [Int] {
+        var pages: [Int] = []
+        for page in currentDisplayPages where pages.last != page.page { pages.append(page.page) }
+        return pages
+    }
+
     var currentPage: Int { currentPages.first ?? 0 }
 
     var pageLabel: String {
@@ -72,12 +135,10 @@ final class ReaderState {
         return "\(pages) of \(pageCount)"
     }
 
+    var isShowingLandscape: Bool { isLandscape }
+
     private var usesTwoPages: Bool {
-        switch layout {
-        case .auto: return isLandscape
-        case .single: return false
-        case .double: return true
-        }
+        (isLandscape ? landscapeLayout : portraitLayout) == .double
     }
 
     func setLandscape(_ landscape: Bool) {
@@ -86,16 +147,44 @@ final class ReaderState {
         relayout()
     }
 
+    /// The crop for a page as shown, as fractions of the page (or of its half); nil for none.
+    /// The crop is worked out for the whole image before it is split: each half of a double
+    /// page takes the crop of its side.
+    func cropRect(for page: DisplayPage) -> CGRect? {
+        guard let crop = options.crop, sides.indices.contains(page.page) else { return nil }
+        let rect: [Double]
+        switch page.part {
+        case .left: rect = crop.rect(for: .left)
+        case .right: rect = crop.rect(for: .right)
+        case .whole: rect = crop.rect(for: sides[page.page])
+        }
+        guard rect != ReaderOptions.PageCrop.none else { return nil }
+        return CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3])
+    }
+
     private func relayout() {
-        let page = currentPage
-        let wide = widePages
-        spreads = SpreadLayout.spreads(pageCount: pageCount, twoPage: usesTwoPages) { wide.contains($0) }
-        currentSpread = SpreadLayout.spreadIndex(containing: page, in: spreads)
+        let shown = currentDisplayPages.first
+        rebuild(keeping: currentPage, preferring: shown)
         layoutVersion += 1
         prefetch()
     }
 
-    /// Reads page sizes in the background so wide pages can stand alone in two-page mode.
+    private func rebuild(keeping page: Int, preferring shown: DisplayPage? = nil) {
+        let wide = widePages, split = splitDoublePages
+        // The first image is left whole: when it is wide it is usually a wraparound cover.
+        displayPages = SpreadLayout.displayPages(pageCount: pageCount, rightToLeft: rightToLeft) { split && $0 > 0 && wide.contains($0) }
+        spreads = SpreadLayout.spreads(displayPages, twoPage: usesTwoPages) { wide.contains($0) }
+        sides = SpreadLayout.pageSides(pageCount: pageCount, rightToLeft: rightToLeft) { wide.contains($0) }
+        pairs = SpreadLayout.spreads(pageCount: pageCount, twoPage: true) { wide.contains($0) }
+        if let shown, let index = spreads.firstIndex(where: { $0.contains(shown) }) {
+            currentSpread = index
+        } else {
+            currentSpread = SpreadLayout.spreadIndex(containing: page, in: spreads)
+        }
+    }
+
+    /// Reads page sizes in the background so wide pages can stand alone in two-page mode
+    /// (or be split in two).
     private func loadPageSizes() {
         let source = source, count = pageCount
         sizeTask = Task { [weak self] in
@@ -106,8 +195,40 @@ final class ReaderState {
             }
             guard let self, !Task.isCancelled else { return }
             self.widePages = wide
-            if self.usesTwoPages { self.relayout() }
+            if !wide.isEmpty, self.usesTwoPages || self.splitDoublePages { self.relayout() }
         }
+    }
+
+    /// The pages the crop editor shows, uncropped: the left and right page of the spread
+    /// around the page on screen (or the two halves of an image that holds both). A side is
+    /// nil when the book has no page for it nearby.
+    func cropPreview() async -> (left: CGImage?, right: CGImage?, sameImage: Bool) {
+        let page = currentPage
+        let size = PageImageCache.screenPixelSize
+        func load(_ index: Int) async -> CGImage? {
+            await cache.load(page: index, size: size, from: source)?.cgImage
+        }
+        if widePages.contains(page), let image = await load(page) {
+            return (PagePieces.cut(image, part: .left, crop: nil), PagePieces.cut(image, part: .right, crop: nil), true)
+        }
+        // The nearest pair of single pages, starting from the one on screen.
+        let here = pairs.firstIndex { $0.contains(page) } ?? 0
+        let order = pairs.indices.sorted { a, b in
+            let da = abs(a - here), db = abs(b - here)
+            return da != db ? da < db : a > b
+        }
+        if let found = order.first(where: { pairs[$0].count == 2 }) {
+            let pair = pairs[found]
+            let leftPage = rightToLeft ? pair[1] : pair[0]
+            let rightPage = rightToLeft ? pair[0] : pair[1]
+            let leftImage = await load(leftPage)
+            let rightImage = await load(rightPage)
+            return (leftImage, rightImage, false)
+        }
+        // No pairs (a book of one page, say): show this page on its side.
+        let image = await load(page)
+        let side = sides.indices.contains(page) ? sides[page] : .right
+        return side == .left ? (image, nil, false) : (nil, image, false)
     }
 
     func cancel() {
@@ -164,9 +285,10 @@ final class ReaderState {
     /// Decodes two screens ahead and one behind at screen size.
     func prefetch() {
         prefetchTask?.cancel()
-        let indices = [currentSpread + 1, currentSpread + 2, currentSpread - 1]
-            .filter { spreads.indices.contains($0) }
-            .flatMap { spreads[$0] }
+        var indices: [Int] = []
+        for spread in [currentSpread + 1, currentSpread + 2, currentSpread - 1] where spreads.indices.contains(spread) {
+            for page in spreads[spread] where !indices.contains(page.page) { indices.append(page.page) }
+        }
         let source = source, cache = cache, size = PageImageCache.screenPixelSize
         prefetchTask = Task.detached(priority: .userInitiated) {
             for page in indices {
@@ -174,6 +296,26 @@ final class ReaderState {
                 _ = await cache.load(page: page, size: size, from: source)
             }
         }
+    }
+}
+
+/// Cuts the part of a decoded image that is shown: one half of a double page, then the crop.
+enum PagePieces {
+    static func cut(_ image: CGImage, part: DisplayPage.Part, crop: CGRect?) -> CGImage {
+        let width = CGFloat(image.width), height = CGFloat(image.height)
+        var rect: CGRect
+        switch part {
+        case .whole: rect = CGRect(x: 0, y: 0, width: width, height: height)
+        case .left: rect = CGRect(x: 0, y: 0, width: (width / 2).rounded(), height: height)
+        case .right: rect = CGRect(x: (width / 2).rounded(), y: 0, width: width - (width / 2).rounded(), height: height)
+        }
+        if let crop {
+            rect = CGRect(x: rect.minX + crop.minX * rect.width, y: rect.minY + crop.minY * rect.height,
+                          width: crop.width * rect.width, height: crop.height * rect.height)
+        }
+        rect = rect.integral.intersection(CGRect(x: 0, y: 0, width: width, height: height))
+        guard rect.width >= 1, rect.height >= 1, rect.size != CGSize(width: width, height: height) else { return image }
+        return image.cropping(to: rect) ?? image
     }
 }
 

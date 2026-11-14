@@ -1,4 +1,5 @@
 import ArchiveKit
+import ComicCore
 import LibraryKit
 import SwiftUI
 
@@ -11,11 +12,13 @@ struct ReaderScreen: View {
     @State private var isScrubbing = false
     @State private var scrubThumbnail: UIImage?
     @State private var showInfo = false
+    @State private var showCrop = false
+    @State private var showSettings = false
     /// A newer position from another device, until the reader jumps there or says no.
     @State private var handOff: AppModel.HandOff?
 
-    init(book: Book, source: BookSource, handOff: AppModel.HandOff? = nil) {
-        _state = State(initialValue: ReaderState(book: book, source: source))
+    init(book: Book, source: BookSource, options: ReaderOptions, defaults: ReaderDefaults, handOff: AppModel.HandOff? = nil) {
+        _state = State(initialValue: ReaderState(book: book, source: source, options: options, defaults: defaults))
         _handOff = State(initialValue: handOff)
     }
 
@@ -25,7 +28,7 @@ struct ReaderScreen: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                Color.black.ignoresSafeArea()
+                Color(uiColor: state.background.uiColor ?? .black).ignoresSafeArea()
                 PageViewer(state: state)
                     .ignoresSafeArea()
                 if state.showChrome {
@@ -45,12 +48,22 @@ struct ReaderScreen: View {
         .sheet(isPresented: $showInfo) {
             BookInfoView(bookId: state.book.id, source: state.source)
         }
+        .sheet(isPresented: $showCrop) {
+            PageCropView(state: state)
+        }
+        // Reading direction changed in Book Info while the book is open.
+        .onChange(of: liveBook.direction) { _, direction in
+            state.adoptDirection(direction.flatMap(ReaderOptions.Direction.init(rawValue:)))
+        }
         .statusBarHidden(true)
         .persistentSystemOverlays(state.showChrome ? .automatic : .hidden)
         .onAppear {
             let bookId = state.book.id, count = state.pageCount
             let appModel = model
             let handOffPrompt = $handOff
+            state.onOptionsChange = { [weak appModel] options in
+                appModel?.saveReaderOptions(bookId: bookId, options: options)
+            }
             state.onPageChange = { [weak appModel] page, finished in
                 appModel?.saveProgress(bookId: bookId, page: page, pageCount: count, finished: finished)
                 // Turning the page answers the hand-off question too.
@@ -137,32 +150,10 @@ struct ReaderScreen: View {
                 .glassEffect(in: .capsule)
             Spacer(minLength: 0)
 
-            Menu {
-                Picker("Reading Direction", selection: Binding(
-                    get: { state.rightToLeft },
-                    set: { newValue in
-                        state.rightToLeft = newValue
-                        model.saveDirection(bookId: state.book.id, rightToLeft: newValue)
-                    }
-                )) {
-                    Label("Left to Right", systemImage: "arrow.right").tag(false)
-                    Label("Right to Left (Manga)", systemImage: "arrow.left").tag(true)
-                }
-                Picker("Page Layout", selection: $state.layout) {
-                    ForEach(ReaderState.Layout.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Picker("Fit", selection: $state.fit) {
-                    ForEach(ReaderState.Fit.allCases) { Label($0.rawValue, systemImage: $0.systemImage).tag($0) }
-                }
-                Section {
-                    let book = liveBook
-                    Button(book.favorite ? "Remove from Favorites" : "Favorite", systemImage: book.favorite ? "heart.fill" : "heart") {
-                        model.setFavorite(book, !book.favorite)
-                    }
-                    Button(book.bookmarked ? "Remove Bookmark" : "Bookmark", systemImage: book.bookmarked ? "bookmark.fill" : "bookmark") {
-                        model.setBookmarked(book, !book.bookmarked)
-                    }
-                }
+            // A popover rather than a menu: with this many settings (and submenus) the menu
+            // rebuilt itself under the finger and missed taps.
+            Button {
+                showSettings = true
             } label: {
                 Image(systemName: "textformat.size").font(.body.weight(.semibold)).frame(width: 28, height: 28)
             }
@@ -170,6 +161,15 @@ struct ReaderScreen: View {
             .buttonBorderShape(.circle)
             .accessibilityLabel("Reader Settings")
             .accessibilityIdentifier("reader-settings")
+            .popover(isPresented: $showSettings, arrowEdge: .top) {
+                ReaderSettingsPanel(state: state, book: liveBook) {
+                    showSettings = false
+                    // Let the popover close before the crop editor opens.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showCrop = true }
+                }
+                .frame(idealWidth: 380, idealHeight: 640)
+                .presentationCompactAdaptation(.popover)
+            }
 
             Button {
                 showInfo = true
