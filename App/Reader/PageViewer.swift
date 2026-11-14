@@ -452,7 +452,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         let sizes = Self.readSizes.indices.map { Self.readSizes[($0 + readAttempts[slot]) % Self.readSizes.count] }
         textTasks[slot]?.cancel()
         textTasks[slot] = Task { [weak self] in
-            var result: ImageAnalysis?
+            var result: VisionKit.ImageAnalysis?
             for size in sizes.prefix(2) {
                 let image: UIImage?
                 if let size {
