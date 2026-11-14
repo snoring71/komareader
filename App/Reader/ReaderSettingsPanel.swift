@@ -20,12 +20,9 @@ struct ReaderSettingsPanel: View {
         NavigationStack {
             Form {
                 Section("Reading") {
-                    Picker("Direction", selection: setting(\.direction) { $0.direction = $1 }) {
-                        Text("Left to Right").tag(ReaderOptions.Direction.leftToRight)
-                        Text("Right to Left").tag(ReaderOptions.Direction.rightToLeft)
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("settings-direction")
+                    ChoiceBar<ReaderOptions.Direction>([(.leftToRight, "Left to Right"), (.rightToLeft, "Right to Left")],
+                              selection: setting(\.direction) { $0.direction = $1 })
+                        .accessibilityIdentifier("settings-direction")
                     Picker("Fit", selection: setting(\.fit) { $0.fit = $1 }) {
                         ForEach(ReaderOptions.Fit.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
@@ -68,14 +65,10 @@ struct ReaderSettingsPanel: View {
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Binding Shadow")
-                        Picker("Binding Shadow", selection: Binding(
+                        ChoiceBar<BindingShadowStrength>(BindingShadowStrength.allCases.map { ($0, $0.title) }, selection: Binding(
                             get: { BindingShadowStrength.nearest(state.bindingShadow) },
                             set: { strength in state.change { $0.bindingShadow = strength.rawValue } }
-                        )) {
-                            ForEach(BindingShadowStrength.allCases) { Text($0.title).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
+                        ))
                     }
                 }
 
@@ -111,12 +104,8 @@ struct ReaderSettingsPanel: View {
     }
 
     private func layoutPicker(_ selection: Binding<ReaderOptions.PageLayout>) -> some View {
-        Picker("Layout", selection: selection) {
-            ForEach(ReaderOptions.PageLayout.allCases, id: \.self) { Text($0.title).tag($0) }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
+        ChoiceBar<ReaderOptions.PageLayout>(ReaderOptions.PageLayout.allCases.map { ($0, $0.title) }, selection: selection)
+            .frame(width: 230)
     }
 
     /// A binding to one setting as the reader uses it; setting it makes it this book's own.

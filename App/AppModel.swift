@@ -36,6 +36,8 @@ final class AppModel {
     /// closes: changing `books` redraws the library behind the reader, and doing that on
     /// every page turn made page turns and the close button slow in a big library.
     @ObservationIgnored private var readingBook: Book?
+    /// A reading direction changed in the reader, put into `books` when the reader closes.
+    @ObservationIgnored private var directionAfterReading: (id: String, direction: String?)?
     var selection: SidebarItem? = .all
     /// The book whose Book Info sheet is showing in the library.
     var bookInfo: BookRef?
@@ -426,12 +428,21 @@ final class AppModel {
 
     /// The direction a book reads in: its own, else the default for books.
     func direction(of book: Book) -> ReaderOptions.Direction {
-        book.direction.flatMap(ReaderOptions.Direction.init(rawValue:)) ?? readerDefaults.direction
+        let own = directionAfterReading?.id == book.id ? directionAfterReading?.direction : book.direction
+        return own.flatMap(ReaderOptions.Direction.init(rawValue:)) ?? readerDefaults.direction
     }
 
     /// Saves a book's own reader settings to its synced record.
     func saveReaderOptions(bookId: String, options: ReaderOptions) {
-        updateBook(bookId) { $0.direction = options.direction?.rawValue }
+        let newDirection = options.direction?.rawValue
+        if openBook?.id == bookId {
+            // Changing `books` redraws the whole library behind the reader, which in a big
+            // library held up the main thread long enough to drop taps in the reader's
+            // settings. The library learns the direction when the reader closes.
+            directionAfterReading = (bookId, newDirection)
+        } else {
+            updateBook(bookId) { $0.direction = newDirection }
+        }
         guard let book = books.first(where: { $0.id == bookId }) else { return }
         // Older versions only read `readerSettings`, so keep its direction current too.
         let direction = options.direction ?? readerDefaults.direction
@@ -535,6 +546,10 @@ final class AppModel {
 
     /// Puts the position reached in the reader into `books`, once, when the reader closes.
     private func applyReadingProgress() {
+        if let pending = directionAfterReading {
+            directionAfterReading = nil
+            updateBook(pending.id) { $0.direction = pending.direction }
+        }
         guard let reading = readingBook else { return }
         readingBook = nil
         updateBook(reading.id) {

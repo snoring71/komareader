@@ -67,7 +67,16 @@ struct PageViewer: UIViewControllerRepresentable {
             if pages.count == 2, pages[0].page == pages[1].page, pages[0].isHalf, pages[1].isHalf {
                 pages = [DisplayPage(page: pages[0].page)]
             }
-            let pieces = pages.map { SpreadViewController.Piece(page: $0, crop: state.cropRect(for: $0)) }
+            let pieces = pages.map { page -> SpreadViewController.Piece in
+                let crop = state.cropRect(for: page)
+                // An image holding two pages: where they meet, for the binding shadow.
+                var fold: CGFloat?
+                if page.part == .whole, state.sides.indices.contains(page.page), state.sides[page.page] == .both {
+                    let shown = crop ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+                    fold = (0.5 - shown.minX) / max(shown.width, 0.01)
+                }
+                return SpreadViewController.Piece(page: page, crop: crop, fold: fold)
+            }
             let style = SpreadViewController.Style(
                 fit: state.fit, background: state.background, bindingShadow: CGFloat(state.bindingShadow)
             )
@@ -119,6 +128,8 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     struct Piece {
         let page: DisplayPage
         let crop: CGRect?
+        /// For an image holding two pages, where they meet, as a fraction across the image shown.
+        let fold: CGFloat?
         var colorKey: NSString { "\(page)|\(crop.map { "\($0.minX),\($0.minY),\($0.width),\($0.height)" } ?? "-")" as NSString }
     }
 
@@ -201,7 +212,8 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             imageView.addSubview(spinner)
             spinners.append(spinner)
         }
-        if pieces.count == 2, style.bindingShadow > 0 {
+        let isSpread = pieces.count == 2 || (pieces.count == 1 && pieces[0].fold.map { $0 > 0.1 && $0 < 0.9 } == true)
+        if isSpread, style.bindingShadow > 0 {
             let shadow = BindingShadowView(strength: style.bindingShadow)
             contentView.addSubview(shadow)
             bindingShadow = shadow
@@ -262,11 +274,17 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             x += height * aspect
         }
         // Where the two pages meet, darkened a little like the fold of a printed book.
-        if let bindingShadow, imageViews.count == 2 {
-            let left = imageViews[0].frame, right = imageViews[1].frame
-            let width = (min(left.width, right.width) * 0.12).rounded()
-            let top = min(left.minY, right.minY), bottom = max(left.maxY, right.maxY)
-            bindingShadow.frame = CGRect(x: left.maxX - width / 2, y: top, width: width, height: bottom - top)
+        if let bindingShadow {
+            if imageViews.count == 2 {
+                let left = imageViews[0].frame, right = imageViews[1].frame
+                let width = (min(left.width, right.width) * 0.12).rounded()
+                let top = min(left.minY, right.minY), bottom = max(left.maxY, right.maxY)
+                bindingShadow.frame = CGRect(x: left.maxX - width / 2, y: top, width: width, height: bottom - top)
+            } else if let frame = imageViews.first?.frame, let fold = pieces.first?.fold {
+                let seam = frame.minX + fold * frame.width
+                let width = (min(fold, 1 - fold) * frame.width * 0.12).rounded()
+                bindingShadow.frame = CGRect(x: seam - width / 2, y: frame.minY, width: width, height: frame.height)
+            }
         }
     }
 

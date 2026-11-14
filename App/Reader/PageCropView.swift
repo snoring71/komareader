@@ -32,13 +32,8 @@ struct PageCropView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                Picker("Crop", selection: $link) {
-                    Text("Mirror").tag(Link.mirrored)
-                    Text("Same on Both").tag(Link.same)
-                    Text("Separate").tag(Link.separate)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 520)
+                ChoiceBar<Link>([(.mirrored, "Mirror"), (.same, "Same on Both"), (.separate, "Separate")], selection: $link)
+                    .frame(maxWidth: 520)
                 .accessibilityIdentifier("crop-link")
 
                 if loaded {
