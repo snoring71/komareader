@@ -61,7 +61,13 @@ struct PageViewer: UIViewControllerRepresentable {
         }
 
         private func makeController(_ spread: Int) -> SpreadViewController {
-            let pieces = state.spreads[spread].map { SpreadViewController.Piece(page: $0, crop: state.cropRect(for: $0)) }
+            var pages = state.spreads[spread]
+            // Both halves of one image on the same screen: show the image itself, so there is
+            // no seam (or binding shadow) down the middle of a drawn spread.
+            if pages.count == 2, pages[0].page == pages[1].page, pages[0].isHalf, pages[1].isHalf {
+                pages = [DisplayPage(page: pages[0].page)]
+            }
+            let pieces = pages.map { SpreadViewController.Piece(page: $0, crop: state.cropRect(for: $0)) }
             let style = SpreadViewController.Style(
                 fit: state.fit, background: state.background, bindingShadow: CGFloat(state.bindingShadow)
             )
@@ -247,9 +253,11 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         }
         let area = contentView.bounds.size
         var x = (area.width - height * totalAspect) / 2
-        let y = max(0, (area.height - height) / 2)
+        let y = max(0, (area.height - height) / 2).rounded()
         for (view, aspect) in zip(imageViews, aspects) {
-            view.frame = CGRect(x: x, y: y, width: height * aspect, height: height).integral
+            // Round the edges, not each frame, so neighbouring pages meet without a gap.
+            let minX = x.rounded(), maxX = (x + height * aspect).rounded()
+            view.frame = CGRect(x: minX, y: y, width: maxX - minX, height: height.rounded())
             view.subviews.first?.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
             x += height * aspect
         }
@@ -401,8 +409,8 @@ final class BindingShadowView: UIView {
         gradient.startPoint = CGPoint(x: 0, y: 0.5)
         gradient.endPoint = CGPoint(x: 1, y: 0.5)
         // Faint over most of its width and only darkening close to the fold, like the
-        // shading in a scanned book (Strong is about a quarter black right at the fold).
-        let peak = min(1, strength) * 0.28
+        // shading in a scanned book (even Strong is only about an eighth black right at the fold).
+        let peak = min(1, strength) * 0.14
         let alphas: [CGFloat] = [0, 0.04, 0.14, 0.4, 0.75, 1, 0.75, 0.4, 0.14, 0.04, 0]
         gradient.colors = alphas.map { UIColor.black.withAlphaComponent($0 * peak).cgColor }
         gradient.locations = [0, 0.2, 0.33, 0.42, 0.47, 0.5, 0.53, 0.58, 0.67, 0.8, 1]

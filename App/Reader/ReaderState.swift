@@ -25,7 +25,10 @@ final class ReaderState {
     /// Bumped whenever `spreads` is rebuilt or a setting changes, so the page view reloads.
     private(set) var layoutVersion = 0
 
-    @ObservationIgnored private var positions: [DisplayPage: Int] = [:]
+    /// Which side of a printed spread each image sits on, for the crop.
+    @ObservationIgnored private(set) var sides: [PageSide] = []
+    /// The images grouped as the two-page layout would show them, for the crop editor.
+    @ObservationIgnored private var pairs: [[Int]] = []
     @ObservationIgnored private var isLandscape = false
     @ObservationIgnored private var widePages: Set<Int> = []
     @ObservationIgnored private var sizeTask: Task<Void, Never>?
@@ -127,9 +130,6 @@ final class ReaderState {
 
     var currentPage: Int { currentPages.first ?? 0 }
 
-    /// Where the first page on screen is among `displayPages`.
-    var currentPosition: Int { currentDisplayPages.first.flatMap { positions[$0] } ?? 0 }
-
     var pageLabel: String {
         let pages = currentPages.map { String($0 + 1) }.joined(separator: "–")
         return "\(pages) of \(pageCount)"
@@ -147,10 +147,17 @@ final class ReaderState {
         relayout()
     }
 
-    /// The crop for a page as shown, as fractions of the page (or its half); nil for none.
+    /// The crop for a page as shown, as fractions of the page (or of its half); nil for none.
+    /// The crop is worked out for the whole image before it is split: each half of a double
+    /// page takes the crop of its side.
     func cropRect(for page: DisplayPage) -> CGRect? {
-        guard let crop = options.crop, let position = positions[page] else { return nil }
-        let rect = crop.rect(forPosition: position)
+        guard let crop = options.crop, sides.indices.contains(page.page) else { return nil }
+        let rect: [Double]
+        switch page.part {
+        case .left: rect = crop.rect(for: .left)
+        case .right: rect = crop.rect(for: .right)
+        case .whole: rect = crop.rect(for: sides[page.page])
+        }
         guard rect != ReaderOptions.PageCrop.none else { return nil }
         return CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3])
     }
@@ -166,10 +173,9 @@ final class ReaderState {
         let wide = widePages, split = splitDoublePages
         // The first image is left whole: when it is wide it is usually a wraparound cover.
         displayPages = SpreadLayout.displayPages(pageCount: pageCount, rightToLeft: rightToLeft) { split && $0 > 0 && wide.contains($0) }
-        var positions: [DisplayPage: Int] = [:]
-        for (position, page) in displayPages.enumerated() { positions[page] = position }
-        self.positions = positions
         spreads = SpreadLayout.spreads(displayPages, twoPage: usesTwoPages) { wide.contains($0) }
+        sides = SpreadLayout.pageSides(pageCount: pageCount, rightToLeft: rightToLeft) { wide.contains($0) }
+        pairs = SpreadLayout.spreads(pageCount: pageCount, twoPage: true) { wide.contains($0) }
         if let shown, let index = spreads.firstIndex(where: { $0.contains(shown) }) {
             currentSpread = index
         } else {
@@ -193,12 +199,36 @@ final class ReaderState {
         }
     }
 
-    /// A page as shown (half of its image when split), without the crop, for the crop editor.
-    func uncroppedImage(atPosition position: Int) async -> CGImage? {
-        guard displayPages.indices.contains(position) else { return nil }
-        let page = displayPages[position]
-        guard let image = await cache.load(page: page.page, size: PageImageCache.screenPixelSize, from: source)?.cgImage else { return nil }
-        return PagePieces.cut(image, part: page.part, crop: nil)
+    /// The pages the crop editor shows, uncropped: the left and right page of the spread
+    /// around the page on screen (or the two halves of an image that holds both). A side is
+    /// nil when the book has no page for it nearby.
+    func cropPreview() async -> (left: CGImage?, right: CGImage?, sameImage: Bool) {
+        let page = currentPage
+        let size = PageImageCache.screenPixelSize
+        func load(_ index: Int) async -> CGImage? {
+            await cache.load(page: index, size: size, from: source)?.cgImage
+        }
+        if widePages.contains(page), let image = await load(page) {
+            return (PagePieces.cut(image, part: .left, crop: nil), PagePieces.cut(image, part: .right, crop: nil), true)
+        }
+        // The nearest pair of single pages, starting from the one on screen.
+        let here = pairs.firstIndex { $0.contains(page) } ?? 0
+        let order = pairs.indices.sorted { a, b in
+            let da = abs(a - here), db = abs(b - here)
+            return da != db ? da < db : a > b
+        }
+        if let found = order.first(where: { pairs[$0].count == 2 }) {
+            let pair = pairs[found]
+            let leftPage = rightToLeft ? pair[1] : pair[0]
+            let rightPage = rightToLeft ? pair[0] : pair[1]
+            let leftImage = await load(leftPage)
+            let rightImage = await load(rightPage)
+            return (leftImage, rightImage, false)
+        }
+        // No pairs (a book of one page, say): show this page on its side.
+        let image = await load(page)
+        let side = sides.indices.contains(page) ? sides[page] : .right
+        return side == .left ? (image, nil, false) : (nil, image, false)
     }
 
     func cancel() {

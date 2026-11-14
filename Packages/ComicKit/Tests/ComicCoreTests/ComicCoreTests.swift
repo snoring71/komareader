@@ -105,6 +105,14 @@ import Testing
         #expect(SpreadLayout.spreadIndex(containing: 4, in: two) == 3)
     }
 
+    @Test func pageSidesFollowTheTwoPageLayout() {
+        // Pairs [1,2] [3,4], wide 5 alone, then [6,7]; the cover is a right page.
+        let ltr = SpreadLayout.pageSides(pageCount: 8, rightToLeft: false) { $0 == 5 }
+        #expect(ltr == [.right, .left, .right, .left, .right, .both, .left, .right])
+        let rtl = SpreadLayout.pageSides(pageCount: 3, rightToLeft: true) { _ in false }
+        #expect(rtl == [.left, .right, .left])
+    }
+
     @Test func readerOptionsRoundTripAndFallBack() throws {
         var record = BookRecord(bookId: "R", file: .init(path: "r.cbz", size: 1, modified: nil))
         record.readerSettings = .init(direction: .rightToLeft, updatedAt: Date(timeIntervalSince1970: 40))
@@ -114,7 +122,7 @@ import Testing
         var options = BookRecord.ReaderOptions(updatedAt: Date(timeIntervalSince1970: 50))
         options.fit = .width
         options.background = .fromRGB(red: 1, green: 0.5, blue: 0)
-        options.crop = .init(odd: [0.05, 0, 0.9, 1], even: [0, 0, 0.9, 1])
+        options.crop = .init(left: [0.06, 0.02, 0.9, 0.96], right: BookRecord.ReaderOptions.PageCrop.mirror([0.06, 0.02, 0.9, 0.96]), link: .mirrored)
         record.readerOptions = options
         // Once the book has its own options, they win (here: direction back to the default).
         #expect(record.effectiveReaderOptions.direction == nil)
@@ -125,8 +133,12 @@ import Testing
         #expect(!json.contains("portraitLayout"))
         let decoded = try RecordCoding.decoder().decode(BookRecord.self, from: data)
         #expect(decoded == record)
-        #expect(decoded.readerOptions?.crop?.rect(forPosition: 0) == [0.05, 0, 0.9, 1])
-        #expect(decoded.readerOptions?.crop?.rect(forPosition: 3) == [0, 0, 0.9, 1])
+        let crop = try #require(decoded.readerOptions?.crop)
+        #expect(crop.rect(for: .left) == [0.06, 0.02, 0.9, 0.96])
+        #expect(abs(crop.rect(for: .right)[0] - 0.04) < 1e-9)
+        // A whole spread keeps the outer margins trimmed and the middle intact.
+        let spread = crop.rect(for: .both)
+        #expect(abs(spread[0] - 0.03) < 1e-9 && abs(spread[0] + spread[2] - 0.97) < 1e-9)
         #expect(BookRecord.ReaderOptions.Background(code: "dynamic") == .dynamic)
         #expect(BookRecord.ReaderOptions.Background(code: "plaid") == .black)
 

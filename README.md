@@ -11,8 +11,8 @@ A native comic and manga reader for iPad (iPadOS 26+, Liquid Glass), built in Sw
 - Reader settings per book, with defaults for every book in Settings › Book Defaults: reading
   direction, single or two pages in portrait and in landscape, fit, background (black, gray,
   white, a colour you pick, or matched to the page), a binding shadow between two pages, splitting
-  images that hold two pages, and a crop for the whole book (or one for odd and one for even pages)
-  to trim wide margins.
+  images that hold two pages (after cropping), and a crop for the whole book (left and right pages,
+  mirrored or separate) to trim wide margins.
 - Browse by folder, series (worked out from file names until metadata editing arrives), status,
   Favorites and Bookmarked, with a letter index and pinch to resize the grid.
 - Edit any book's cover (pick a page, crop, rotate) from Book Info. Covers for books that are only

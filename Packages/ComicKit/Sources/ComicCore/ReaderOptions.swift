@@ -71,28 +71,52 @@ public extension BookRecord {
             }
         }
 
-        /// Trims every page of the book by the same amount, for books with wide margins.
-        /// Rectangles are `[x, y, width, height]` as fractions of the page as shown (after a
-        /// double page is split, of each half).
+        /// Trims the margins of every page in the book. A book has left pages and right pages
+        /// (as they sit in a two-page spread), and each side has its own crop, so the outer
+        /// margins can be trimmed on both. Rectangles are `[x, y, width, height]` as fractions
+        /// of a page. An image that holds two pages takes the left crop on its left half and
+        /// the right crop on its right half; splitting it into two pages happens after that.
         public struct PageCrop: Codable, Equatable, Sendable {
-            /// The crop for odd pages (1, 3, 5, …, counted as shown), and for every page when
-            /// `even` is left out.
-            public var odd: [Double]
-            /// The crop for even pages, for books whose margins alternate.
-            public var even: [Double]?
+            /// How the two crops relate while editing: `mirrored` (the right crop is the left
+            /// one flipped side to side, for outer and inner margins), `same`, or `separate`.
+            public enum Link: String, Codable, CaseIterable, Sendable { case mirrored, same, separate }
 
-            public init(odd: [Double], even: [Double]? = nil) {
-                self.odd = odd
-                self.even = even
+            public var left: [Double]
+            public var right: [Double]
+            public var link: Link
+
+            public init(left: [Double], right: [Double], link: Link) {
+                self.left = Self.valid(left)
+                self.right = Self.valid(right)
+                self.link = link
             }
 
             public static let none = [0.0, 0, 1, 1]
 
-            /// The crop for the page shown at `position` (0 is page 1).
-            public func rect(forPosition position: Int) -> [Double] {
-                let rect = position % 2 == 1 ? (even ?? odd) : odd
-                return rect.count == 4 ? rect : Self.none
+            /// `rect` flipped side to side.
+            public static func mirror(_ rect: [Double]) -> [Double] {
+                let r = valid(rect)
+                return [max(0, 1 - r[0] - r[2]), r[1], r[2], r[3]]
             }
+
+            private static func valid(_ rect: [Double]) -> [Double] { rect.count == 4 ? rect : none }
+
+            /// The crop for a page on `side`. For an image holding two pages shown whole,
+            /// the crop of the whole image: the left page's outer edge to the right page's,
+            /// keeping the middle.
+            public func rect(for side: PageSide) -> [Double] {
+                switch side {
+                case .left: return Self.valid(left)
+                case .right: return Self.valid(right)
+                case .both:
+                    let l = Self.valid(left), r = Self.valid(right)
+                    let minX = l[0] / 2, maxX = 0.5 + (r[0] + r[2]) / 2
+                    let minY = min(l[1], r[1]), maxY = max(l[1] + l[3], r[1] + r[3])
+                    return [minX, minY, maxX - minX, maxY - minY]
+                }
+            }
+
+            public var isNone: Bool { Self.valid(left) == Self.none && Self.valid(right) == Self.none }
         }
 
         public var direction: Direction?

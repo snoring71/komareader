@@ -24,6 +24,10 @@ public struct DisplayPage: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
+/// Where an image sits in a printed two-page spread: a left page, a right page, or both
+/// (an image that holds a whole spread).
+public enum PageSide: String, Sendable { case left, right, both }
+
 /// Decides which pages share the screen in two-page mode.
 public enum SpreadLayout {
     /// Groups page indices into screens, in reading order.
@@ -84,6 +88,25 @@ public enum SpreadLayout {
             }
         }
         return result
+    }
+
+    /// The side each image sits on, as the two-page layout shows it: pairs put the first
+    /// page in reading order on the left (on the right in right-to-left books), the cover
+    /// sits on the right (left), wide images hold both sides, and any other page left on its
+    /// own sits where the first page of a pair would.
+    public static func pageSides(pageCount: Int, rightToLeft: Bool, isWide: (Int) -> Bool) -> [PageSide] {
+        let first: PageSide = rightToLeft ? .right : .left
+        let second: PageSide = rightToLeft ? .left : .right
+        var sides = [PageSide](repeating: first, count: max(0, pageCount))
+        for (index, spread) in spreads(pageCount: pageCount, twoPage: true, isWide: isWide).enumerated() {
+            if spread.count == 2 {
+                sides[spread[0]] = first
+                sides[spread[1]] = second
+            } else if let page = spread.first {
+                sides[page] = isWide(page) ? .both : (index == 0 ? second : first)
+            }
+        }
+        return sides
     }
 
     /// The screen that shows `page`.

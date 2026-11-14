@@ -40,7 +40,7 @@ picks a folder with the same name uses the same `libraryId`.
   "readerOptions": {
     "direction": "rtl", "landscapeLayout": "double", "fit": "width", "background": "#202020",
     "bindingShadow": 0.6, "splitDoublePages": true,
-    "crop": { "odd": [0.06, 0.02, 0.9, 0.96], "even": [0.04, 0.02, 0.9, 0.96] },
+    "crop": { "left": [0.06, 0.02, 0.9, 0.96], "right": [0.04, 0.02, 0.9, 0.96], "link": "mirrored" },
     "updatedAt": "..."
   },
   "progress": {
@@ -70,9 +70,15 @@ picks a folder with the same name uses the same `libraryId`.
   `fit` (`screen`, `width` or `height`); `background` (`black`, `gray`, `white`, `dynamic` for
   the colour at the page's edges, or a colour as `#RRGGBB`); `bindingShadow` (0 for none to 1);
   `splitDoublePages` (show an image that holds two pages as two pages); and `crop`.
-- `crop` trims every page by the same amount: `odd` is `[x, y, width, height]` as fractions of
-  the page, for odd pages, and for every page when `even` is left out; `even` is for even pages.
-  Pages are counted as shown, from 1: when double pages are split, each half counts as a page.
+- `crop` trims the margins of every page. `left` and `right` are `[x, y, width, height]` as
+  fractions of a page, for left pages and right pages as they sit in a two-page spread: the
+  cover sits on the right (on the left in `rtl` books); after it, pages pair up with the first
+  of each pair on the left (right in `rtl`), an image wider than it is tall (more than 1.1
+  times) holds both sides and stands alone, and so does a page followed by such an image.
+  An image holding both sides takes `left` on its left half and `right` on its right half;
+  shown whole, it is cut from its left half's left edge to its right half's right edge, top
+  and bottom keeping whatever either side keeps. Splitting it into two pages comes after the
+  crop. `link` is `mirrored`, `same` or `separate`: how the two crops were tied while editing.
 - Dates are ISO 8601 in UTC; writers should include milliseconds.
 - Groups that have never been set are left out.
 
