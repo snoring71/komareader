@@ -1,4 +1,5 @@
 import ArchiveKit
+import ComicCore
 import SwiftUI
 import UIKit
 import VisionKit
@@ -14,7 +15,7 @@ struct PageViewer: UIViewControllerRepresentable {
             transitionStyle: .scroll, navigationOrientation: .horizontal,
             options: [.interPageSpacing: 12]
         )
-        controller.view.backgroundColor = .black
+        controller.view.backgroundColor = state.background.uiColor ?? .black
         controller.dataSource = context.coordinator
         controller.delegate = context.coordinator
         context.coordinator.show(in: controller, animated: false)
@@ -32,7 +33,13 @@ struct PageViewer: UIViewControllerRepresentable {
             coordinator.selectingText = selectingText
             (controller.viewControllers?.first as? SpreadViewController)?.selectingText = selectingText
         }
+        let textRetry = state.textRetry
+        if textRetry != coordinator.textRetry {
+            coordinator.textRetry = textRetry
+            (controller.viewControllers?.first as? SpreadViewController)?.retryText()
+        }
         if version != coordinator.layoutVersion || direction != coordinator.rightToLeft {
+            if let color = state.background.uiColor { controller.view.backgroundColor = color }
             coordinator.show(in: controller, animated: false)
         } else if spread != coordinator.displayedSpread {
             coordinator.show(in: controller, animated: abs(spread - coordinator.displayedSpread) == 1)
@@ -46,6 +53,8 @@ struct PageViewer: UIViewControllerRepresentable {
         var layoutVersion = -1
         var rightToLeft = false
         var selectingText = false
+        var textRetry = 0
+        private weak var pageController: UIPageViewController?
 
         init(state: ReaderState) { self.state = state }
 
@@ -57,16 +66,45 @@ struct PageViewer: UIViewControllerRepresentable {
             displayedSpread = target
             layoutVersion = state.layoutVersion
             rightToLeft = state.rightToLeft
+            pageController = controller
             guard state.spreads.indices.contains(target) else { return }
             let page = makeController(target)
             controller.setViewControllers([page], direction: direction, animated: animated)
+            followBackground(of: page)
+            becameCurrent(page)
+        }
+
+        /// Copy All and the Select Text bar follow the spread on screen.
+        private func becameCurrent(_ page: SpreadViewController) {
+            page.selectingText = state.selectingText
+            state.currentTranscript = { [weak page] in page?.transcript ?? "" }
             page.reportTextStatus()
         }
 
         private func makeController(_ spread: Int) -> SpreadViewController {
+            var pages = state.spreads[spread]
+            // Both halves of one image on the same screen: show the image itself, so there is
+            // no seam (or binding shadow) down the middle of a drawn spread.
+            if pages.count == 2, pages[0].page == pages[1].page, pages[0].isHalf, pages[1].isHalf {
+                pages = [DisplayPage(page: pages[0].page)]
+            }
+            let pieces = pages.map { page -> SpreadViewController.Piece in
+                let crop = state.cropRect(for: page)
+                // An image holding two pages: where they meet, for the binding shadow.
+                var fold: CGFloat?
+                if page.part == .whole, state.sides.indices.contains(page.page), state.sides[page.page] == .both {
+                    let shown = crop ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+                    fold = (0.5 - shown.minX) / max(shown.width, 0.01)
+                }
+                return SpreadViewController.Piece(page: page, crop: crop, fold: fold)
+            }
+            let style = SpreadViewController.Style(
+                fit: state.fit, background: state.background, bindingShadow: CGFloat(state.bindingShadow)
+            )
             let controller = SpreadViewController(
-                spreadIndex: spread, pages: state.spreads[spread], rightToLeft: state.rightToLeft,
-                fit: state.fit, source: state.source, cache: state.cache, textAnalyzer: state.textAnalyzer
+                spreadIndex: spread, pieces: pieces, rightToLeft: state.rightToLeft,
+                style: style, source: state.source, cache: state.cache, edgeColors: state.edgeColors,
+                textAnalyzer: state.textAnalyzer
             )
             controller.onTap = { [weak self] fraction in self?.state.handleTap(atFraction: fraction) }
             // Only the spread on screen speaks for the screen; neighbours read their text quietly.
@@ -78,7 +116,17 @@ struct PageViewer: UIViewControllerRepresentable {
                 }
             }
             controller.selectingText = state.selectingText
+            controller.onBackgroundChange = { [weak self, weak controller] in
+                guard let self, let controller else { return }
+                if controller.spreadIndex == self.displayedSpread { self.followBackground(of: controller) }
+            }
             return controller
+        }
+
+        /// With Match Page, the gap between pages while swiping takes the colour of the page on screen.
+        private func followBackground(of page: SpreadViewController) {
+            guard state.background == .dynamic, let color = page.currentBackground else { return }
+            UIView.animate(withDuration: 0.25) { self.pageController?.view.backgroundColor = color }
         }
 
         private func neighbour(of controller: UIViewController, step: Int) -> UIViewController? {
@@ -105,34 +153,56 @@ struct PageViewer: UIViewControllerRepresentable {
             guard completed, let current = pvc.viewControllers?.first as? SpreadViewController else { return }
             displayedSpread = current.spreadIndex
             state.show(spread: current.spreadIndex)
-            current.selectingText = state.selectingText
-            current.reportTextStatus()
+            followBackground(of: current)
+            becameCurrent(current)
         }
     }
 }
 
 /// One screen: one or two pages side by side, zoomable.
 final class SpreadViewController: UIViewController, UIScrollViewDelegate {
+    /// One page on this screen: an image (or half of one) and the crop to show of it.
+    struct Piece {
+        let page: DisplayPage
+        let crop: CGRect?
+        /// For an image holding two pages, where they meet, as a fraction across the image shown.
+        let fold: CGFloat?
+        var colorKey: NSString { "\(page)|\(crop.map { "\($0.minX),\($0.minY),\($0.width),\($0.height)" } ?? "-")" as NSString }
+    }
+
+    struct Style {
+        let fit: ReaderState.Fit
+        let background: ReaderOptions.Background
+        /// 0 for none, up to 1.
+        let bindingShadow: CGFloat
+    }
+
     let spreadIndex: Int
-    let pages: [Int]
+    let pieces: [Piece]
     private let rightToLeft: Bool
-    private let fit: ReaderState.Fit
+    private let style: Style
     private let source: BookSource
     private let cache: PageImageCache
-    private let textAnalyzer: PageTextAnalyzer
+    private let edgeColors: NSCache<NSString, UIColor>
     var onTap: ((CGFloat) -> Void)?
+    private let textAnalyzer: PageTextAnalyzer
     /// Reports what Live Text found on this spread, with the spread's index.
     var onTextStatus: ((Int, ReaderState.TextStatus) -> Void)?
     /// Select Text mode: find the text on the pages and let it be selected.
     var selectingText = false {
         didSet { if selectingText != oldValue, isViewLoaded { updateTextSelection() } }
     }
+    /// Called when a Match Page background has been worked out.
+    var onBackgroundChange: (() -> Void)?
+    private(set) var currentBackground: UIColor?
 
     private let scrollView = UIScrollView()
     private let contentView = UIView()
     private var imageViews: [UIImageView] = []
     private var spinners: [UIActivityIndicatorView] = []
+    private var bindingShadow: BindingShadowView?
     private var loadTasks: [Task<Void, Never>] = []
+    private var colorTask: Task<Void, Never>?
     private var loadedSize: CGFloat = 0
     private var laidOutContentSize: CGSize = .zero
     private var textInteractions: [ImageAnalysisInteraction] = []
@@ -143,13 +213,15 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     private var placeholders: [Bool] = []
     private var textTasks: [Task<Void, Never>?] = []
 
-    init(spreadIndex: Int, pages: [Int], rightToLeft: Bool, fit: ReaderState.Fit, source: BookSource, cache: PageImageCache, textAnalyzer: PageTextAnalyzer) {
+    init(spreadIndex: Int, pieces: [Piece], rightToLeft: Bool, style: Style, source: BookSource,
+         cache: PageImageCache, edgeColors: NSCache<NSString, UIColor>, textAnalyzer: PageTextAnalyzer) {
         self.spreadIndex = spreadIndex
-        self.pages = pages
+        self.pieces = pieces
         self.rightToLeft = rightToLeft
-        self.fit = fit
+        self.style = style
         self.source = source
         self.cache = cache
+        self.edgeColors = edgeColors
         self.textAnalyzer = textAnalyzer
         super.init(nibName: nil, bundle: nil)
     }
@@ -158,12 +230,15 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
 
     deinit {
         loadTasks.forEach { $0.cancel() }
+        colorTask?.cancel()
         textTasks.forEach { $0?.cancel() }
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        let background = style.background.uiColor ?? cachedEdgeColor() ?? .black
+        currentBackground = style.background == .dynamic ? cachedEdgeColor() : background
+        view.backgroundColor = background
         scrollView.delegate = self
         scrollView.minimumZoomScale = 1
         scrollView.maximumZoomScale = 5
@@ -176,14 +251,15 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         scrollView.addSubview(contentView)
 
         // Pages in screen order: in manga the first page is on the right.
-        for _ in pages {
+        let light = background.isLight
+        for _ in pieces {
             let imageView = UIImageView()
             imageView.contentMode = .scaleAspectFit
-            imageView.backgroundColor = UIColor(white: 0.08, alpha: 1)
+            imageView.backgroundColor = light ? UIColor(white: 0, alpha: 0.06) : UIColor(white: 1, alpha: 0.06)
             contentView.addSubview(imageView)
             imageViews.append(imageView)
             let spinner = UIActivityIndicatorView(style: .large)
-            spinner.color = .white
+            spinner.color = light ? .darkGray : .white
             spinner.hidesWhenStopped = true
             spinner.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin, .flexibleBottomMargin]
             imageView.addSubview(spinner)
@@ -203,6 +279,12 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             placeholders.append(false)
             textTasks.append(nil)
         }
+        let isSpread = pieces.count == 2 || (pieces.count == 1 && pieces[0].fold.map { $0 > 0.1 && $0 < 0.9 } == true)
+        if isSpread, style.bindingShadow > 0 {
+            let shadow = BindingShadowView(strength: style.bindingShadow)
+            contentView.addSubview(shadow)
+            bindingShadow = shadow
+        }
 
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
         doubleTap.numberOfTapsRequired = 2
@@ -216,7 +298,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         if selectingText { updateTextSelection() }
     }
 
-    private var screenOrder: [Int] { rightToLeft ? Array(pages.reversed()) : pages }
+    private var screenOrder: [Piece] { rightToLeft ? Array(pieces.reversed()) : pieces }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
@@ -235,7 +317,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         }
         let totalAspect = max(aspects.reduce(0, +), 0.01)
         let height: CGFloat
-        switch fit {
+        switch style.fit {
         case .screen: height = min(bounds.height, bounds.width / totalAspect)
         case .width: height = bounds.width / totalAspect
         case .height: height = bounds.height
@@ -251,11 +333,26 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         }
         let area = contentView.bounds.size
         var x = (area.width - height * totalAspect) / 2
-        let y = max(0, (area.height - height) / 2)
+        let y = max(0, (area.height - height) / 2).rounded()
         for (view, aspect) in zip(imageViews, aspects) {
-            view.frame = CGRect(x: x, y: y, width: height * aspect, height: height).integral
+            // Round the edges, not each frame, so neighbouring pages meet without a gap.
+            let minX = x.rounded(), maxX = (x + height * aspect).rounded()
+            view.frame = CGRect(x: minX, y: y, width: maxX - minX, height: height.rounded())
             view.subviews.first?.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
             x += height * aspect
+        }
+        // Where the two pages meet, darkened a little like the fold of a printed book.
+        if let bindingShadow {
+            if imageViews.count == 2 {
+                let left = imageViews[0].frame, right = imageViews[1].frame
+                let width = (min(left.width, right.width) * 0.12).rounded()
+                let top = min(left.minY, right.minY), bottom = max(left.maxY, right.maxY)
+                bindingShadow.frame = CGRect(x: left.maxX - width / 2, y: top, width: width, height: bottom - top)
+            } else if let frame = imageViews.first?.frame, let fold = pieces.first?.fold {
+                let seam = frame.minX + fold * frame.width
+                let width = (min(fold, 1 - fold) * frame.width * 0.12).rounded()
+                bindingShadow.frame = CGRect(x: seam - width / 2, y: frame.minY, width: width, height: frame.height)
+            }
         }
     }
 
@@ -268,9 +365,10 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     private func load(size: CGFloat) {
         guard size > loadedSize else { return }
         loadedSize = size
-        for (slot, page) in screenOrder.enumerated() {
+        for (slot, piece) in screenOrder.enumerated() {
+            let page = piece.page.page
             if let cached = cache.image(for: page, minSize: size) {
-                imageViews[slot].image = cached
+                display(cached, in: slot)
                 placeholders[slot] = false
                 if selectingText { readText(slot: slot) }
                 continue
@@ -278,7 +376,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             // Until the page is decoded, show a smaller copy if there is one, or a spinner, rather than a black page.
             if imageViews[slot].image == nil {
                 if let smaller = cache.image(for: page, minSize: 0) {
-                    imageViews[slot].image = smaller
+                    display(smaller, in: slot)
                     placeholders[slot] = true
                 } else {
                     spinners[slot].startAnimating()
@@ -296,7 +394,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
                     }
                     return
                 }
-                self.imageViews[slot].image = image
+                self.display(image, in: slot)
                 self.placeholders[slot] = false
                 self.view.setNeedsLayout()
                 if self.selectingText { self.readText(slot: slot) }
@@ -319,7 +417,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
                 textTasks[slot] = nil
                 interaction.selectableItemsHighlighted = false
                 interaction.preferredInteractionTypes = []
-                if slotStatus[slot] == .searching {
+                if slotStatus[slot] == .searching || slotStatus[slot] == .failed {
                     // Unfinished: read it again next time.
                     analyzedImages[slot] = nil
                     slotStatus[slot] = .idle
@@ -342,42 +440,131 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         analyzedImages[slot] = image
         slotStatus[slot] = .searching
         reportTextStatus()
-        let page = screenOrder[slot], analyzer = textAnalyzer
+        let key = screenOrder[slot].colorKey as String, analyzer = textAnalyzer
         textTasks[slot]?.cancel()
         textTasks[slot] = Task { [weak self] in
-            let analysis = await analyzer.analysis(page: page, image: image)
+            let analysis = await analyzer.analysis(key: key, image: image)
             guard let self, !Task.isCancelled, self.selectingText, self.imageViews[slot].image === image else { return }
             let interaction = self.textInteractions[slot]
             interaction.analysis = analysis
             interaction.selectableItemsHighlighted = analysis != nil
-            let hasText = analysis?.hasResults(for: .text) ?? false
-            self.slotStatus[slot] = hasText ? .found : .none
+            if analysis == nil {
+                // Read again the next time Select Text is switched on.
+                self.slotStatus[slot] = .failed
+            } else {
+                self.slotStatus[slot] = analysis?.hasResults(for: .text) == true ? .found : .none
+            }
             self.reportTextStatus()
         }
-        // Live Text can stall (seen on the CI simulator); say so rather than spin forever.
+        // A safety net: the analyzer gives up on a stuck read itself, but pages queue one at a
+        // time, so allow for a few ahead of this one.
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(20))
+            try? await Task.sleep(for: .seconds(60))
             guard let self, self.selectingText, self.analyzedImages[slot] === image, self.slotStatus[slot] == .searching else { return }
             self.slotStatus[slot] = .failed
             self.reportTextStatus()
         }
     }
 
-    /// Tells the reader what was found across this spread's pages.
+    /// Reads the pages that failed (or stalled) again.
+    func retryText() {
+        guard selectingText else { return }
+        for slot in slotStatus.indices where slotStatus[slot] == .failed {
+            analyzedImages[slot] = nil
+            readText(slot: slot)
+        }
+        reportTextStatus()
+    }
+
+    /// Tells the reader what was found across this spread's pages. A page that couldn't be
+    /// read counts even when the other page has text, so a missed page is never silent.
     func reportTextStatus() {
         let status: ReaderState.TextStatus
         if !selectingText || slotStatus.isEmpty {
             status = .idle
-        } else if slotStatus.contains(.found) {
-            status = .found
         } else if slotStatus.contains(.searching) || slotStatus.contains(.idle) {
             status = .searching
         } else if slotStatus.contains(.failed) {
             status = .failed
+        } else if slotStatus.contains(.found) {
+            status = .found
         } else {
             status = .none
         }
         onTextStatus?(spreadIndex, status)
+    }
+
+    /// The text found on this spread's pages, in reading order.
+    var transcript: String {
+        let readingOrder = rightToLeft ? Array(textInteractions.reversed()) : textInteractions
+        return readingOrder.compactMap { $0.analysis?.transcript }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+    }
+
+    /// Puts a decoded image in its slot, cut to the half and crop this page shows.
+    private func display(_ image: UIImage, in slot: Int) {
+        let piece = screenOrder[slot]
+        if let cgImage = image.cgImage, piece.page.isHalf || piece.crop != nil {
+            imageViews[slot].image = UIImage(cgImage: PagePieces.cut(cgImage, part: piece.page.part, crop: piece.crop))
+        } else {
+            imageViews[slot].image = image
+        }
+        imageViews[slot].backgroundColor = .clear
+        if style.background == .dynamic { matchBackground() }
+    }
+
+    // MARK: Match Page background
+
+    private func cachedEdgeColor() -> UIColor? {
+        let colors = pieces.compactMap { edgeColors.object(forKey: $0.colorKey) }
+        guard colors.count == pieces.count, !colors.isEmpty else { return nil }
+        return Self.average(colors)
+    }
+
+    /// Works out the colour around the edges of the page(s) on screen, off the main thread.
+    private func matchBackground() {
+        if let cached = cachedEdgeColor() {
+            apply(background: cached)
+            return
+        }
+        let shown = screenOrder.enumerated().compactMap { slot, piece -> (NSString, CGImage)? in
+            guard let image = imageViews[slot].image?.cgImage else { return nil }
+            return (piece.colorKey, image)
+        }
+        guard shown.count == pieces.count else { return }
+        colorTask?.cancel()
+        let edgeColors = edgeColors
+        colorTask = Task { [weak self] in
+            let colors = await Task.detached(priority: .userInitiated) { () -> [(NSString, UIColor)] in
+                shown.compactMap { key, image in
+                    ImageAnalysis.edgeColor(of: image).map { (key, UIColor(red: $0.red, green: $0.green, blue: $0.blue, alpha: 1)) }
+                }
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            for (key, color) in colors { edgeColors.setObject(color, forKey: key) }
+            if let color = self.cachedEdgeColor() { self.apply(background: color) }
+        }
+    }
+
+    private func apply(background color: UIColor) {
+        guard currentBackground != color else { return }
+        let first = currentBackground == nil
+        currentBackground = color
+        UIView.animate(withDuration: first ? 0 : 0.25) { self.view.backgroundColor = color }
+        onBackgroundChange?()
+    }
+
+    private static func average(_ colors: [UIColor]) -> UIColor {
+        var total = (r: CGFloat(0), g: CGFloat(0), b: CGFloat(0))
+        for color in colors {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            color.getRed(&r, green: &g, blue: &b, alpha: &a)
+            total.r += r; total.g += g; total.b += b
+        }
+        let n = CGFloat(max(colors.count, 1))
+        return UIColor(red: total.r / n, green: total.g / n, blue: total.b / n, alpha: 1)
     }
 
     // MARK: Zoom
@@ -407,4 +594,25 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         }
         onTap?(gesture.location(in: view).x / max(view.bounds.width, 1))
     }
+}
+
+/// A soft shadow down the middle of a two-page spread, darkest where the pages meet.
+final class BindingShadowView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    init(strength: CGFloat) {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        guard let gradient = layer as? CAGradientLayer else { return }
+        gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1, y: 0.5)
+        // Faint over most of its width and only darkening close to the fold, like the
+        // shading in a scanned book (even Strong is only about an eighth black right at the fold).
+        let peak = min(1, strength) * 0.14
+        let alphas: [CGFloat] = [0, 0.04, 0.14, 0.4, 0.75, 1, 0.75, 0.4, 0.14, 0.04, 0]
+        gradient.colors = alphas.map { UIColor.black.withAlphaComponent($0 * peak).cgColor }
+        gradient.locations = [0, 0.2, 0.33, 0.42, 0.47, 0.5, 0.53, 0.58, 0.67, 0.8, 1]
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 }

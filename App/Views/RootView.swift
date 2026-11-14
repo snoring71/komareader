@@ -2,6 +2,10 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage(SettingsKeys.coverShape) private var coverShape: CoverShape = .comic
+    @AppStorage(SettingsKeys.coverShadow) private var coverShadow: Double = CoverStyle.defaultShadowStrength
+    @AppStorage(SettingsKeys.coverShadowDirection) private var shadowDirection: CoverShadowDirection = .around
+    @AppStorage(SettingsKeys.roundedCorners) private var roundedCorners = true
 
     var body: some View {
         @Bindable var model = model
@@ -32,7 +36,7 @@ struct RootView: View {
             }
         }
         .fullScreenCover(item: $model.openBook) { open in
-            ReaderScreen(book: open.book, source: open.source, handOff: open.handOff)
+            ReaderScreen(book: open.book, source: open.source, options: open.options, defaults: model.readerDefaults, handOff: open.handOff)
         }
         .sheet(item: $model.bookInfo) { ref in
             BookInfoView(bookId: ref.id)
@@ -45,6 +49,7 @@ struct RootView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .environment(\.coverStyle, CoverStyle(shape: coverShape, shadowStrength: coverShadow, shadowDirection: shadowDirection, roundedCorners: roundedCorners))
     }
 }
 

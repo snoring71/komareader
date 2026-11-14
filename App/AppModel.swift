@@ -36,12 +36,15 @@ final class AppModel {
     /// closes: changing `books` redraws the library behind the reader, and doing that on
     /// every page turn made page turns and the close button slow in a big library.
     @ObservationIgnored private var readingBook: Book?
+    /// A reading direction changed in the reader, put into `books` when the reader closes.
+    @ObservationIgnored private var directionAfterReading: (id: String, direction: String?)?
     var selection: SidebarItem? = .all
     /// The book whose Book Info sheet is showing in the library.
     var bookInfo: BookRef?
     /// Bumped when a book's cover changes, so the grid reloads its thumbnail.
     var coverRevision: [String: Int] = [:]
     let coverPolicy = CoverPolicy()
+    let readerDefaults = ReaderDefaults()
 
     struct Catalog {
         /// Position of each book when sorted by title.
@@ -84,6 +87,8 @@ final class AppModel {
         let source: BookSource
         /// A newer position from another device, offered when the reader opens.
         var handOff: HandOff?
+        /// The book's own reader settings.
+        var options: ReaderOptions
         var id: String { book.id }
     }
 
@@ -345,7 +350,9 @@ final class AppModel {
             handOff = HandOff(deviceName: DeviceIdentity.displayName(for: other.device), page: other.progress.page)
         }
         bookInfo = nil
-        openBook = OpenBook(book: current, source: source, handOff: handOff)
+        var options = record?.effectiveReaderOptions ?? ReaderOptions(updatedAt: .distantPast)
+        if record == nil, let direction = current.direction { options.direction = ReaderOptions.Direction(rawValue: direction) }
+        openBook = OpenBook(book: current, source: source, handOff: handOff, options: options)
     }
 
     /// The book's synced record, read fresh from the data folder.
@@ -407,16 +414,41 @@ final class AppModel {
         }
     }
 
+    /// Sets a book's reading direction from Book Info (the reader saves its settings itself).
     func saveDirection(bookId: String, rightToLeft: Bool) {
-        updateBook(bookId) { $0.direction = rightToLeft ? "rtl" : "ltr" }
-        guard let store, let book = books.first(where: { $0.id == bookId }) else { return }
-        Task.detached(priority: .utility) {
-            var record = store.read(bookId: bookId) ?? BookRecord(bookId: bookId, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
-            var settings = record.readerSettings ?? .init()
-            settings.direction = rightToLeft ? .rightToLeft : .leftToRight
-            settings.updatedAt = Date()
-            record.readerSettings = settings
-            try? store.write(record)
+        let direction: ReaderOptions.Direction = rightToLeft ? .rightToLeft : .leftToRight
+        updateBook(bookId) { $0.direction = direction.rawValue }
+        Task {
+            var options = await record(for: bookId)?.effectiveReaderOptions ?? ReaderOptions()
+            options.direction = direction
+            options.updatedAt = Date()
+            saveReaderOptions(bookId: bookId, options: options)
+        }
+    }
+
+    /// The direction a book reads in: its own, else the default for books.
+    func direction(of book: Book) -> ReaderOptions.Direction {
+        let own = directionAfterReading?.id == book.id ? directionAfterReading?.direction : book.direction
+        return own.flatMap(ReaderOptions.Direction.init(rawValue:)) ?? readerDefaults.direction
+    }
+
+    /// Saves a book's own reader settings to its synced record.
+    func saveReaderOptions(bookId: String, options: ReaderOptions) {
+        let newDirection = options.direction?.rawValue
+        if openBook?.id == bookId {
+            // Changing `books` redraws the whole library behind the reader, which in a big
+            // library held up the main thread long enough to drop taps in the reader's
+            // settings. The library learns the direction when the reader closes.
+            directionAfterReading = (bookId, newDirection)
+        } else {
+            updateBook(bookId) { $0.direction = newDirection }
+        }
+        guard let book = books.first(where: { $0.id == bookId }) else { return }
+        // Older versions only read `readerSettings`, so keep its direction current too.
+        let direction = options.direction ?? readerDefaults.direction
+        updateRecord(book) { record in
+            record.readerOptions = options
+            record.readerSettings = .init(direction: direction, layout: .auto, updatedAt: options.updatedAt)
         }
     }
 
@@ -490,6 +522,25 @@ final class AppModel {
         }
     }
 
+    /// Throws away every cover this book has (an edit, the shared default cover, this device's
+    /// thumbnail) and makes it again from the first page, as for a book just added. The record
+    /// gets a fresh default recipe, so other devices see the newer date and rebuild theirs too.
+    func regenerateCover(_ book: Book) async {
+        guard let store else { return }
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try store.deleteCover(bookId: book.id, custom: true)
+                try store.deleteCover(bookId: book.id, custom: false)
+                var record = store.read(bookId: book.id) ?? BookRecord(bookId: book.id, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
+                record.cover = BookRecord.CoverEdit(page: 0)
+                try store.write(record)
+            }.value
+            await refreshCover(book)
+        } catch {
+            errorMessage = "Could not regenerate the cover: \(error.localizedDescription)"
+        }
+    }
+
     /// The cover saved for a book (edited or default), for the Book Info sheet.
     func sharedCoverURL(for book: Book) -> URL? {
         store?.existingCoverURL(bookId: book.id)
@@ -514,6 +565,10 @@ final class AppModel {
 
     /// Puts the position reached in the reader into `books`, once, when the reader closes.
     private func applyReadingProgress() {
+        if let pending = directionAfterReading {
+            directionAfterReading = nil
+            updateBook(pending.id) { $0.direction = pending.direction }
+        }
         guard let reading = readingBook else { return }
         readingBook = nil
         updateBook(reading.id) {

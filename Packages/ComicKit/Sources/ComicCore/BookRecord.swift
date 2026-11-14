@@ -12,7 +12,11 @@ public struct BookRecord: Codable, Equatable, Sendable {
     public var tags: Tags?
     public var cover: CoverEdit?
     public var flags: Flags?
+    /// Reading direction only, as written by version 0.1. Kept up to date for older versions;
+    /// `readerOptions` takes over once it is present.
     public var readerSettings: ReaderSettings?
+    /// The book's own reader settings (direction, layout, fit, background, crop and so on).
+    public var readerOptions: ReaderOptions?
     /// Reading position per device id. Newest entry wins when opening a book.
     public var progress: [String: Progress]
 
@@ -155,6 +159,7 @@ public extension BookRecord {
         result.cover = Self.newer(cover, other.cover) { $0.updatedAt }
         result.flags = Self.newer(flags, other.flags) { $0.updatedAt }
         result.readerSettings = Self.newer(readerSettings, other.readerSettings) { $0.updatedAt }
+        result.readerOptions = Self.newer(readerOptions, other.readerOptions) { $0.updatedAt }
         if result.file.fingerprint == nil { result.file.fingerprint = other.file.fingerprint }
         for (device, theirs) in other.progress {
             if let mine = result.progress[device], mine.updatedAt >= theirs.updatedAt { continue }
