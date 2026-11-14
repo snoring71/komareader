@@ -212,6 +212,13 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     /// Per slot: the image showing is a smaller stand-in until the decode finishes.
     private var placeholders: [Bool] = []
     private var textTasks: [Task<Void, Never>?] = []
+    /// Per slot: how many times Try Again has asked for this page, which picks the read sizes.
+    private var readAttempts: [Int] = []
+    /// Sizes to read a page at (longest side in pixels; nil is the image on screen). Small text
+    /// beside furigana reads better sharp, but Live Text sometimes finds nothing on a page at one
+    /// size and everything at another, so an empty read tries the next size, and Try Again
+    /// starts one further along.
+    private static let readSizes: [CGFloat?] = [4096, nil, 2048]
 
     init(spreadIndex: Int, pieces: [Piece], rightToLeft: Bool, style: Style, source: BookSource,
          cache: PageImageCache, edgeColors: NSCache<NSString, UIColor>, textAnalyzer: PageTextAnalyzer) {
@@ -278,6 +285,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             slotStatus.append(.idle)
             placeholders.append(false)
             textTasks.append(nil)
+            readAttempts.append(0)
         }
         let isSpread = pieces.count == 2 || (pieces.count == 1 && pieces[0].fold.map { $0 > 0.1 && $0 < 0.9 } == true)
         if isSpread, style.bindingShadow > 0 {
@@ -429,47 +437,68 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
 
     /// Reads the text on one page, once its image is the full screen-size decode.
     private func readText(slot: Int) {
-        guard textInteractions.indices.contains(slot), let image = imageViews[slot].image else { return }
-        if image === analyzedImages[slot] { return }
+        guard textInteractions.indices.contains(slot), let shown = imageViews[slot].image else { return }
+        if shown === analyzedImages[slot] { return }
         // A smaller copy stands in while the page decodes; wait for the real one.
         if placeholders[slot] {
             slotStatus[slot] = .searching
             reportTextStatus()
             return
         }
-        analyzedImages[slot] = image
+        analyzedImages[slot] = shown
         slotStatus[slot] = .searching
         reportTextStatus()
-        let key = screenOrder[slot].colorKey as String, analyzer = textAnalyzer
+        let piece = screenOrder[slot], analyzer = textAnalyzer, source = source
+        let sizes = Self.readSizes.indices.map { Self.readSizes[($0 + readAttempts[slot]) % Self.readSizes.count] }
         textTasks[slot]?.cancel()
         textTasks[slot] = Task { [weak self] in
-            let analysis = await analyzer.analysis(key: key, image: image)
-            guard let self, !Task.isCancelled, self.selectingText, self.imageViews[slot].image === image else { return }
+            var result: ImageAnalysis?
+            for size in sizes.prefix(2) {
+                let image: UIImage?
+                if let size {
+                    image = await Task.detached(priority: .userInitiated) {
+                        guard let full = try? await source.image(at: piece.page.page, maxPixelSize: size) else { return nil }
+                        let cut = piece.page.isHalf || piece.crop != nil ? PagePieces.cut(full, part: piece.page.part, crop: piece.crop) : full
+                        return UIImage(cgImage: cut)
+                    }.value
+                } else {
+                    image = shown
+                }
+                if Task.isCancelled { return }
+                guard let image else { continue }
+                let key = "\(piece.colorKey)|\(size.map { Int($0) } ?? 0)"
+                guard let analysis = await analyzer.analysis(key: key, image: image) else { continue }
+                if result == nil || analysis.hasResults(for: .text) { result = analysis }
+                if analysis.hasResults(for: .text) { break }
+            }
+            guard let self, !Task.isCancelled, self.selectingText, self.imageViews[slot].image === shown else { return }
+            // The read may come from a sharper copy than the one on screen; Live Text places its
+            // text by position within the image, so it lines up all the same.
             let interaction = self.textInteractions[slot]
-            interaction.analysis = analysis
-            interaction.selectableItemsHighlighted = analysis != nil
-            if analysis == nil {
-                // Read again the next time Select Text is switched on.
-                self.slotStatus[slot] = .failed
+            interaction.analysis = result
+            interaction.selectableItemsHighlighted = result != nil
+            if let result {
+                self.slotStatus[slot] = result.hasResults(for: .text) ? .found : .none
             } else {
-                self.slotStatus[slot] = analysis?.hasResults(for: .text) == true ? .found : .none
+                self.slotStatus[slot] = .failed
             }
             self.reportTextStatus()
         }
         // A safety net: the analyzer gives up on a stuck read itself, but pages queue one at a
         // time, so allow for a few ahead of this one.
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(60))
-            guard let self, self.selectingText, self.analyzedImages[slot] === image, self.slotStatus[slot] == .searching else { return }
+            try? await Task.sleep(for: .seconds(90))
+            guard let self, self.selectingText, self.analyzedImages[slot] === shown, self.slotStatus[slot] == .searching else { return }
             self.slotStatus[slot] = .failed
             self.reportTextStatus()
         }
     }
 
-    /// Reads the pages that failed (or stalled) again.
+    /// Reads again the pages where nothing was found (or the read failed), at other sizes.
     func retryText() {
         guard selectingText else { return }
-        for slot in slotStatus.indices where slotStatus[slot] == .failed {
+        for slot in slotStatus.indices where slotStatus[slot] == .failed || slotStatus[slot] == .none {
+            readAttempts[slot] += 1
             analyzedImages[slot] = nil
             readText(slot: slot)
         }
@@ -487,7 +516,8 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         } else if slotStatus.contains(.failed) {
             status = .failed
         } else if slotStatus.contains(.found) {
-            status = .found
+            // Text on one page and none on the other is worth a second look.
+            status = slotStatus.contains(.none) ? .partial : .found
         } else {
             status = .none
         }

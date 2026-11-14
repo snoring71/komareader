@@ -39,6 +39,8 @@ final class ReaderState {
 
     enum TextStatus: Equatable {
         case idle, searching, found, none, failed
+        /// Text on one page of the spread, nothing found on the other.
+        case partial
     }
     /// Bumped whenever `spreads` is rebuilt or a setting changes, so the page view reloads.
     private(set) var layoutVersion = 0

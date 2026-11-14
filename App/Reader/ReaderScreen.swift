@@ -227,13 +227,16 @@ struct ReaderScreen: View {
                     case .none:
                         Image(systemName: "text.badge.xmark")
                         Text("No text found on this page")
+                    case .partial:
+                        Image(systemName: "text.badge.xmark")
+                        Text(copiedText ? "Copied" : "No text found on one page")
                     case .failed:
                         Image(systemName: "exclamationmark.triangle")
                         Text(copiedText ? "Copied" : "A page couldn’t be read")
                     }
                 }
                 .font(.subheadline.weight(.medium))
-                if state.textStatus == .failed {
+                if [ReaderState.TextStatus.failed, .none, .partial].contains(state.textStatus) {
                     Button("Try Again", systemImage: "arrow.clockwise") { state.retryText() }
                         .buttonStyle(.glass)
                         .accessibilityIdentifier("reader-text-retry")
@@ -249,7 +252,7 @@ struct ReaderScreen: View {
                     }
                 }
                 .buttonStyle(.glass)
-                .disabled(state.textStatus != .found && state.textStatus != .failed)
+                .disabled(![ReaderState.TextStatus.found, .partial, .failed].contains(state.textStatus))
                 .accessibilityIdentifier("reader-copy-text")
                 Button("Done") { state.selectingText = false }
                     .buttonStyle(.glassProminent)

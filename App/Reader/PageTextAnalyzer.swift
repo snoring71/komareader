@@ -18,7 +18,7 @@ final class PageTextAnalyzer {
     private var queueTail: Task<Void, Never>?
     /// Keys from oldest to newest use, so the oldest result goes first.
     private var recent: [String] = []
-    private let limit = 12
+    private let limit = 16
 
     init(rightToLeft: Bool) {
         var configuration = ImageAnalyzer.Configuration([.text])
