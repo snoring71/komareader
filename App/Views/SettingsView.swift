@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.coverShape) private var coverShape: CoverShape = .comic
     @AppStorage(SettingsKeys.coverShadow) private var coverShadow: Double = CoverStyle.defaultShadowStrength
     @AppStorage(SettingsKeys.coverShadowDirection) private var shadowDirection: CoverShadowDirection = .around
+    @AppStorage(SettingsKeys.roundedCorners) private var roundedCorners = true
 
     var body: some View {
         @Bindable var policy = model.coverPolicy
@@ -31,6 +32,8 @@ struct SettingsView: View {
                         ForEach(CoverShape.allCases) { Text($0.title).tag($0) }
                     }
                     .accessibilityIdentifier("settings-cover-shape")
+                    Toggle("Rounded Corners", isOn: $roundedCorners)
+                        .accessibilityIdentifier("settings-rounded-corners")
                     LabeledContent("Cover Shadow") {
                         HStack(spacing: 12) {
                             Slider(value: $coverShadow, in: 0...1, step: 0.05)

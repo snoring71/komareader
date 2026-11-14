@@ -8,9 +8,12 @@ struct CoverStyle: Equatable {
     /// 0 is no shadow, 1 the strongest.
     var shadowStrength: Double = CoverStyle.defaultShadowStrength
     var shadowDirection: CoverShadowDirection = .around
+    var roundedCorners = true
+
+    var cornerRadius: CGFloat { roundedCorners ? CoverStyle.roundedRadius : 0 }
 
     static let defaultShadowStrength = 0.35
-    static let cornerRadius: CGFloat = 6
+    static let roundedRadius: CGFloat = 6
 }
 
 extension EnvironmentValues {
@@ -70,10 +73,11 @@ enum CoverShadowDirection: String, CaseIterable, Identifiable {
 struct CoverShadow: View {
     let strength: Double
     var direction: CoverShadowDirection = .around
+    var cornerRadius: CGFloat = CoverStyle.roundedRadius
 
     var body: some View {
         if strength > 0.001 {
-            CoverShadowLayer(look: Look(strength: strength, direction: direction))
+            CoverShadowLayer(look: Look(strength: strength, direction: direction, cornerRadius: cornerRadius))
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
@@ -89,8 +93,10 @@ struct CoverShadow: View {
         var bottomReach: CGFloat
         /// The outline's top, as a fraction of the cover's height (the cover hides what is above).
         var topFraction: CGFloat
+        var cornerRadius: CGFloat
 
-        init(strength: Double, direction: CoverShadowDirection) {
+        init(strength: Double, direction: CoverShadowDirection, cornerRadius: CGFloat) {
+            self.cornerRadius = cornerRadius
             let s = CGFloat(min(max(strength, 0), 1))
             switch direction {
             case .around:
@@ -117,7 +123,7 @@ struct CoverShadow: View {
             var rect = bounds.insetBy(dx: sideInset, dy: 0)
             rect.origin.y += bounds.height * topFraction
             rect.size.height = bounds.maxY + bottomReach - rect.minY
-            return UIBezierPath(roundedRect: rect, cornerRadius: CoverStyle.cornerRadius).cgPath
+            return UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius).cgPath
         }
     }
 }
@@ -165,4 +171,5 @@ enum SettingsKeys {
     static let coverShape = "library.coverShape"
     static let coverShadow = "library.coverShadow"
     static let coverShadowDirection = "library.coverShadowDirection"
+    static let roundedCorners = "library.roundedCorners"
 }
