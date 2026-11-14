@@ -70,7 +70,7 @@ final class ReaderState {
         self.pageCount = source.pageCount
         self.options = options
         self.defaults = defaults
-        self.textAnalyzer = PageTextAnalyzer(rightToLeft: (options.direction ?? defaults.direction) == .rightToLeft)
+        self.textAnalyzer = PageTextAnalyzer()
         let start = min(max(0, book.finished ? 0 : (book.currentPage ?? 0)), max(0, source.pageCount - 1))
         rebuild(keeping: start)
         loadPageSizes()

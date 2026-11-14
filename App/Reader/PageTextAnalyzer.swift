@@ -20,12 +20,10 @@ final class PageTextAnalyzer {
     private var recent: [String] = []
     private let limit = 16
 
-    init(rightToLeft: Bool) {
-        var configuration = ImageAnalyzer.Configuration([.text])
-        // Japanese goes first in manga, so vertical and kana text is read as Japanese;
-        // English stays in the list for sound effects and Latin text.
-        configuration.locales = rightToLeft ? ["ja-JP", "en-US"] : ["en-US", "ja-JP"]
-        self.configuration = configuration
+    init() {
+        // No locale list, as in the Photos app, so Live Text picks the language itself. Photos
+        // found text on a manga page that this missed when asked for ja-JP and en-US.
+        configuration = ImageAnalyzer.Configuration([.text])
     }
 
     /// The text on a page, read from `image`. A result from an image at least this sharp is reused.
