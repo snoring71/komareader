@@ -12,6 +12,7 @@ struct SidebarView: View {
                 row(.all)
                 row(.continueReading)
                 row(.series, count: model.catalog.series.count)
+                row(.downloaded)
             }
             Section("Status") {
                 row(.unread)
