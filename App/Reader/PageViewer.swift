@@ -256,7 +256,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         // Where the two pages meet, darkened a little like the fold of a printed book.
         if let bindingShadow, imageViews.count == 2 {
             let left = imageViews[0].frame, right = imageViews[1].frame
-            let width = (min(left.width, right.width) * 0.16).rounded()
+            let width = (min(left.width, right.width) * 0.12).rounded()
             let top = min(left.minY, right.minY), bottom = max(left.maxY, right.maxY)
             bindingShadow.frame = CGRect(x: left.maxX - width / 2, y: top, width: width, height: bottom - top)
         }
@@ -400,10 +400,12 @@ final class BindingShadowView: UIView {
         guard let gradient = layer as? CAGradientLayer else { return }
         gradient.startPoint = CGPoint(x: 0, y: 0.5)
         gradient.endPoint = CGPoint(x: 1, y: 0.5)
-        let peak = min(1, strength) * 0.55
-        let alphas: [CGFloat] = [0, 0.08, 0.3, 1, 0.3, 0.08, 0]
+        // Faint over most of its width and only darkening close to the fold, like the
+        // shading in a scanned book (Strong is about a quarter black right at the fold).
+        let peak = min(1, strength) * 0.28
+        let alphas: [CGFloat] = [0, 0.04, 0.14, 0.4, 0.75, 1, 0.75, 0.4, 0.14, 0.04, 0]
         gradient.colors = alphas.map { UIColor.black.withAlphaComponent($0 * peak).cgColor }
-        gradient.locations = [0, 0.22, 0.38, 0.5, 0.62, 0.78, 1]
+        gradient.locations = [0, 0.2, 0.33, 0.42, 0.47, 0.5, 0.53, 0.58, 0.67, 0.8, 1]
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }

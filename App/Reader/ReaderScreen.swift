@@ -13,7 +13,7 @@ struct ReaderScreen: View {
     @State private var scrubThumbnail: UIImage?
     @State private var showInfo = false
     @State private var showCrop = false
-    @State private var showColorPicker = false
+    @State private var showSettings = false
     /// A newer position from another device, until the reader jumps there or says no.
     @State private var handOff: AppModel.HandOff?
 
@@ -50,12 +50,6 @@ struct ReaderScreen: View {
         }
         .sheet(isPresented: $showCrop) {
             PageCropView(state: state)
-        }
-        .sheet(isPresented: $showColorPicker) {
-            BackgroundColorSheet(color: customColor) { color in
-                state.change { $0.background = ReaderOptions.Background(color) }
-            }
-            .presentationDetents([.height(220)])
         }
         // Reading direction changed in Book Info while the book is open.
         .onChange(of: liveBook.direction) { _, direction in
@@ -156,8 +150,10 @@ struct ReaderScreen: View {
                 .glassEffect(in: .capsule)
             Spacer(minLength: 0)
 
-            Menu {
-                readerSettingsMenu
+            // A popover rather than a menu: with this many settings (and submenus) the menu
+            // rebuilt itself under the finger and missed taps.
+            Button {
+                showSettings = true
             } label: {
                 Image(systemName: "textformat.size").font(.body.weight(.semibold)).frame(width: 28, height: 28)
             }
@@ -165,6 +161,15 @@ struct ReaderScreen: View {
             .buttonBorderShape(.circle)
             .accessibilityLabel("Reader Settings")
             .accessibilityIdentifier("reader-settings")
+            .popover(isPresented: $showSettings, arrowEdge: .top) {
+                ReaderSettingsPanel(state: state, book: liveBook) {
+                    showSettings = false
+                    // Let the popover close before the crop editor opens.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showCrop = true }
+                }
+                .frame(idealWidth: 380, idealHeight: 640)
+                .presentationCompactAdaptation(.popover)
+            }
 
             Button {
                 showInfo = true
@@ -176,92 +181,6 @@ struct ReaderScreen: View {
             .accessibilityLabel("Book Info")
             .accessibilityIdentifier("reader-info")
         }
-    }
-
-    // MARK: Reader settings
-
-    /// The book's settings. Each change applies to this book only; Use as Defaults hands them on.
-    @ViewBuilder private var readerSettingsMenu: some View {
-        Picker("Reading Direction", selection: setting(\.direction) { $0.direction = $1 }) {
-            ForEach([ReaderOptions.Direction.leftToRight, .rightToLeft], id: \.self) {
-                Label($0.title, systemImage: $0.systemImage).tag($0)
-            }
-        }
-        Menu {
-            Picker("In Portrait", selection: setting(\.portraitLayout) { $0.portraitLayout = $1 }) {
-                ForEach(ReaderOptions.PageLayout.allCases, id: \.self) { Label($0.title, systemImage: $0.systemImage).tag($0) }
-            }
-            .pickerStyle(.inline)
-            Picker("In Landscape", selection: setting(\.landscapeLayout) { $0.landscapeLayout = $1 }) {
-                ForEach(ReaderOptions.PageLayout.allCases, id: \.self) { Label($0.title, systemImage: $0.systemImage).tag($0) }
-            }
-            .pickerStyle(.inline)
-        } label: {
-            Label("Page Layout", systemImage: "book.pages")
-        }
-        Picker("Fit", selection: setting(\.fit) { $0.fit = $1 }) {
-            ForEach(ReaderOptions.Fit.allCases, id: \.self) { Label($0.title, systemImage: $0.systemImage).tag($0) }
-        }
-        Section {
-            Picker(selection: Binding(
-                get: { state.background.choice },
-                set: { choice in
-                    switch choice {
-                    case .black: state.change { $0.background = .black }
-                    case .gray: state.change { $0.background = .gray }
-                    case .white: state.change { $0.background = .white }
-                    case .dynamic: state.change { $0.background = .dynamic }
-                    case .custom: showColorPicker = true
-                    }
-                }
-            )) {
-                ForEach(ReaderOptions.Background.Choice.allCases) { Text($0.title).tag($0) }
-            } label: {
-                Label("Background", systemImage: "paintpalette")
-            }
-            .pickerStyle(.menu)
-            Picker(selection: Binding(
-                get: { BindingShadowStrength.nearest(state.bindingShadow) },
-                set: { strength in state.change { $0.bindingShadow = strength.rawValue } }
-            )) {
-                ForEach(BindingShadowStrength.allCases) { Text($0.title).tag($0) }
-            } label: {
-                Label("Binding Shadow", systemImage: "book")
-            }
-            .pickerStyle(.menu)
-            Toggle(isOn: setting(\.splitDoublePages) { $0.splitDoublePages = $1 }) {
-                Label("Split Double Pages", systemImage: "rectangle.split.2x1")
-            }
-            Button(state.crop == nil ? "Crop Pages…" : "Edit Page Crop…", systemImage: "crop") { showCrop = true }
-                .accessibilityIdentifier("reader-crop")
-        }
-        Section {
-            Button("Use as Defaults for All Books", systemImage: "checkmark.circle") { state.useAsDefaults() }
-            Button("Reset to Defaults", systemImage: "arrow.uturn.backward") { state.resetToDefaults() }
-                .disabled(!state.hasOwnSettings)
-        }
-        Section {
-            let book = liveBook
-            Button(book.favorite ? "Remove from Favorites" : "Favorite", systemImage: book.favorite ? "heart.fill" : "heart") {
-                model.setFavorite(book, !book.favorite)
-            }
-            Button(book.bookmarked ? "Remove Bookmark" : "Bookmark", systemImage: book.bookmarked ? "bookmark.fill" : "bookmark") {
-                model.setBookmarked(book, !book.bookmarked)
-            }
-        }
-    }
-
-    /// A binding to one setting as the reader uses it; setting it makes it this book's own.
-    private func setting<Value>(_ current: KeyPath<ReaderState, Value>, _ set: @escaping (inout ReaderOptions, Value) -> Void) -> Binding<Value> {
-        Binding(
-            get: { state[keyPath: current] },
-            set: { value in state.change { set(&$0, value) } }
-        )
-    }
-
-    /// The colour the custom background picker starts from.
-    private var customColor: Color {
-        Color(uiColor: state.background.uiColor ?? UIColor(white: 0.15, alpha: 1))
     }
 
     /// The page under the scrubber, shown while dragging it.
@@ -304,38 +223,5 @@ struct ReaderScreen: View {
         .padding(.vertical, 12)
         .glassEffect(in: .capsule)
         .frame(maxWidth: 720)
-    }
-}
-
-/// Picks a custom background colour for the reader; it is applied when the sheet closes.
-struct BackgroundColorSheet: View {
-    @State private var color: Color
-    let onDone: (Color) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    init(color: Color, onDone: @escaping (Color) -> Void) {
-        _color = State(initialValue: color)
-        self.onDone = onDone
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                ColorPicker("Background Color", selection: $color, supportsOpacity: false)
-            }
-            .navigationTitle("Custom Background")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        onDone(color)
-                        dismiss()
-                    }
-                }
-            }
-        }
     }
 }
