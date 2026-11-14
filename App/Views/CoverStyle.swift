@@ -88,11 +88,8 @@ struct CoverShadow: View {
         var radius: CGFloat
         var opacity: Float
         var offset: CGSize
-        /// How far the outline is pulled in at the sides and reaches past the bottom, in points.
+        /// How far the outline is pulled in at each side, in points.
         var sideInset: CGFloat
-        var bottomReach: CGFloat
-        /// The outline's top, as a fraction of the cover's height (the cover hides what is above).
-        var topFraction: CGFloat
         var cornerRadius: CGFloat
 
         init(strength: Double, direction: CoverShadowDirection, cornerRadius: CGFloat) {
@@ -104,26 +101,21 @@ struct CoverShadow: View {
                 opacity = Float(0.12 + 0.5 * s)
                 offset = CGSize(width: 0, height: 1 + 5 * s)
                 sideInset = 0
-                bottomReach = 0
-                topFraction = 0
             case .below, .belowRight, .belowLeft:
-                // A narrower outline that reaches below the cover: a dark band under the bottom
-                // edge fading down, with only a trace at the sides.
+                // The cover's whole outline, moved down (and to the side for the angled ones),
+                // as if lit from the front and above: darkest under the bottom edge, a soft
+                // even trace down the sides, and hidden behind the cover at the top. For
+                // straight below it is a little narrower than the cover, so the sides stay faint.
                 radius = 2 + 5 * s
-                opacity = Float(0.25 + 0.6 * s)
+                opacity = Float(0.25 + 0.55 * s)
                 let side: CGFloat = direction == .belowRight ? 1 : direction == .belowLeft ? -1 : 0
-                offset = CGSize(width: side * (1 + 4 * s), height: 0)
-                sideInset = side == 0 ? 2 : 0
-                bottomReach = 1 + 5 * s
-                topFraction = 0.5
+                offset = CGSize(width: side * (1 + 4 * s), height: 2 + 6 * s)
+                sideInset = side == 0 ? 1 + 2 * s : 0
             }
         }
 
         func path(in bounds: CGRect) -> CGPath {
-            var rect = bounds.insetBy(dx: sideInset, dy: 0)
-            rect.origin.y += bounds.height * topFraction
-            rect.size.height = bounds.maxY + bottomReach - rect.minY
-            return UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius).cgPath
+            UIBezierPath(roundedRect: bounds.insetBy(dx: sideInset, dy: 0), cornerRadius: cornerRadius).cgPath
         }
     }
 }
