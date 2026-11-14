@@ -3,7 +3,7 @@ import LibraryKit
 import SwiftUI
 
 enum SidebarItem: Hashable {
-    case all, continueReading, series, unread, reading, read, favorites, bookmarked, missing
+    case all, continueReading, series, downloaded, unread, reading, read, favorites, bookmarked, missing
     case folder(String)
     case seriesNamed(String)
 
@@ -12,6 +12,7 @@ enum SidebarItem: Hashable {
         case .all: return "All Books"
         case .continueReading: return "Continue Reading"
         case .series: return "Series"
+        case .downloaded: return "Downloaded"
         case .favorites: return "Favorites"
         case .bookmarked: return "Bookmarked"
         case .seriesNamed(let name): return name
@@ -28,6 +29,7 @@ enum SidebarItem: Hashable {
         case .all: return "books.vertical"
         case .continueReading: return "book"
         case .series: return "square.stack"
+        case .downloaded: return "arrow.down.circle"
         case .favorites: return "heart"
         case .bookmarked: return "bookmark"
         case .seriesNamed: return "square.stack"
@@ -44,6 +46,7 @@ enum SidebarItem: Hashable {
         case .all: return !book.isMissing
         case .continueReading: return !book.isMissing && book.status == .reading
         case .series: return !book.isMissing
+        case .downloaded: return !book.isMissing && book.isDownloaded
         case .favorites: return !book.isMissing && book.favorite
         case .bookmarked: return !book.isMissing && book.bookmarked
         case .seriesNamed(let name): return !book.isMissing && book.series.caseInsensitiveCompare(name) == .orderedSame
