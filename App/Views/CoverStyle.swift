@@ -7,6 +7,7 @@ struct CoverStyle: Equatable {
     var shape: CoverShape = .comic
     /// 0 is no shadow, 1 the strongest.
     var shadowStrength: Double = CoverStyle.defaultShadowStrength
+    var shadowDirection: CoverShadowDirection = .around
 
     static let defaultShadowStrength = 0.35
     static let cornerRadius: CGFloat = 6
@@ -41,29 +42,88 @@ enum CoverShape: String, CaseIterable, Identifiable {
     }
 }
 
-/// A drop shadow behind a cover, drawn by Core Animation from the cover's outline. With the
-/// outline given (`shadowPath`), the shadow needs no offscreen pass to work out the shape
-/// from the cover's pixels, which is what makes `.shadow()` on every grid cell expensive.
+/// Where a cover's shadow falls.
+enum CoverShadowDirection: String, CaseIterable, Identifiable {
+    /// A soft glow on every side, a little lower than the cover.
+    case around
+    /// Cast down onto the shelf, as if lit from the front and above: dark under the bottom
+    /// edge, faint at the sides, none at the top.
+    case below
+    case belowRight
+    case belowLeft
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .around: return "All Around"
+        case .below: return "Below"
+        case .belowRight: return "Below Right"
+        case .belowLeft: return "Below Left"
+        }
+    }
+}
+
+/// A drop shadow behind a cover, drawn by Core Animation from an outline. With the outline
+/// given (`shadowPath`), the shadow needs no offscreen pass to work out the shape from the
+/// cover's pixels, which is what makes `.shadow()` on every grid cell expensive.
 struct CoverShadow: View {
     let strength: Double
+    var direction: CoverShadowDirection = .around
 
     var body: some View {
         if strength > 0.001 {
-            CoverShadowLayer(strength: strength)
+            CoverShadowLayer(look: Look(strength: strength, direction: direction))
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
     }
 
-    /// The look for a strength from 0 to 1: blur radius, how far down it falls, and how dark it is.
-    static func metrics(strength: Double) -> (radius: CGFloat, offsetY: CGFloat, opacity: Float) {
-        let s = min(max(strength, 0), 1)
-        return (radius: 2 + 7 * CGFloat(s), offsetY: 1 + 5 * CGFloat(s), opacity: Float(0.12 + 0.5 * s))
+    /// Everything the layer needs, worked out from the two settings.
+    struct Look: Equatable {
+        var radius: CGFloat
+        var opacity: Float
+        var offset: CGSize
+        /// How far the outline is pulled in at the sides and reaches past the bottom, in points.
+        var sideInset: CGFloat
+        var bottomReach: CGFloat
+        /// The outline's top, as a fraction of the cover's height (the cover hides what is above).
+        var topFraction: CGFloat
+
+        init(strength: Double, direction: CoverShadowDirection) {
+            let s = CGFloat(min(max(strength, 0), 1))
+            switch direction {
+            case .around:
+                radius = 2 + 7 * s
+                opacity = Float(0.12 + 0.5 * s)
+                offset = CGSize(width: 0, height: 1 + 5 * s)
+                sideInset = 0
+                bottomReach = 0
+                topFraction = 0
+            case .below, .belowRight, .belowLeft:
+                // A narrower outline that reaches below the cover: a dark band under the bottom
+                // edge fading down, with only a trace at the sides.
+                radius = 2 + 5 * s
+                opacity = Float(0.25 + 0.6 * s)
+                let side: CGFloat = direction == .belowRight ? 1 : direction == .belowLeft ? -1 : 0
+                offset = CGSize(width: side * (1 + 4 * s), height: 0)
+                sideInset = side == 0 ? 2 : 0
+                bottomReach = 1 + 5 * s
+                topFraction = 0.5
+            }
+        }
+
+        func path(in bounds: CGRect) -> CGPath {
+            var rect = bounds.insetBy(dx: sideInset, dy: 0)
+            rect.origin.y += bounds.height * topFraction
+            rect.size.height = bounds.maxY + bottomReach - rect.minY
+            return UIBezierPath(roundedRect: rect, cornerRadius: CoverStyle.cornerRadius).cgPath
+        }
     }
 }
 
 private struct CoverShadowLayer: UIViewRepresentable {
-    let strength: Double
+    let look: CoverShadow.Look
 
     func makeUIView(context: Context) -> ShadowView {
         let view = ShadowView()
@@ -74,17 +134,18 @@ private struct CoverShadowLayer: UIViewRepresentable {
     }
 
     func updateUIView(_ view: ShadowView, context: Context) {
-        view.strength = strength
+        view.look = look
     }
 
     final class ShadowView: UIView {
-        var strength: Double = -1 {
+        var look: CoverShadow.Look? {
             didSet {
-                guard strength != oldValue else { return }
-                let metrics = CoverShadow.metrics(strength: strength)
-                layer.shadowRadius = metrics.radius
-                layer.shadowOffset = CGSize(width: 0, height: metrics.offsetY)
-                layer.shadowOpacity = metrics.opacity
+                guard let look, look != oldValue else { return }
+                layer.shadowRadius = look.radius
+                layer.shadowOffset = look.offset
+                layer.shadowOpacity = look.opacity
+                pathBounds = .null
+                setNeedsLayout()
             }
         }
 
@@ -92,9 +153,9 @@ private struct CoverShadowLayer: UIViewRepresentable {
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            guard bounds != pathBounds else { return }
+            guard let look, bounds != pathBounds else { return }
             pathBounds = bounds
-            layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: CoverStyle.cornerRadius).cgPath
+            layer.shadowPath = look.path(in: bounds)
         }
     }
 }
@@ -103,4 +164,5 @@ private struct CoverShadowLayer: UIViewRepresentable {
 enum SettingsKeys {
     static let coverShape = "library.coverShape"
     static let coverShadow = "library.coverShadow"
+    static let coverShadowDirection = "library.coverShadowDirection"
 }

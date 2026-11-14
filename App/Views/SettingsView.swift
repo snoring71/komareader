@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage(SettingsKeys.coverShape) private var coverShape: CoverShape = .comic
     @AppStorage(SettingsKeys.coverShadow) private var coverShadow: Double = CoverStyle.defaultShadowStrength
+    @AppStorage(SettingsKeys.coverShadowDirection) private var shadowDirection: CoverShadowDirection = .around
 
     var body: some View {
         @Bindable var policy = model.coverPolicy
@@ -41,6 +42,11 @@ struct SettingsView: View {
                                 .frame(width: 44, alignment: .trailing)
                         }
                     }
+                    Picker("Shadow Direction", selection: $shadowDirection) {
+                        ForEach(CoverShadowDirection.allCases) { Text($0.title).tag($0) }
+                    }
+                    .disabled(coverShadow < 0.001)
+                    .accessibilityIdentifier("settings-shadow-direction")
                 } header: {
                     Text("Library Appearance")
                 } footer: {

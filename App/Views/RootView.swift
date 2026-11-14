@@ -4,6 +4,7 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(SettingsKeys.coverShape) private var coverShape: CoverShape = .comic
     @AppStorage(SettingsKeys.coverShadow) private var coverShadow: Double = CoverStyle.defaultShadowStrength
+    @AppStorage(SettingsKeys.coverShadowDirection) private var shadowDirection: CoverShadowDirection = .around
 
     var body: some View {
         @Bindable var model = model
@@ -47,7 +48,7 @@ struct RootView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
-        .environment(\.coverStyle, CoverStyle(shape: coverShape, shadowStrength: coverShadow))
+        .environment(\.coverStyle, CoverStyle(shape: coverShape, shadowStrength: coverShadow, shadowDirection: shadowDirection))
     }
 }
 

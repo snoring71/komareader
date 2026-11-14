@@ -440,7 +440,7 @@ struct CoverImage: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: CoverStyle.cornerRadius, style: .continuous))
             .contentShape(Rectangle())
-            .background { CoverShadow(strength: style.shadowStrength) }
+            .background { CoverShadow(strength: style.shadowStrength, direction: style.shadowDirection) }
             .task(id: Key(url: url, revision: revision)) {
                 guard let url else { loaded = nil; return }
                 let revision = revision
