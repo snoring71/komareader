@@ -27,6 +27,13 @@ final class ScreenshotTests: XCTestCase {
         sleep(2)
         save(app, "02-library-landscape")
 
+        // In landscape the All Books heading pushes this book's row to the bottom edge, where a
+        // tap lands under the Resume button or off screen. Bring it up into view first.
+        if !firstBook.isHittable || firstBook.frame.maxY > app.frame.maxY - 120 {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.75))
+                .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.4)))
+            sleep(1)
+        }
         firstBook.tap()
         let page = app.otherElements["reader-page"].firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 20), "Reader did not open")
