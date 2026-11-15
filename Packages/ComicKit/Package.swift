@@ -33,7 +33,7 @@ let package = Package(
             dependencies: ["ArchiveKit", "ComicCore"],
             resources: [.copy("Fixtures")]
         ),
-        .testTarget(name: "LibraryKitTests", dependencies: ["LibraryKit"]),
+        .testTarget(name: "LibraryKitTests", dependencies: ["LibraryKit", .product(name: "GRDB", package: "GRDB.swift")]),
     ],
     swiftLanguageModes: [.v5]
 )

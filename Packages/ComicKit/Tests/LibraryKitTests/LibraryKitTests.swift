@@ -2,6 +2,7 @@ import ArchiveKit
 import ComicCore
 import CoreGraphics
 import Foundation
+import GRDB
 @testable import LibraryKit
 import Testing
 
@@ -195,6 +196,53 @@ import Testing
         #expect(back.count == 1)
         #expect(back.first?.isMissing == false)
         #expect(back.first?.currentPage == nil)
+    }
+
+    @Test func indexOpensAfterAnyBranchsV3() throws {
+        // A device that ran another build's "v3" (tags only) still gets the metadata columns.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite")
+        do {
+            let queue = try DatabaseQueue(path: url.path)
+            var migrator = DatabaseMigrator()
+            migrator.registerMigration("v1") { db in
+                try db.create(table: "book") { t in
+                    t.primaryKey("id", .text)
+                    t.column("relativePath", .text).notNull()
+                    t.column("title", .text).notNull()
+                    t.column("folder", .text).notNull()
+                    t.column("format", .text).notNull()
+                    t.column("size", .integer)
+                    t.column("modified", .datetime)
+                    t.column("isDownloaded", .boolean).notNull()
+                    t.column("isMissing", .boolean).notNull().defaults(to: false)
+                    t.column("addedAt", .datetime).notNull()
+                    t.column("pageCount", .integer)
+                    t.column("currentPage", .integer)
+                    t.column("finished", .boolean).notNull().defaults(to: false)
+                    t.column("lastReadAt", .datetime)
+                    t.column("direction", .text)
+                }
+            }
+            migrator.registerMigration("v2") { db in
+                try db.alter(table: "book") { t in
+                    t.add(column: "favorite", .boolean).notNull().defaults(to: false)
+                    t.add(column: "bookmarked", .boolean).notNull().defaults(to: false)
+                    t.add(column: "series", .text).notNull().defaults(to: "")
+                    t.add(column: "number", .text)
+                }
+            }
+            migrator.registerMigration("v3") { db in
+                try db.alter(table: "book") { t in t.add(column: "tags", .text).notNull().defaults(to: "[]") }
+            }
+            try migrator.migrate(queue)
+        }
+        let index = try LibraryIndex(url: url)
+        let scanned = ScannedBook(url: URL(fileURLWithPath: "/lib/a.cbz"), relativePath: "a.cbz", format: .zip, size: 1, modified: nil, isDownloaded: true)
+        let id = try #require(try index.apply(scan: [scanned], records: []).first?.id)
+        try index.saveMetadata([id: FileMetadata(author: "W")])
+        #expect(try index.book(id: id)?.author == "W")
+        let columns = try index.db.read { db in try db.columns(in: "book").map(\.name) }
+        #expect(columns.contains("tags"))
     }
 
     @Test func indexKeepsFileMetadataUntilTheFileChanges() throws {

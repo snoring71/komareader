@@ -97,15 +97,31 @@ public final class LibraryIndex: @unchecked Sendable {
                 t.add(column: "number", .text)
             }
         }
-        migrator.registerMigration("v3") { db in
-            try db.alter(table: "book") { t in
-                t.add(column: "author", .text)
-                t.add(column: "publisher", .text)
-                t.add(column: "metadataTitle", .text)
-                t.add(column: "metadataRead", .boolean).notNull().defaults(to: false)
-            }
-        }
+        // Two branches each added a "v3" (file metadata here, tags in the other), and a device
+        // that ran one build and then the other found "v3" done but its columns missing. So
+        // "v3" and "v4" both add whichever of those columns are missing, and do nothing else:
+        // any device, whichever build it ran, ends up with all of them.
+        migrator.registerMigration("v3") { db in try addMissingColumns(db) }
+        migrator.registerMigration("v4") { db in try addMissingColumns(db) }
         return migrator
+    }
+
+    /// The columns added after v2, added only where they are not there yet.
+    private static func addMissingColumns(_ db: Database) throws {
+        let existing = Set(try db.columns(in: "book").map { $0.name.lowercased() })
+        let wanted: [(name: String, add: (TableAlteration) -> Void)] = [
+            // A JSON array of strings (user tags).
+            ("tags", { $0.add(column: "tags", .text).notNull().defaults(to: "[]") }),
+            ("author", { $0.add(column: "author", .text) }),
+            ("publisher", { $0.add(column: "publisher", .text) }),
+            ("metadataTitle", { $0.add(column: "metadataTitle", .text) }),
+            ("metadataRead", { $0.add(column: "metadataRead", .boolean).notNull().defaults(to: false) }),
+        ]
+        let missing = wanted.filter { !existing.contains($0.name.lowercased()) }
+        guard !missing.isEmpty else { return }
+        try db.alter(table: "book") { t in
+            for column in missing { column.add(t) }
+        }
     }
 
     public func allBooks() throws -> [Book] {
