@@ -251,6 +251,81 @@ import Testing
         let merged = try #require(cloudStore.read(bookId: "B"))
         #expect(Set(merged.progress.keys) == ["ipad", "win"])
     }
+
+    @Test func epubIsSwitchedOff() {
+        #expect(BookFormat.from(pathExtension: "epub") == .epub)
+        #expect(BookFormat.enabled(pathExtension: "epub") == nil)
+        #expect(BookFormat.enabled(pathExtension: "cbz") == .zip)
+        #expect(!BookFormat.epub.isEnabled)
+    }
+
+    @Test func readsComicInfo() throws {
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <ComicInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+          <Title>The Long Way</Title>
+          <Series>Saga</Series>
+          <Writer>Brian K. Vaughan</Writer>
+          <Penciller>Fiona Staples</Penciller>
+          <Publisher> Image Comics </Publisher>
+          <Pages><Page Image="0" Type="FrontCover"/></Pages>
+        </ComicInfo>
+        """
+        let info = try #require(FileMetadata.comicInfo(Data(xml.utf8)))
+        #expect(info.title == "The Long Way")
+        #expect(info.author == "Brian K. Vaughan")
+        #expect(info.publisher == "Image Comics")
+
+        // No writer: the penciller is the author. Empty fields count as missing.
+        let art = try #require(FileMetadata.comicInfo(Data("<ComicInfo><Writer></Writer><Penciller>Kozue Amano</Penciller></ComicInfo>".utf8)))
+        #expect(art.author == "Kozue Amano")
+        #expect(art.title == nil && art.publisher == nil)
+
+        #expect(FileMetadata.comicInfo(Data("<html><Title>x</Title></html>".utf8)) == nil)
+        #expect(FileMetadata.comicInfo(Data("not xml".utf8)) == nil)
+        #expect(FileMetadata.isComicInfo(path: "Vol 1/comicinfo.XML"))
+        #expect(!FileMetadata.isComicInfo(path: "__MACOSX/Vol 1/ComicInfo.xml"))
+    }
+
+    @Test func removedRecordsStayRemovedUntilUsedAgain() throws {
+        var record = BookRecord(bookId: "R", file: .init(path: "r.cbz", size: 1, modified: nil))
+        #expect(!record.isRemoved)
+        record.removed = .init(updatedAt: Date(timeIntervalSince1970: 100))
+        #expect(record.isRemoved)
+
+        // An older copy with progress merged in (an iCloud conflict) does not bring it back.
+        var old = BookRecord(bookId: "R", file: record.file)
+        old.progress["ipad"] = .init(page: 3, pageCount: 10, finished: false, updatedAt: Date(timeIntervalSince1970: 50))
+        old.flags = .init(favorite: true, updatedAt: Date(timeIntervalSince1970: 60))
+        let merged = record.merged(with: old)
+        #expect(merged.isRemoved)
+        #expect(old.merged(with: record).isRemoved)
+
+        // Reading it later does.
+        var later = merged
+        later.progress["win"] = .init(page: 1, pageCount: 10, finished: false, updatedAt: Date(timeIntervalSince1970: 200))
+        #expect(!later.isRemoved)
+
+        let decoded = try RecordCoding.decoder().decode(BookRecord.self, from: RecordCoding.encoder().encode(record))
+        #expect(decoded == record)
+    }
+
+    @Test func markRemovedReplacesTheRecordAndDeletesCovers() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = try RecordStore.open(dataRoot: root, folderName: "Booklover")
+        var record = BookRecord(bookId: "M", file: .init(path: "m.cbz", size: 1, modified: nil))
+        record.progress["ipad"] = .init(page: 2, pageCount: 9, finished: false, updatedAt: Date())
+        try store.write(record)
+        try store.writeCover(Data([1, 2, 3]), bookId: "M")
+        try store.writeCover(Data([1, 2, 3]), bookId: "M", custom: true)
+
+        try store.markRemoved(bookId: "M", file: record.file)
+        let read = try #require(store.read(bookId: "M"))
+        #expect(read.isRemoved)
+        #expect(read.progress.isEmpty)
+        #expect(read.file.path == "m.cbz")
+        #expect(store.existingCoverURL(bookId: "M") == nil)
+    }
 }
 
 @Suite struct SeriesNameTests {
@@ -311,5 +386,34 @@ import Testing
         #expect(record.handOff(for: "ipad-1", openingAt: 3) == nil)
         #expect(DeviceIdentity.displayName(for: "mac-2") == "Mac")
         #expect(DeviceIdentity.displayName(for: "ipad-1a2b") == "iPad")
+    }
+}
+
+@Suite struct TagListTests {
+    @Test func tagsMergeOneByOneAndDeletesStick() throws {
+        var a = TagList()
+        a.add("Sci-Fi", at: Date(timeIntervalSince1970: 10))
+        a.add("Old", at: Date(timeIntervalSince1970: 10))
+        var b = a
+        b.remove("old", at: Date(timeIntervalSince1970: 20))
+        a.add("Manga", at: Date(timeIntervalSince1970: 30))
+        let merged = a.merged(with: b)
+        #expect(Set(merged.names) == ["Sci-Fi", "Manga"])
+        #expect(Set(b.merged(with: a).names) == ["Sci-Fi", "Manga"])
+        // An older copy cannot bring a deleted tag back, and keep() does not either.
+        var c = merged
+        c.keep("OLD")
+        #expect(!c.contains("old"))
+        c.add("Old", at: Date(timeIntervalSince1970: 40))
+        #expect(c.contains("old"))
+    }
+
+    @Test func tagListIsSavedNextToTheRecords() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = try RecordStore(root: root, info: LibraryInfo(folderName: "Lib"))
+        #expect(store.readTagList().names.isEmpty)
+        try store.updateTagList { $0.add("Sci-Fi") }
+        try store.updateTagList { $0.add("Empty") }
+        #expect(Set(store.readTagList().names) == ["Sci-Fi", "Empty"])
     }
 }
