@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.coverShadow) private var coverShadow: Double = CoverStyle.defaultShadowStrength
     @AppStorage(SettingsKeys.coverShadowDirection) private var shadowDirection: CoverShadowDirection = .around
     @AppStorage(SettingsKeys.roundedCorners) private var roundedCorners = true
+    var coverInfo = CoverInfoSettings()
 
     var body: some View {
         @Bindable var policy = model.coverPolicy
@@ -54,6 +55,17 @@ struct SettingsView: View {
                     Text("Library Appearance")
                 } footer: {
                     Text("Covers are trimmed to this shape in the library. Manga B6 is a little wider than Comic 2:3 and fits most manga and digital comics better.")
+                }
+
+                Section {
+                    Toggle("Show Info on Covers", isOn: coverInfo.$isOn)
+                        .accessibilityIdentifier("settings-cover-info")
+                    CoverInfoFieldControls()
+                        .disabled(!coverInfo.isOn)
+                } header: {
+                    Text("Cover Info")
+                } footer: {
+                    Text("Shows these details over the bottom of each cover, in place of the title under it. The info button in the library's toolbar turns it on and off. Title, author and publisher come from the book file (ComicInfo.xml or the PDF's details) once the book is on this iPad; until then the title is the file name.")
                 }
 
                 Section {

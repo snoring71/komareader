@@ -61,6 +61,11 @@ picks a folder with the same name uses the same `libraryId`.
   `covers/<bookId>.custom.jpg` holds the result. A `cover` of page 0, uncropped and not rotated
   means the user went back to the default cover; there is then no `.custom.jpg`.
 - `flags` holds the user's Favorite and Bookmarked marks.
+- `removed` (`{ "updatedAt": "..." }`) means the user deleted the book from the library after
+  its file went missing. It counts only while its `updatedAt` is later than every other group's
+  and every `progress` entry's. An app that lists the book as missing should then drop it. If a
+  file turns up at `file.path` again, show it as a new book. The app that deletes a book
+  replaces the record with one holding only `file` and `removed`, and deletes its covers.
 - `readerSettings` holds the reading direction as version 0.1 wrote it: `direction` is `ltr` or
   `rtl`; `layout` is `auto`, `single` or `double`. Once a record has `readerOptions`, use that
   instead, but keep `readerSettings.direction` up to date for older versions.
@@ -109,7 +114,7 @@ record whose `bookId` is the worked-out id, else the lowest `bookId`, merge the 
 Two devices may change the same record at the same time. When two copies differ
 (for example an iCloud conflict copy), merge them like this:
 
-1. For `metadata`, `tags`, `cover`, `flags`, `readerSettings` and `readerOptions`, keep whichever copy has the later `updatedAt`.
+1. For `metadata`, `tags`, `cover`, `flags`, `readerSettings`, `readerOptions` and `removed`, keep whichever copy has the later `updatedAt`.
 2. For `progress`, keep every device key; for a key in both copies, keep the later `updatedAt`.
 3. Write files atomically (write a temporary file, then rename over the original).
 

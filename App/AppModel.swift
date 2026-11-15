@@ -21,6 +21,9 @@ final class AppModel {
     private(set) var catalog = Catalog()
     var thumbnails: [String: URL] = [:]
     var downloading: Set<String> = []
+    /// Books waiting their turn to download: a download of many books fetches one at a time.
+    var queuedDownloads: [String] = []
+    @ObservationIgnored private var downloadQueueTask: Task<Void, Never>?
     var isScanning = false
     var errorMessage: String?
     var openBook: OpenBook? {
@@ -29,7 +32,10 @@ final class AppModel {
             guard reading != (oldValue != nil) else { return }
             // Making covers competes with decoding pages for the processor and the disk.
             Task { [covers] in await covers?.setPaused(reading) }
-            if !reading { applyReadingProgress() }
+            if !reading {
+                applyReadingProgress()
+                flushFileMetadata()
+            }
         }
     }
     /// The open book with its latest position. It is kept out of `books` until the reader
@@ -41,6 +47,16 @@ final class AppModel {
     var selection: SidebarItem? = .all
     /// The book whose Book Info sheet is showing in the library.
     var bookInfo: BookRef?
+    /// The book whose cover editor is showing, opened from the library's long-press menu.
+    var coverEditor: CoverEditorRequest?
+    /// True while the library shows something read from the files themselves (author,
+    /// publisher, title), so books on this iPad have their metadata read in the background.
+    var wantsFileMetadata = false {
+        didSet { if wantsFileMetadata && !oldValue { readFileMetadata() } }
+    }
+    @ObservationIgnored private var metadataTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingMetadata: [String: FileMetadata] = [:]
+    @ObservationIgnored private var metadataFlushTask: Task<Void, Never>?
     /// Bumped when a book's cover changes, so the grid reloads its thumbnail.
     var coverRevision: [String: Int] = [:]
     let coverPolicy = CoverPolicy()
@@ -93,6 +109,12 @@ final class AppModel {
     }
 
     struct BookRef: Identifiable, Hashable { let id: String }
+
+    struct CoverEditorRequest: Identifiable {
+        let book: Book
+        let initialEdit: BookRecord.CoverEdit?
+        var id: String { book.id }
+    }
 
     struct HandOff: Equatable {
         let deviceName: String
@@ -176,6 +198,9 @@ final class AppModel {
                     self?.thumbnails[id] = url
                     self?.coverRevision[id, default: 0] += 1
                 }
+            }
+            await covers.setMetadataHandler { [weak self] id, metadata in
+                Task { @MainActor in self?.noteFileMetadata([id: metadata]) }
             }
             await covers.setAllowsCloudDownloads(coverPolicy.allowsCloudDownloads)
             coverPolicy.onChange = { [weak covers] allowed in
@@ -275,6 +300,7 @@ final class AppModel {
             for book in books where thumbnails[book.id] == nil && !book.isMissing {
                 requestCover(for: book, urgent: false)
             }
+            readFileMetadata()
         } catch {
             errorMessage = "Could not scan the library: \(error.localizedDescription)"
         }
@@ -292,14 +318,67 @@ final class AppModel {
     }
 
     func download(_ book: Book) async {
-        guard let url = fileURL(for: book) else { return }
+        // A second tap while it downloads does not start it again.
+        guard let url = fileURL(for: book), !downloading.contains(book.id) else { return }
         downloading.insert(book.id)
         defer { downloading.remove(book.id) }
         do {
             try await CloudFiles.download(url)
             updateBook(book.id) { $0.isDownloaded = true }
+            if downloadQueueTask == nil { readFileMetadata() }
         } catch {
             errorMessage = "Could not download \(book.title): \(error.localizedDescription)"
+        }
+    }
+
+    /// A tap on a book in the library. A book only in iCloud is downloaded and the library
+    /// stays as it is; the next tap opens it. A tap while it downloads does nothing.
+    func activate(_ book: Book) async {
+        if downloading.contains(book.id) || queuedDownloads.contains(book.id) { return }
+        if !book.isDownloaded {
+            await download(book)
+        } else {
+            await open(book)
+        }
+    }
+
+    /// Downloads several books, one after another.
+    func download(_ ids: Set<String>) {
+        let queued = Set(queuedDownloads)
+        let wanted = books.filter { ids.contains($0.id) && !$0.isDownloaded && !$0.isMissing && !downloading.contains($0.id) && !queued.contains($0.id) }
+        guard !wanted.isEmpty else { return }
+        queuedDownloads += wanted.map(\.id)
+        guard downloadQueueTask == nil else { return }
+        downloadQueueTask = Task { [weak self] in
+            while let self, !self.queuedDownloads.isEmpty {
+                let next = self.queuedDownloads.removeFirst()
+                if let book = self.books.first(where: { $0.id == next }), !book.isDownloaded {
+                    await self.download(book)
+                }
+            }
+            self?.downloadQueueTask = nil
+            self?.readFileMetadata()
+        }
+    }
+
+    /// Removes several books from this iPad (they stay in iCloud).
+    func removeDownloads(_ ids: Set<String>) {
+        queuedDownloads.removeAll { ids.contains($0) }
+        let targets = books.filter { ids.contains($0.id) && $0.isDownloaded && !$0.isMissing }
+            .compactMap { book in fileURL(for: book).map { (book.id, $0) } }
+        guard !targets.isEmpty else { return }
+        Task {
+            let removed = await Task.detached(priority: .userInitiated) { () -> Set<String> in
+                var removed: Set<String> = []
+                for (id, url) in targets where CloudFiles.isInCloud(url) {
+                    if (try? CloudFiles.evict(url)) != nil { removed.insert(id) }
+                }
+                return removed
+            }.value
+            updateBooks(removed) { $0.isDownloaded = false }
+            if removed.count < targets.count {
+                errorMessage = "Some books could not be removed from this iPad."
+            }
         }
     }
 
@@ -371,6 +450,37 @@ final class AppModel {
         Array(books.filter { !$0.isMissing && $0.lastReadAt != nil }
             .sorted { ($0.lastReadAt ?? .distantPast) > ($1.lastReadAt ?? .distantPast) }
             .prefix(limit))
+    }
+
+    /// Marks several books as read or unread, with one change to `books`.
+    func setFinished(_ ids: Set<String>, _ finished: Bool) {
+        let now = Date()
+        let changed = updateBooks(ids) { book in
+            let pageCount = book.pageCount ?? 1
+            book.currentPage = finished ? max(0, pageCount - 1) : 0
+            book.pageCount = pageCount
+            book.finished = finished
+            book.lastReadAt = now
+        }
+        let deviceId = deviceId
+        updateRecords(changed) { record, book in
+            record.file = .init(path: book.relativePath, size: book.size, modified: book.modified, fingerprint: record.file.fingerprint)
+            record.progress[deviceId] = .init(page: book.currentPage ?? 0, pageCount: book.pageCount ?? 1, finished: finished, updatedAt: now)
+        }
+    }
+
+    /// Sets the reading direction of several books.
+    func setDirection(_ ids: Set<String>, _ direction: ReaderOptions.Direction) {
+        let changed = updateBooks(ids) { $0.direction = direction.rawValue }
+        let now = Date()
+        updateRecords(changed) { record, _ in
+            var options = record.effectiveReaderOptions
+            options.direction = direction
+            options.updatedAt = now
+            record.readerOptions = options
+            // Older versions only read `readerSettings`.
+            record.readerSettings = .init(direction: direction, layout: .auto, updatedAt: now)
+        }
     }
 
     func setFinished(_ book: Book, _ finished: Bool) {
@@ -462,6 +572,30 @@ final class AppModel {
         setFlags(book) { $0.bookmarked = bookmarked }
     }
 
+    func setFavorite(_ ids: Set<String>, _ favorite: Bool) {
+        setFlags(ids) { $0.favorite = favorite }
+    }
+
+    func setBookmarked(_ ids: Set<String>, _ bookmarked: Bool) {
+        setFlags(ids) { $0.bookmarked = bookmarked }
+    }
+
+    private func setFlags(_ ids: Set<String>, _ change: @escaping @Sendable (inout BookRecord.Flags) -> Void) {
+        let changed = updateBooks(ids) { book in
+            var flags = BookRecord.Flags(favorite: book.favorite, bookmarked: book.bookmarked)
+            change(&flags)
+            book.favorite = flags.favorite
+            book.bookmarked = flags.bookmarked
+        }
+        let now = Date()
+        updateRecords(changed) { record, book in
+            var flags = record.flags ?? .init(favorite: book.favorite, bookmarked: book.bookmarked)
+            change(&flags)
+            flags.updatedAt = now
+            record.flags = flags
+        }
+    }
+
     private func setFlags(_ book: Book, _ change: @escaping @Sendable (inout BookRecord.Flags) -> Void) {
         var flags = BookRecord.Flags(favorite: book.favorite, bookmarked: book.bookmarked)
         change(&flags)
@@ -541,6 +675,120 @@ final class AppModel {
         }
     }
 
+    /// Regenerates the covers of several books (see `regenerateCover`).
+    func regenerateCovers(_ ids: Set<String>) async {
+        guard let store else { return }
+        let targets = books.filter { ids.contains($0.id) && !$0.isMissing }
+        guard !targets.isEmpty else { return }
+        await Task.detached(priority: .userInitiated) {
+            let now = Date()
+            for book in targets {
+                try? store.deleteCover(bookId: book.id, custom: true)
+                try? store.deleteCover(bookId: book.id, custom: false)
+                var record = store.read(bookId: book.id) ?? BookRecord(bookId: book.id, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
+                record.cover = BookRecord.CoverEdit(page: 0, updatedAt: now)
+                try? store.write(record)
+            }
+        }.value
+        for book in targets { await covers?.invalidate(bookId: book.id) }
+        // One change each to the thumbnails and revisions, not one per book.
+        var thumbs = thumbnails
+        var revisions = coverRevision
+        for book in targets {
+            thumbs[book.id] = nil
+            revisions[book.id, default: 0] += 1
+        }
+        thumbnails = thumbs
+        coverRevision = revisions
+        for book in targets { requestCover(for: book, urgent: false) }
+    }
+
+    /// Opens the cover editor from the library. The editor downloads a book that is only in
+    /// iCloud while it shows its spinner.
+    func editCover(_ book: Book) async {
+        let edit = await record(for: book.id)?.cover
+        coverEditor = CoverEditorRequest(book: book, initialEdit: edit)
+    }
+
+    // MARK: Deleting missing books
+
+    /// Deletes missing books from the library: their index rows, thumbnails, shared covers and
+    /// synced data. Their records are replaced by a note that they were removed, so other
+    /// devices drop them too. Books whose files are still there are left alone.
+    func deleteFromLibrary(_ ids: Set<String>) {
+        let targets = books.filter { ids.contains($0.id) && $0.isMissing }
+        guard !targets.isEmpty else { return }
+        let targetIds = Set(targets.map(\.id))
+        // One transaction now, so a rescan that starts next cannot bring the rows back.
+        try? index?.delete(ids: Array(targetIds))
+        books.removeAll { targetIds.contains($0.id) }
+        var thumbs = thumbnails
+        for id in targetIds { thumbs[id] = nil }
+        thumbnails = thumbs
+        let store = store, covers = covers
+        Task.detached(priority: .utility) {
+            let now = Date()
+            for book in targets {
+                await covers?.invalidate(bookId: book.id)
+                try? store?.markRemoved(bookId: book.id, file: .init(path: book.relativePath, size: book.size, modified: book.modified), at: now)
+            }
+        }
+    }
+
+    // MARK: File metadata
+
+    /// Reads the metadata of books on this iPad that have not had it read yet, one book at a
+    /// time in the background, while the library shows author, publisher or title. Never
+    /// downloads anything; books in iCloud get theirs when a cover is made or they are downloaded.
+    func readFileMetadata() {
+        guard wantsFileMetadata, metadataTask == nil else { return }
+        let todo = books.filter { !$0.isMissing && $0.isDownloaded && !$0.metadataRead }
+            .compactMap { book in fileURL(for: book).map { (id: book.id, url: $0, format: book.format) } }
+        guard !todo.isEmpty else { return }
+        metadataTask = Task { [weak self] in
+            for item in todo {
+                // Stay out of the way of the reader, and stop if the overlay is turned off.
+                while self?.openBook != nil, !Task.isCancelled { try? await Task.sleep(for: .seconds(2)) }
+                guard let wanted = self?.wantsFileMetadata, wanted, !Task.isCancelled else { break }
+                let metadata = await Task.detached(priority: .utility) { () -> FileMetadata? in
+                    // A book removed from the iPad meanwhile is left for later.
+                    guard CloudFiles.isDownloaded(item.url) else { return nil }
+                    return MetadataReader.read(url: item.url, format: item.format) ?? FileMetadata()
+                }.value
+                if let metadata { self?.noteFileMetadata([item.id: metadata]) }
+            }
+            self?.metadataTask = nil
+        }
+    }
+
+    /// Collects metadata as it is read and puts it into `books` every few seconds, since each
+    /// change to `books` redraws the library.
+    private func noteFileMetadata(_ items: [String: FileMetadata]) {
+        pendingMetadata.merge(items) { _, new in new }
+        guard metadataFlushTask == nil else { return }
+        metadataFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            self?.metadataFlushTask = nil
+            self?.flushFileMetadata()
+        }
+    }
+
+    private func flushFileMetadata() {
+        // While a book is open the library waits; this runs again when the reader closes.
+        guard openBook == nil, !pendingMetadata.isEmpty else { return }
+        let items = pendingMetadata
+        pendingMetadata = [:]
+        let index = index
+        Task.detached(priority: .utility) { try? index?.saveMetadata(items) }
+        updateBooks(Set(items.keys), save: false) { book in
+            guard let metadata = items[book.id] else { return }
+            book.author = metadata.author
+            book.publisher = metadata.publisher
+            book.metadataTitle = metadata.title
+            book.metadataRead = true
+        }
+    }
+
     /// The cover saved for a book (edited or default), for the Book Info sheet.
     func sharedCoverURL(for book: Book) -> URL? {
         store?.existingCoverURL(bookId: book.id)
@@ -576,6 +824,39 @@ final class AppModel {
             $0.pageCount = reading.pageCount
             $0.finished = reading.finished
             $0.lastReadAt = reading.lastReadAt
+        }
+    }
+
+    /// Changes several books with one assignment to `books` (each assignment redraws the
+    /// library) and one index transaction. Returns the changed books.
+    @discardableResult
+    private func updateBooks(_ ids: Set<String>, save: Bool = true, _ change: (inout Book) -> Void) -> [Book] {
+        guard !ids.isEmpty else { return [] }
+        var all = books
+        var changed: [Book] = []
+        for i in all.indices where ids.contains(all[i].id) {
+            change(&all[i])
+            changed.append(all[i])
+            if readingBook?.id == all[i].id { change(&readingBook!) }
+        }
+        guard !changed.isEmpty else { return [] }
+        books = all
+        if save {
+            let index = index, saved = changed
+            Task.detached(priority: .utility) { try? index?.save(saved) }
+        }
+        return changed
+    }
+
+    /// Reads each book's record, applies `change`, and writes it back, all in one background pass.
+    private func updateRecords(_ books: [Book], _ change: @escaping @Sendable (inout BookRecord, Book) -> Void) {
+        guard let store, !books.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            for book in books {
+                var record = store.read(bookId: book.id) ?? BookRecord(bookId: book.id, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
+                change(&record, book)
+                try? store.write(record)
+            }
         }
     }
 

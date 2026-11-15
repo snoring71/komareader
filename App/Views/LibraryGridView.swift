@@ -14,6 +14,10 @@ struct LibraryGridView: View {
     /// The size while a pinch is in progress; saved to `coverSize` when it ends.
     @State private var pinchSize: Double?
     @State private var pinchStart: Double?
+    /// The books picked in Select mode; nil when not selecting.
+    @State private var selection: Set<String>?
+    @State private var confirmDeleteAll = false
+    @State private var selectionConfirm: SelectionConfirm?
 
     enum SortOrder: String, CaseIterable, Identifiable {
         case title = "Title", recentlyAdded = "Recently Added", recentlyRead = "Recently Read"
@@ -77,7 +81,7 @@ struct LibraryGridView: View {
     var body: some View {
         let books = visibleBooks
         let letters = letterAnchors(books)
-        let continueReading = item == .all && search.isEmpty ? continueReading : []
+        let continueReading = item == .all && search.isEmpty && selection == nil ? continueReading : []
         ScrollViewReader { proxy in
             ScrollView {
                 if !continueReading.isEmpty {
@@ -96,7 +100,13 @@ struct LibraryGridView: View {
                 }
 
                 LazyVGrid(columns: columns, spacing: 22) {
-                    ForEach(books) { BookCell(book: $0) }
+                    if let selection {
+                        ForEach(books) { book in
+                            BookCell(book: book, isSelected: selection.contains(book.id)) { toggle(book.id) }
+                        }
+                    } else {
+                        ForEach(books) { BookCell(book: $0) }
+                    }
                 }
                 .padding()
                 .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index
@@ -128,15 +138,67 @@ struct LibraryGridView: View {
                 }
             }
         }
-        .navigationTitle(item.title)
+        .navigationTitle(selectionTitle ?? item.title)
         .searchable(text: $search, prompt: "Search books")
         .task(id: search) {
             // Filtering thousands of books on every keystroke makes typing lag, so wait for a pause.
             if !search.isEmpty, (try? await Task.sleep(for: .milliseconds(200))) == nil { return }
             appliedSearch = search
         }
-        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: !isSeriesList) }
+        .toolbar {
+            if let selection {
+                SelectionToolbar(item: item, selection: selection, visible: books.map(\.id), setSelection: { self.selection = $0 }, confirm: $selectionConfirm)
+            } else {
+                LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: !isSeriesList) {
+                    selection = []
+                }
+                if item == .missing, !books.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Delete All", role: .destructive) { confirmDeleteAll = true }
+                            .accessibilityIdentifier("missing-delete-all")
+                    }
+                }
+            }
+        }
+        .confirmationDialog(books.count == 1 ? "Delete this book from the library?" : "Delete all \(books.count) missing books from the library?",
+                            isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+            Button("Delete All", role: .destructive) { model.deleteFromLibrary(Set(books.map(\.id))) }
+        } message: {
+            Text(MissingBooks.deleteMessage)
+        }
+        .confirmationDialog(selectionConfirm?.title(count: selection?.count ?? 0) ?? "",
+                            isPresented: Binding(get: { selectionConfirm != nil }, set: { if !$0 { selectionConfirm = nil } }),
+                            titleVisibility: .visible, presenting: selectionConfirm) { kind in
+            let ids = selection ?? []
+            switch kind {
+            case .delete:
+                Button("Delete from Library", role: .destructive) {
+                    model.deleteFromLibrary(ids)
+                    selection = nil
+                }
+            case .regenerate:
+                Button("Regenerate Covers", role: .destructive) {
+                    Task { await model.regenerateCovers(ids) }
+                    selection = nil
+                }
+            }
+        } message: { kind in
+            Text(kind.message)
+        }
+        // Leaving the screen (another sidebar item) ends Select mode.
+        .onDisappear { selection = nil }
         .sheet(isPresented: $showSettings) { SettingsView() }
+    }
+
+    private var selectionTitle: String? {
+        guard let selection else { return nil }
+        return selection.isEmpty ? "Select Books" : selection.count == 1 ? "1 Book Selected" : "\(selection.count) Books Selected"
+    }
+
+    private func toggle(_ id: String) {
+        guard var current = selection else { return }
+        if current.contains(id) { current.remove(id) } else { current.insert(id) }
+        selection = current
     }
 
     private var isSeriesList: Bool {
@@ -166,10 +228,32 @@ struct LibraryToolbar: ToolbarContent {
     @Binding var coverSize: Double
     @Binding var showSettings: Bool
     var showsSort = true
+    /// Starts Select mode; nil where books cannot be selected.
+    var onSelect: (() -> Void)?
+    var coverInfo = CoverInfoSettings()
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
+            // Tap to show or hide the info on the covers; hold to choose what it shows.
             Menu {
+                Toggle("Show Info on Covers", systemImage: "info.circle", isOn: coverInfo.$isOn)
+                Section("Show") {
+                    CoverInfoFieldControls()
+                }
+            } label: {
+                Label("Cover Info", systemImage: coverInfo.isOn ? "info.circle.fill" : "info.circle")
+            } primaryAction: {
+                coverInfo.isOn.toggle()
+            }
+            .menuActionDismissBehavior(.disabled)
+            .accessibilityIdentifier("library-cover-info")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                if let onSelect {
+                    Button("Select", systemImage: "checkmark.circle") { onSelect() }
+                        .accessibilityIdentifier("library-select")
+                }
                 if showsSort {
                     Picker("Sort By", selection: $sort) {
                         ForEach(LibraryGridView.SortOrder.allCases) { Text($0.rawValue).tag($0) }
@@ -313,39 +397,73 @@ struct SeriesCell: View {
 
 struct BookCell: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.coverInfo) private var info
     let book: Book
+    /// Set in Select mode: whether the book is picked. A tap then picks or unpicks it.
+    var isSelected: Bool?
+    var onSelect: (() -> Void)?
+    @State private var confirmDelete = false
 
     var body: some View {
         Button {
-            Task { await model.open(book) }
+            if isSelected != nil {
+                onSelect?()
+            } else {
+                Task { await model.activate(book) }
+            }
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 CoverImage(url: model.thumbnails[book.id], title: book.title, revision: model.coverRevision[book.id] ?? 0)
                     .overlay(alignment: .topTrailing) { badge }
-                    .overlay(alignment: .bottom) { progressBar }
-                // Every cell keeps room for two title lines, so all rows are the same height and the
-                // scroll bar does not jump as rows of different heights come into view.
-                Text(book.title)
-                    .font(.footnote.weight(.medium))
-                    .lineLimit(2, reservesSpace: true)
-                    .foregroundStyle(.primary)
-                HStack(spacing: 4) {
-                    if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
-                    if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
-                    Text(statusText).foregroundStyle(.secondary)
+                    .overlay(alignment: .bottom) {
+                        if info.isOn {
+                            CoverInfoOverlay(book: book, status: overlayStatus)
+                        } else {
+                            progressBar
+                        }
+                    }
+                    .overlay(alignment: .topLeading) { selectionMark }
+                if !info.isOn {
+                    // Every cell keeps room for two title lines, so all rows are the same height and the
+                    // scroll bar does not jump as rows of different heights come into view.
+                    Text(book.title)
+                        .font(.footnote.weight(.medium))
+                        .lineLimit(2, reservesSpace: true)
+                        .foregroundStyle(.primary)
+                    HStack(spacing: 4) {
+                        if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
+                        if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
+                        Text(statusText).foregroundStyle(.secondary)
+                    }
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .imageScale(.small)
                 }
-                .font(.caption2)
-                .lineLimit(1)
-                .imageScale(.small)
             }
             // The whole cell is the tap target, and nothing outside it.
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("book-\(book.title)")
+        .accessibilityAddTraits(isSelected == true ? .isSelected : [])
         .onAppear { model.requestCover(for: book, urgent: true) }
         .contextMenu {
-            Button("Book Info", systemImage: "info.circle") { model.bookInfo = .init(id: book.id) }
+            if isSelected == nil { menu }
+        }
+        .confirmationDialog("Delete this book from the library?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete from Library", role: .destructive) { model.deleteFromLibrary([book.id]) }
+        } message: {
+            Text(MissingBooks.deleteMessage)
+        }
+    }
+
+    @ViewBuilder private var menu: some View {
+        Button("Book Info", systemImage: "info.circle") { model.bookInfo = .init(id: book.id) }
+        if book.isMissing {
+            // The file is gone: all that is left to do is to delete what the app kept of it.
+            Button("Delete from Library", systemImage: "trash", role: .destructive) { confirmDelete = true }
+        } else {
+            Button("Edit Cover…", systemImage: "crop") { Task { await model.editCover(book) } }
             Button("Regenerate Cover", systemImage: "arrow.triangle.2.circlepath") { Task { await model.regenerateCover(book) } }
             Section {
                 Button(book.favorite ? "Remove from Favorites" : "Favorite", systemImage: book.favorite ? "heart.slash" : "heart") {
@@ -368,8 +486,14 @@ struct BookCell: View {
         }
     }
 
-    private var statusText: String {
+    private var downloadStatus: String? {
         if model.downloading.contains(book.id) { return "Downloading…" }
+        if model.queuedDownloads.contains(book.id) { return "Waiting to Download" }
+        return nil
+    }
+
+    private var statusText: String {
+        if let downloadStatus { return downloadStatus }
         switch book.status {
         case .read: return "Read"
         case .reading: return book.progressFraction.map { "\(Int($0 * 100))%" } ?? "Reading"
@@ -377,11 +501,33 @@ struct BookCell: View {
         }
     }
 
+    /// The overlay shows the format itself when asked to, so it leaves "unread" out.
+    private var overlayStatus: String? {
+        if let downloadStatus { return downloadStatus }
+        switch book.status {
+        case .read: return "Read"
+        case .reading: return book.progressFraction.map { "\(Int($0 * 100))%" } ?? "Reading"
+        case .unread: return nil
+        }
+    }
+
+    @ViewBuilder private var selectionMark: some View {
+        if let isSelected {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.title3)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.black.opacity(0.25)))
+                .shadow(color: .black.opacity(0.35), radius: 2)
+                .padding(6)
+                .allowsHitTesting(false)
+        }
+    }
+
     @ViewBuilder private var badge: some View {
         if model.downloading.contains(book.id) {
             ProgressView().padding(6).glassEffect(in: .circle).padding(6)
         } else if !book.isDownloaded {
-            Image(systemName: "icloud")
+            Image(systemName: model.queuedDownloads.contains(book.id) ? "icloud.and.arrow.down" : "icloud")
                 .font(.caption.weight(.semibold))
                 .padding(6)
                 .glassEffect(in: .circle)
@@ -405,6 +551,121 @@ struct BookCell: View {
             }
             .frame(height: 4)
             .padding(8)
+        }
+    }
+}
+
+/// Actions in Select mode that ask first.
+enum SelectionConfirm: Identifiable {
+    case delete, regenerate
+    var id: Self { self }
+
+    func title(count: Int) -> String {
+        switch self {
+        case .delete: return count == 1 ? "Delete this book from the library?" : "Delete \(count) books from the library?"
+        case .regenerate: return count == 1 ? "Regenerate this cover?" : "Regenerate \(count) covers?"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .delete: return MissingBooks.deleteMessage
+        case .regenerate: return "Edited covers are removed on all your devices, and new covers are made from the first pages. Books only in iCloud are downloaded for a moment to make them."
+        }
+    }
+}
+
+enum MissingBooks {
+    static let deleteMessage = "The file is already gone. This removes the book's reading progress, cover and other details from Comic Reader on all your devices. If the file comes back, it shows up as a new book."
+}
+
+/// The toolbar in Select mode: the actions for the picked books, Select All and Done.
+struct SelectionToolbar: ToolbarContent {
+    @Environment(AppModel.self) private var model
+    let item: SidebarItem
+    let selection: Set<String>
+    /// The books on screen, which Select All picks.
+    let visible: [String]
+    /// Changes the selection; nil ends Select mode.
+    let setSelection: (Set<String>?) -> Void
+    /// Set to ask before an action that cannot be undone; the grid shows the question.
+    @Binding var confirm: SelectionConfirm?
+
+    private var picked: [Book] {
+        model.books.filter { selection.contains($0.id) }
+    }
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                actions
+            } label: {
+                Label("Actions", systemImage: "ellipsis.circle")
+            }
+            .disabled(selection.isEmpty)
+            .accessibilityIdentifier("selection-actions")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            let all = !visible.isEmpty && visible.allSatisfy(selection.contains)
+            Button(all ? "Deselect All" : "Select All") {
+                setSelection(all ? [] : Set(visible))
+            }
+            .accessibilityIdentifier("selection-all")
+        }
+        ToolbarItem(placement: .confirmationAction) {
+            Button("Done") { setSelection(nil) }
+                .accessibilityIdentifier("selection-done")
+        }
+    }
+
+    /// Runs an action on the picked books, then leaves Select mode.
+    private func finish(_ action: () -> Void) {
+        action()
+        setSelection(nil)
+    }
+
+    @ViewBuilder private var actions: some View {
+        let ids = selection
+        if item == .missing {
+            Button("Delete from Library", systemImage: "trash", role: .destructive) { confirm = .delete }
+        } else {
+            let books = picked
+            let allFavorite = books.allSatisfy(\.favorite)
+            let allBookmarked = books.allSatisfy(\.bookmarked)
+            let allRead = books.allSatisfy { $0.status == .read }
+            Section {
+                Button(allFavorite ? "Remove from Favorites" : "Favorite", systemImage: allFavorite ? "heart.slash" : "heart") {
+                    finish { model.setFavorite(ids, !allFavorite) }
+                }
+                Button(allBookmarked ? "Remove Bookmark" : "Bookmark", systemImage: allBookmarked ? "bookmark.slash" : "bookmark") {
+                    finish { model.setBookmarked(ids, !allBookmarked) }
+                }
+            }
+            Section {
+                if allRead {
+                    Button("Mark as Unread", systemImage: "circle") { finish { model.setFinished(ids, false) } }
+                } else {
+                    Button("Mark as Read", systemImage: "checkmark.circle") { finish { model.setFinished(ids, true) } }
+                    if books.contains(where: { $0.status != .unread }) {
+                        Button("Mark as Unread", systemImage: "circle") { finish { model.setFinished(ids, false) } }
+                    }
+                }
+            }
+            Menu("Reading Direction", systemImage: "arrow.left.arrow.right") {
+                Button("Left to Right") { finish { model.setDirection(ids, .leftToRight) } }
+                Button("Right to Left (Manga)") { finish { model.setDirection(ids, .rightToLeft) } }
+            }
+            Section {
+                if books.contains(where: { !$0.isDownloaded }) {
+                    Button("Download", systemImage: "icloud.and.arrow.down") { finish { model.download(ids) } }
+                }
+                if books.contains(where: \.isDownloaded) {
+                    Button("Remove from iPad", systemImage: "icloud.and.arrow.up") { finish { model.removeDownloads(ids) } }
+                }
+            }
+            Section {
+                Button("Regenerate Covers", systemImage: "arrow.triangle.2.circlepath") { confirm = .regenerate }
+            }
         }
     }
 }

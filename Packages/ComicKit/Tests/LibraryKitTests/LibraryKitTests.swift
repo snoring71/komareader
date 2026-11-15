@@ -151,4 +151,64 @@ import Testing
         #expect(await covers.waitingForCloud == 0)
         #expect(store.existingCoverURL(bookId: "C") != nil)
     }
+
+    @Test func scanLeavesOutEpubs() throws {
+        let root = try makeLibrary()
+        try Data([1]).write(to: root.appendingPathComponent("ARIA/Novel.epub"))
+        let plist = try PropertyListSerialization.data(fromPropertyList: ["NSURLFileSizeKey": 10], format: .binary, options: 0)
+        try plist.write(to: root.appendingPathComponent("ARIA/.Other.epub.icloud"))
+        let books = LibraryScanner.scan(root: root)
+        #expect(!books.contains { $0.format == .epub })
+        #expect(books.count == 4)
+    }
+
+    @Test func indexDropsEpubsInsteadOfMarkingThemMissing() throws {
+        let index = try LibraryIndex()
+        let comic = ScannedBook(url: URL(fileURLWithPath: "/lib/a.cbz"), relativePath: "a.cbz", format: .zip, size: 1, modified: nil, isDownloaded: true)
+        let epub = ScannedBook(url: URL(fileURLWithPath: "/lib/b.epub"), relativePath: "b.epub", format: .epub, size: 2, modified: nil, isDownloaded: true)
+        // As an older version indexed it.
+        try index.apply(scan: [comic, epub], records: [])
+        #expect(try index.allBooks().map(\.relativePath) == ["a.cbz"])
+
+        // This version's scan no longer lists it: the row goes, it is not shown as missing.
+        let books = try index.apply(scan: [comic], records: [])
+        #expect(books.map(\.relativePath) == ["a.cbz"])
+        #expect(!books.contains { $0.isMissing })
+    }
+
+    @Test func indexDropsMissingBooksRemovedOnAnyDevice() throws {
+        let index = try LibraryIndex()
+        let a = ScannedBook(url: URL(fileURLWithPath: "/lib/a.cbz"), relativePath: "a.cbz", format: .zip, size: 1, modified: nil, isDownloaded: true)
+        let b = ScannedBook(url: URL(fileURLWithPath: "/lib/b.cbz"), relativePath: "b.cbz", format: .zip, size: 2, modified: nil, isDownloaded: true)
+        let ids = try index.apply(scan: [a, b], records: []).map(\.id)
+        #expect(try index.apply(scan: [], records: []).allSatisfy(\.isMissing))
+
+        // Deleted here.
+        try index.delete(ids: [ids[0]])
+        // Deleted on another device: its record says so.
+        var record = BookRecord(bookId: ids[1], file: .init(path: "b.cbz", size: 2, modified: nil))
+        record.removed = .init()
+        #expect(try index.apply(scan: [], records: [record]).isEmpty)
+
+        // The file comes back: a fresh book.
+        let back = try index.apply(scan: [b], records: [record])
+        #expect(back.count == 1)
+        #expect(back.first?.isMissing == false)
+        #expect(back.first?.currentPage == nil)
+    }
+
+    @Test func indexKeepsFileMetadataUntilTheFileChanges() throws {
+        let index = try LibraryIndex()
+        var book = ScannedBook(url: URL(fileURLWithPath: "/lib/a.cbz"), relativePath: "a.cbz", format: .zip, size: 1, modified: Date(timeIntervalSince1970: 1_000.123456), isDownloaded: true)
+        let id = try #require(try index.apply(scan: [book], records: []).first?.id)
+        #expect(try index.book(id: id)?.metadataRead == false)
+
+        try index.saveMetadata([id: FileMetadata(title: "T", author: "W", publisher: "P")])
+        let saved = try #require(try index.apply(scan: [book], records: []).first)
+        #expect(saved.metadataRead)
+        #expect(saved.author == "W" && saved.publisher == "P" && saved.metadataTitle == "T")
+
+        book.modified = Date(timeIntervalSince1970: 5_000)
+        #expect(try index.apply(scan: [book], records: []).first?.metadataRead == false)
+    }
 }
