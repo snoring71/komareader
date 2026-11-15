@@ -14,6 +14,7 @@ Comic Reader/
   SCHEMA.md                         this file
   Libraries/<libraryId>/
     library.json                    which library folder this data belongs to
+    tags.json                       the library's tags, kept even with no books
     books/<bookId>.json             one record per book
     covers/<bookId>.jpg             default cover (first page, about 1200 px tall)
     covers/<bookId>.custom.jpg      cover edited by the user, if any
@@ -27,6 +28,20 @@ Comic Reader/
 
 `folderName` is the name of the folder the user chose as their library. A device that
 picks a folder with the same name uses the same `libraryId`.
+
+## tags.json
+
+```json
+{ "schema": 1, "tags": {
+  "sci-fi": { "name": "Sci-Fi", "deleted": false, "updatedAt": "2026-11-15T04:00:00.000Z" },
+  "old": { "name": "Old", "deleted": true, "updatedAt": "2026-11-15T04:10:00.000Z" } } }
+```
+
+The library's tags, keyed by the lower-cased name, so a tag with no books is kept until the
+user deletes it. The library's tags are the entries not marked `deleted`, plus any tag a
+book's record has. A deleted tag keeps its entry so an older copy cannot bring it back.
+Renaming writes a deleted entry for the old name and a new entry for the new one. Merge two
+copies tag by tag, keeping whichever entry has the later `updatedAt`.
 
 ## books/<bookId>.json
 
@@ -67,6 +82,14 @@ picks a folder with the same name uses the same `libraryId`.
   `covers/<bookId>.custom.jpg` holds the result. A `cover` of page 0, uncropped and not rotated
   means the user went back to the default cover; there is then no `.custom.jpg`.
 - `flags` holds the user's Favorite and Bookmarked marks.
+- `tags` holds the user's own tags for the book, in the user's spelling. Tags are matched
+  ignoring case, and a book lists each tag once. Renaming or deleting a tag rewrites `tags`
+  on every book that has it, and updates `tags.json`.
+- `removed` (`{ "updatedAt": "..." }`) means the user deleted the book from the library after
+  its file went missing. It counts only while its `updatedAt` is later than every other group's
+  and every `progress` entry's. An app that lists the book as missing should then drop it. If a
+  file turns up at `file.path` again, show it as a new book. The app that deletes a book
+  replaces the record with one holding only `file` and `removed`, and deletes its covers.
 - `progressReset` is set when the user resets a book's reading progress (marks it unread, or
   closes it on its first page). Every `progress` entry with an `updatedAt` at or before it is
   ignored, on every device: the book shows as never opened until someone reads it again. An
@@ -125,7 +148,7 @@ record whose `bookId` is the worked-out id, else the lowest `bookId`, merge the 
 Two devices may change the same record at the same time. When two copies differ
 (for example an iCloud conflict copy), merge them like this:
 
-1. For `metadata`, `tags`, `cover`, `flags`, `readerSettings`, `readerOptions`, `progressReset` and `pageBookmarks`, keep whichever copy has the later `updatedAt`.
+1. For `metadata`, `tags`, `cover`, `flags`, `readerSettings`, `readerOptions`, `removed`, `progressReset` and `pageBookmarks`, keep whichever copy has the later `updatedAt`.
 2. For `progress`, keep every device key; for a key in both copies, keep the later `updatedAt`. Then drop entries no newer than `progressReset`.
 3. Write files atomically (write a temporary file, then rename over the original).
 

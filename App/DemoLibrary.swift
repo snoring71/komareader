@@ -57,6 +57,12 @@ enum DemoLibrary {
         record.progress["mac-demo"] = .init(page: 5, pageCount: 8, finished: false, updatedAt: Date().addingTimeInterval(-86_400))
         record.progress["iphone-demo"] = .init(page: 2, pageCount: 8, finished: false, updatedAt: Date().addingTimeInterval(-3_600))
         try? store.write(record)
+        // A couple of tags, so the sidebar's Tags section shows.
+        for (path, tags) in [("Starfall/Starfall 1", ["Sci-Fi", "Favorites of 2026"]), ("Starfall/Starfall 2", ["Sci-Fi"]), ("Paper Moon/Paper Moon 1", ["Slice of Life"])] {
+            var tagged = BookRecord(bookId: StableID.book(path: path), file: .init(path: path, size: nil, modified: nil))
+            tagged.tags = .init(value: tags)
+            try? store.write(tagged)
+        }
     }
 
     private static func render(title: String, color: UIColor, wide: Bool, cover: Bool) -> UIImage {

@@ -6,6 +6,7 @@ struct RootView: View {
     @AppStorage(SettingsKeys.coverShadow) private var coverShadow: Double = CoverStyle.defaultShadowStrength
     @AppStorage(SettingsKeys.coverShadowDirection) private var shadowDirection: CoverShadowDirection = .around
     @AppStorage(SettingsKeys.roundedCorners) private var roundedCorners = true
+    var coverInfo = CoverInfoSettings()
 
     var body: some View {
         @Bindable var model = model
@@ -19,12 +20,12 @@ struct RootView: View {
                 NavigationSplitView {
                     SidebarView()
                 } detail: {
-                    NavigationStack {
+                    NavigationStack(path: $model.libraryPath) {
                         Group {
-                            if model.selection == .series {
-                                SeriesGridView()
-                            } else {
-                                LibraryGridView(item: model.selection ?? .all)
+                            switch model.selection ?? .all {
+                            case .series: SeriesGridView()
+                            case .folders: FolderBrowserView()
+                            case let item: LibraryGridView(item: item)
                             }
                         }
                         .navigationDestination(for: SidebarItem.self) { LibraryGridView(item: $0) }
@@ -41,6 +42,12 @@ struct RootView: View {
         .sheet(item: $model.bookInfo) { ref in
             BookInfoView(bookId: ref.id)
         }
+        .sheet(item: $model.tagEditor) { ref in
+            TagEditorView(bookId: ref.id)
+        }
+        .fullScreenCover(item: $model.coverEditor) { request in
+            CoverEditorView(book: request.book, initialEdit: request.initialEdit)
+        }
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -50,6 +57,10 @@ struct RootView: View {
             Text(model.errorMessage ?? "")
         }
         .environment(\.coverStyle, CoverStyle(shape: coverShape, shadowStrength: coverShadow, shadowDirection: shadowDirection, roundedCorners: roundedCorners))
+        .environment(\.coverInfo, coverInfo.value)
+        .onChange(of: coverInfo.value.needsFileMetadata, initial: true) { _, needed in
+            model.wantsFileMetadata = needed
+        }
     }
 }
 

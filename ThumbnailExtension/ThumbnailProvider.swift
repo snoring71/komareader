@@ -7,7 +7,7 @@ import UIKit
 final class ThumbnailProvider: QLThumbnailProvider {
     override func provideThumbnail(for request: QLFileThumbnailRequest, _ handler: @escaping (QLThumbnailReply?, Error?) -> Void) {
         let url = request.fileURL
-        guard let format = BookFormat.from(pathExtension: url.pathExtension), format.isArchive else {
+        guard let format = BookFormat.enabled(pathExtension: url.pathExtension), format.isArchive else {
             handler(nil, nil)
             return
         }

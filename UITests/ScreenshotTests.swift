@@ -156,6 +156,21 @@ final class ScreenshotTests: XCTestCase {
             }
         }
 
+        // The folder browser, and one folder.
+        let foldersRow = app.descendants(matching: .any)["sidebar-Folders"].firstMatch
+        if foldersRow.waitForExistence(timeout: 5) {
+            let label = app.staticTexts["Folders"].firstMatch
+            (label.isHittable ? label : foldersRow).tap()
+            sleep(2)
+            save(app, "13b-folders")
+            let folder = app.buttons["folder-Night Market"]
+            if folder.waitForExistence(timeout: 5) {
+                folder.tap()
+                sleep(2)
+                save(app, "13c-folder-night-market")
+            }
+        }
+
         // Another device read further: the reader offers to jump there.
         let allBooks = app.descendants(matching: .any)["sidebar-All Books"].firstMatch
         if allBooks.waitForExistence(timeout: 5) {
@@ -233,6 +248,56 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(harbor.waitForExistence(timeout: 10))
         sleep(1)
         save(app, "18-library-after-swipe-up")
+    }
+
+    /// Cover Info on the covers, then Select mode and its actions. Runs last (name order).
+    func testSelectAndCoverInfo() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.launch()
+        XCUIDevice.shared.orientation = .landscapeLeft
+
+        let book = app.buttons["book-Night Market 2"]
+        XCTAssertTrue(book.waitForExistence(timeout: 90), "Demo library did not appear")
+        sleep(2)
+
+        let info = app.buttons["library-cover-info"].firstMatch
+        XCTAssertTrue(info.waitForExistence(timeout: 5), "No Cover Info button")
+        info.tap()
+        sleep(2)
+        save(app, "20-library-cover-info")
+        info.tap()
+        sleep(1)
+
+        app.buttons["library-options"].firstMatch.tap()
+        let select = app.buttons["library-select"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 5), "No Select in the options menu")
+        select.tap()
+        let done = app.buttons["selection-done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "Select mode did not start")
+        sleep(1)
+        save(app, "21-library-select-mode")
+        XCTAssertTrue(done.exists, "Select mode ended by itself")
+        book.tap()
+        let other = app.buttons["book-Starfall 1"].firstMatch
+        if other.waitForExistence(timeout: 2) { other.tap() }
+        sleep(1)
+        save(app, "22-library-select")
+        XCTAssertFalse(app.otherElements["reader-page"].firstMatch.exists, "A tap in Select mode opened the book")
+
+        let actions = app.buttons["selection-actions"].firstMatch
+        XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        actions.tap()
+        // Earlier runs may have marked these books already.
+        let favorite = app.buttons.matching(NSPredicate(format: "label IN %@", ["Favorite", "Remove from Favorites"])).firstMatch
+        if favorite.waitForExistence(timeout: 3) {
+            sleep(1)
+            save(app, "23-library-select-actions")
+            favorite.tap()
+        }
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5), "Select mode did not end after an action")
+        sleep(1)
+        save(app, "24-library-after-select")
     }
 
     private func save(_ app: XCUIApplication, _ name: String) {

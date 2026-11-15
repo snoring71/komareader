@@ -27,6 +27,15 @@ public struct Book: Codable, FetchableRecord, PersistableRecord, Identifiable, H
     /// From the record's metadata, else worked out from the file name (`SeriesName`).
     public var series: String
     public var number: String?
+    /// The user's own tags, from the synced record, in the user's spelling.
+    public var tags: [String] = []
+    /// From the file's own metadata (ComicInfo.xml or the PDF's attributes), once it has been
+    /// read on this device: see `metadataRead`.
+    public var author: String?
+    public var publisher: String?
+    public var metadataTitle: String?
+    /// True once the file's metadata has been read (whether or not it had any).
+    public var metadataRead: Bool = false
     /// Pages bookmarked in the reader, from the synced record (`BookRecord.pageBookmarks`).
     public var pageBookmarks: [Int] = []
 
@@ -95,6 +104,23 @@ public final class LibraryIndex: @unchecked Sendable {
                 t.add(column: "number", .text)
             }
         }
+        // Two branches each added a "v3" (file metadata here, tags in the other), and a device
+        // that ran one build and then the other found "v3" done but its columns missing. So
+        // "v3" and "v4" both add whichever of those columns are missing, and do nothing else:
+        // any device, whichever build it ran, ends up with all of them.
+        migrator.registerMigration("v3") { db in try addMissingColumns(db) }
+        migrator.registerMigration("v4") { db in try addMissingColumns(db) }
+        // Named for what it adds rather than "v3", so it cannot clash with a migration added
+        // on another branch: a database that already ran another "v3" would skip it and then
+        // fail to read any book.
+        migrator.registerMigration("tags") { db in
+            // A test build from this branch named this migration "v3"; that copy may have run.
+            guard try !db.columns(in: "book").contains(where: { $0.name == "tags" }) else { return }
+            try db.alter(table: "book") { t in
+                // A JSON array of strings.
+                t.add(column: "tags", .text).notNull().defaults(to: "[]")
+            }
+        }
         // Named for what it adds (and its issue) rather than "v3": other branches add their
         // own migrations, and a database that had already run another branch's "v3" would
         // skip one of the same name and then fail to read any book. It also checks for the
@@ -109,8 +135,27 @@ public final class LibraryIndex: @unchecked Sendable {
         return migrator
     }
 
+    /// The columns added after v2, added only where they are not there yet.
+    private static func addMissingColumns(_ db: Database) throws {
+        let existing = Set(try db.columns(in: "book").map { $0.name.lowercased() })
+        let wanted: [(name: String, add: (TableAlteration) -> Void)] = [
+            // A JSON array of strings (user tags).
+            ("tags", { $0.add(column: "tags", .text).notNull().defaults(to: "[]") }),
+            ("author", { $0.add(column: "author", .text) }),
+            ("publisher", { $0.add(column: "publisher", .text) }),
+            ("metadataTitle", { $0.add(column: "metadataTitle", .text) }),
+            ("metadataRead", { $0.add(column: "metadataRead", .boolean).notNull().defaults(to: false) }),
+        ]
+        let missing = wanted.filter { !existing.contains($0.name.lowercased()) }
+        guard !missing.isEmpty else { return }
+        try db.alter(table: "book") { t in
+            for column in missing { column.add(t) }
+        }
+    }
+
     public func allBooks() throws -> [Book] {
         try db.read { db in try Book.fetchAll(db) }
+            .filter { $0.format.isEnabled }
             .naturallySorted(by: \.relativePath)
     }
 
@@ -120,6 +165,36 @@ public final class LibraryIndex: @unchecked Sendable {
 
     public func save(_ book: Book) throws {
         try db.write { db in try book.save(db) }
+    }
+
+    /// Saves several books in one transaction.
+    public func save(_ books: [Book]) throws {
+        guard !books.isEmpty else { return }
+        try db.write { db in
+            for book in books { try book.save(db) }
+        }
+    }
+
+    /// Removes books from the index (used to delete missing books from the library).
+    public func delete(ids: [String]) throws {
+        guard !ids.isEmpty else { return }
+        try db.write { db in _ = try Book.deleteAll(db, keys: ids) }
+    }
+
+    /// Stores metadata read from the files, without touching anything else in the rows.
+    public func saveMetadata(_ items: [String: FileMetadata]) throws {
+        guard !items.isEmpty else { return }
+        try db.write { db in
+            for (id, metadata) in items {
+                _ = try Book.filter(key: id).updateAll(
+                    db,
+                    Column("author").set(to: metadata.author),
+                    Column("publisher").set(to: metadata.publisher),
+                    Column("metadataTitle").set(to: metadata.title),
+                    Column("metadataRead").set(to: true)
+                )
+            }
+        }
     }
 
     /// Stores a book's bookmarked pages without touching the rest of its row (the reader
@@ -139,7 +214,9 @@ public final class LibraryIndex: @unchecked Sendable {
     ///   worked out from the path (`StableID.book`).
     /// - Known paths whose book has no synced record switch to the id of a record with the same
     ///   path, if one has arrived.
-    /// - Books no longer found are marked missing, never deleted, so their data is kept.
+    /// - Books no longer found are marked missing, never deleted, so their data is kept, except
+    ///   books the user deleted from the library (on any device, see `BookRecord.isRemoved`)
+    ///   and books in formats that are switched off (`BookFormat.isEnabled`), which are dropped.
     @discardableResult
     public func apply(scan: [ScannedBook], records: [BookRecord], now: Date = Date()) throws -> [Book] {
         // If two records still share a path, every device picks the same one (the lower id).
@@ -169,7 +246,7 @@ public final class LibraryIndex: @unchecked Sendable {
                     book = current
                 } else if let record = recordByPath[found.relativePath], !seen.contains(record.bookId) {
                     book = try Book.fetchOne(db, key: record.bookId) ?? Self.newBook(id: record.bookId, from: found, now: now)
-                } else if let moved = existing.first(where: { $0.isMissing && !seen.contains($0.id) && $0.size == found.size && found.size != nil && $0.title == found.title }) {
+                } else if let moved = existing.first(where: { $0.isMissing && !seen.contains($0.id) && $0.size == found.size && found.size != nil && $0.title == found.title && recordById[$0.id]?.isRemoved != true }) {
                     book = moved
                 } else {
                     // The same id another device works out for this path, so records written
@@ -183,6 +260,9 @@ public final class LibraryIndex: @unchecked Sendable {
                 book.title = found.title
                 book.folder = found.folder
                 book.format = found.format
+                // A changed file may carry changed metadata: read it again.
+                // (The index keeps dates to the millisecond, so allow for rounding.)
+                if let new = found.modified, abs(new.timeIntervalSince(book.modified ?? .distantPast)) > 1 { book.metadataRead = false }
                 book.size = found.size ?? book.size
                 book.modified = found.modified ?? book.modified
                 book.isDownloaded = found.isDownloaded
@@ -196,9 +276,13 @@ public final class LibraryIndex: @unchecked Sendable {
                 seen.insert(book.id)
             }
 
-            for var book in existing where !seen.contains(book.id) && !book.isMissing {
-                book.isMissing = true
-                try book.save(db)
+            for var book in existing where !seen.contains(book.id) {
+                if !book.format.isEnabled || recordById[book.id]?.isRemoved == true {
+                    try Book.deleteOne(db, key: book.id)
+                } else if !book.isMissing {
+                    book.isMissing = true
+                    try book.save(db)
+                }
             }
             return try Book.fetchAll(db)
         }
@@ -228,6 +312,9 @@ public final class LibraryIndex: @unchecked Sendable {
             book.favorite = flags.favorite
             book.bookmarked = flags.bookmarked
         }
+        if let tags = record.tags {
+            book.tags = tags.value
+        }
         if let bookmarks = record.pageBookmarks {
             book.pageBookmarks = bookmarks.pages
         }
@@ -243,7 +330,8 @@ public final class LibraryIndex: @unchecked Sendable {
             format: found.format, size: found.size, modified: found.modified,
             isDownloaded: found.isDownloaded, isMissing: false, addedAt: now,
             pageCount: nil, currentPage: nil, finished: false, lastReadAt: nil, direction: nil,
-            favorite: false, bookmarked: false, series: found.title, number: nil
+            favorite: false, bookmarked: false, series: found.title, number: nil,
+            author: nil, publisher: nil, metadataTitle: nil, metadataRead: false
         )
     }
 }
