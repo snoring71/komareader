@@ -61,7 +61,9 @@ copies tag by tag, keeping whichever entry has the later `updatedAt`.
   },
   "progress": {
     "apple-7a2c91d0": { "page": 14, "pageCount": 24, "finished": false, "updatedAt": "..." }
-  }
+  },
+  "progressReset": { "updatedAt": "..." },
+  "pageBookmarks": { "pages": [3, 17], "updatedAt": "..." }
 }
 ```
 
@@ -85,6 +87,14 @@ copies tag by tag, keeping whichever entry has the later `updatedAt`.
   and every `progress` entry's. An app that lists the book as missing should then drop it. If a
   file turns up at `file.path` again, show it as a new book. The app that deletes a book
   replaces the record with one holding only `file` and `removed`, and deletes its covers.
+- `progressReset` is set when the user resets a book's reading progress (marks it unread).
+  Every `progress` entry with an `updatedAt` at or before it is
+  ignored, on every device: the book shows as never opened until someone reads it again. An
+  app that resets progress also removes the old entries from the file it writes.
+- `pageBookmarks.pages` lists the pages the user bookmarked in the reader (zero-based, sorted,
+  no duplicates). In a two-page spread a bookmark goes on the first page in reading order. The
+  list is one group: the copy with the newest `updatedAt` wins. It is separate from
+  `flags.bookmarked`, which marks the whole book.
 - `readerSettings` holds the reading direction as version 0.1 wrote it: `direction` is `ltr` or
   `rtl`; `layout` is `auto`, `single` or `double`. Once a record has `readerOptions`, use that
   instead, but keep `readerSettings.direction` up to date for older versions.
@@ -135,11 +145,12 @@ record whose `bookId` is the worked-out id, else the lowest `bookId`, merge the 
 Two devices may change the same record at the same time. When two copies differ
 (for example an iCloud conflict copy), merge them like this:
 
-1. For `metadata`, `tags`, `cover`, `flags`, `readerSettings`, `readerOptions` and `removed`, keep whichever copy has the later `updatedAt`.
-2. For `progress`, keep every device key; for a key in both copies, keep the later `updatedAt`.
+1. For `metadata`, `tags`, `cover`, `flags`, `readerSettings`, `readerOptions`, `removed`, `progressReset` and `pageBookmarks`, keep whichever copy has the later `updatedAt`.
+2. For `progress`, keep every device key; for a key in both copies, keep the later `updatedAt`. Then drop entries no newer than `progressReset`.
 3. Write files atomically (write a temporary file, then rename over the original).
 
-When opening a book, resume from the `progress` entry with the latest `updatedAt`.
+When opening a book, resume from the `progress` entry with the latest `updatedAt` (leaving out
+entries no newer than `progressReset`). A finished book opens on its last page.
 
 ## Versioning
 

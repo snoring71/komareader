@@ -416,4 +416,55 @@ import Testing
         try store.updateTagList { $0.add("Empty") }
         #expect(Set(store.readTagList().names) == ["Sci-Fi", "Empty"])
     }
+
+    // MARK: Progress reset (#52) and page bookmarks (#54)
+
+    @Test func resetHidesOlderProgressFromEveryDevice() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        var record = BookRecord(bookId: "b", file: .init(path: "b.cbz", size: 1, modified: nil))
+        record.progress["ipad"] = .init(page: 5, pageCount: 20, finished: false, updatedAt: t0)
+        record.progress["mac"] = .init(page: 9, pageCount: 20, finished: false, updatedAt: t0.addingTimeInterval(10))
+        let older = record
+
+        var reset = record
+        reset.resetProgress(at: t0.addingTimeInterval(20))
+        #expect(reset.progress.isEmpty)
+        #expect(reset.latestProgress == nil)
+        #expect(reset.wasReset(after: t0.addingTimeInterval(10)))
+        #expect(!reset.wasReset(after: t0.addingTimeInterval(30)))
+
+        // Another device's older copy still holds the old positions: they stay ignored.
+        for merged in [reset.merged(with: older), older.merged(with: reset)] {
+            #expect(merged.progressReset?.updatedAt == t0.addingTimeInterval(20))
+            #expect(merged.latestProgress == nil)
+            #expect(merged.progress.isEmpty)
+            #expect(merged.handOff(for: "ipad", openingAt: 0) == nil)
+        }
+
+        // Reading again after the reset counts.
+        var readAgain = reset
+        readAgain.progress["mac"] = .init(page: 2, pageCount: 20, finished: false, updatedAt: t0.addingTimeInterval(30))
+        let merged = readAgain.merged(with: older)
+        #expect(merged.latestProgress?.progress.page == 2)
+        #expect(!merged.wasReset(after: nil))
+    }
+
+    @Test func pageBookmarksSortAndMergeNewestWins() throws {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        #expect(BookRecord.PageBookmarks(pages: [9, 2, 9, -1, 4], updatedAt: t0).pages == [2, 4, 9])
+        var a = BookRecord(bookId: "b", file: .init(path: "b.cbz", size: 1, modified: nil))
+        a.pageBookmarks = .init(pages: [1, 3], updatedAt: t0)
+        var b = a
+        b.pageBookmarks = .init(pages: [7], updatedAt: t0.addingTimeInterval(5))
+        #expect(a.merged(with: b).pageBookmarks?.pages == [7])
+        #expect(b.merged(with: a).pageBookmarks?.pages == [7])
+
+        // Round trip through the file format; the whole-book mark is untouched.
+        a.flags = .init(favorite: false, bookmarked: true, updatedAt: t0)
+        a.resetProgress(at: t0)
+        let data = try RecordCoding.encoder().encode(a)
+        let decoded = try RecordCoding.decoder().decode(BookRecord.self, from: data)
+        #expect(decoded == a)
+        #expect(decoded.flags?.bookmarked == true)
+    }
 }
