@@ -31,7 +31,26 @@ final class ScreenshotTests: XCTestCase {
         let page = app.otherElements["reader-page"].firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 20), "Reader did not open")
         sleep(2)
-        save(app, "03-reader-cover-with-controls")
+        // A book opened for the first time waits on its cover until the reader moves on.
+        let intro = app.descendants(matching: .any)["reader-cover-intro"].firstMatch
+        XCTAssertTrue(intro.waitForExistence(timeout: 5), "No cover intro on a first open")
+        save(app, "03-reader-cover-intro")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(intro.waitForNonExistence(timeout: 5), "The cover intro did not give way to page 1")
+        sleep(1)
+        // Back from page 1 returns to the cover; forward leaves it again.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
+        XCTAssertTrue(intro.waitForExistence(timeout: 5), "Going back from page 1 did not show the cover")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(intro.waitForNonExistence(timeout: 5), "The cover did not give way to page 1 again")
+        sleep(1)
+        // The controls start hidden; a tap in the middle shows them.
+        let menuBar = app.descendants(matching: .any)["reader-menu-bar"].firstMatch
+        XCTAssertFalse(menuBar.exists, "Controls showed without a tap")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(menuBar.waitForExistence(timeout: 3), "A tap in the middle did not show the controls")
+        sleep(1)
+        save(app, "03a-reader-cover-with-controls")
 
         // Select Text (Live Text), where the simulator supports it.
         let selectText = app.buttons["reader-select-text"]
@@ -47,15 +66,16 @@ final class ScreenshotTests: XCTestCase {
             sleep(1)
         }
 
-        // Turn to the first two-page spread with the right tap zone.
+        // Turn to the first two-page spread with the right tap zone; that puts the controls away.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(menuBar.waitForNonExistence(timeout: 3), "Turning the page did not hide the controls")
         sleep(2)
         save(app, "04-reader-spread")
 
-        // Hide the controls with a tap in the middle.
+        // Show the controls again with a tap in the middle.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         sleep(1)
-        save(app, "05-reader-spread-no-controls")
+        save(app, "05-reader-spread-controls")
 
         XCUIDevice.shared.orientation = .portrait
         sleep(2)
@@ -63,7 +83,10 @@ final class ScreenshotTests: XCTestCase {
         sleep(1)
         save(app, "06-reader-portrait")
 
-        app.buttons["reader-close"].tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let close = app.buttons["reader-close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 3))
+        close.tap()
         XCTAssertTrue(firstBook.waitForExistence(timeout: 10))
         sleep(2)
         save(app, "07-library-continue-reading")
@@ -150,12 +173,66 @@ final class ScreenshotTests: XCTestCase {
         save(app, "14-reader-handoff")
         jump.tap()
         sleep(1)
-        let settings = app.buttons["reader-settings"]
-        if settings.waitForExistence(timeout: 3) {
-            settings.tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let bar = app.descendants(matching: .any)["reader-menu-bar"].firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 5), "No menu bar in the reader")
+        save(app, "15-reader-menu-bar")
+        let layout = app.buttons["reader-bar-layout"]
+        if layout.waitForExistence(timeout: 3) {
+            layout.tap()
             sleep(1)
-            save(app, "15-reader-settings-menu")
+            save(app, "15b-reader-page-layout")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+            sleep(1)
         }
+        let adjust = app.buttons["reader-bar-adjust"]
+        if adjust.waitForExistence(timeout: 3) {
+            adjust.tap()
+            let contrast = app.sliders["adjust-contrast"]
+            if contrast.waitForExistence(timeout: 3) { contrast.adjust(toNormalizedSliderPosition: 0.85) }
+            let grain = app.sliders["adjust-grain"]
+            if grain.waitForExistence(timeout: 3) { grain.adjust(toNormalizedSliderPosition: 0.7) }
+            sleep(2)
+            save(app, "16-reader-adjustments")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+            sleep(1)
+        }
+        let more = app.buttons["reader-bar-more"]
+        if more.waitForExistence(timeout: 3) {
+            more.tap()
+            sleep(1)
+            save(app, "17-reader-more")
+            // Use as Defaults asks first.
+            let useDefaults = app.buttons["reader-use-defaults"]
+            if useDefaults.waitForExistence(timeout: 3) {
+                useDefaults.tap()
+                let cancel = app.buttons["reader-use-defaults-cancel"]
+                XCTAssertTrue(cancel.waitForExistence(timeout: 3), "Use as Defaults did not ask first")
+                sleep(1)
+                save(app, "17b-reader-use-defaults-confirm")
+                cancel.tap()
+            }
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+            sleep(1)
+        }
+
+        // The cover button in the page bar goes back to the cover; a tap forward returns.
+        let showCover = app.buttons["reader-show-cover"]
+        if showCover.waitForExistence(timeout: 3) {
+            showCover.tap()
+            sleep(1)
+            save(app, "17c-reader-cover-from-page-bar")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            sleep(1)
+        }
+
+        // A swipe up on the page closes the book.
+        let readerPage = app.otherElements["reader-page"].firstMatch
+        readerPage.swipeUp(velocity: .fast)
+        XCTAssertTrue(readerPage.waitForNonExistence(timeout: 10), "Swiping up did not close the book")
+        XCTAssertTrue(harbor.waitForExistence(timeout: 10))
+        sleep(1)
+        save(app, "18-library-after-swipe-up")
     }
 
     private func save(_ app: XCUIApplication, _ name: String) {

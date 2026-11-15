@@ -5,6 +5,7 @@ import SwiftUI
 /// while reading a book applies to that book only.
 struct ReaderDefaultsView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage(CoverIntro.settingKey) private var showCoverIntro = true
 
     var body: some View {
         @Bindable var defaults = model.readerDefaults
@@ -68,7 +69,26 @@ struct ReaderDefaultsView: View {
             }
 
             Section {
-                Text("To make one book's settings the defaults, open it and choose Use as Defaults for All Books in the reader's settings menu. Reset to Defaults there makes a book follow these again.")
+                slider("Contrast", value: $defaults.contrast, in: -1...1)
+                slider("Sharpness", value: $defaults.sharpness, in: 0...1)
+                slider("Paper Grain", value: $defaults.paperGrain, in: 0...1)
+                slider("Paper Tone", value: $defaults.paperTint, in: 0...1)
+            } header: {
+                Text("Image Adjustments")
+            } footer: {
+                Text("Paper Grain lays a printed-paper texture over pages; Paper Tone warms white paper. Off by default.")
+            }
+
+            Section {
+                Toggle("Show Cover First", isOn: $showCoverIntro)
+            } header: {
+                Text("Opening Books")
+            } footer: {
+                Text("Shows the cover when a book opens: for a moment if you've read it before, or until you turn to the first page.")
+            }
+
+            Section {
+                Text("To make one book's settings the defaults, open it and choose Use as Defaults for All Books under ••• in the reader's menu bar. Reset to Defaults there makes a book follow these again.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -76,4 +96,21 @@ struct ReaderDefaultsView: View {
         .navigationTitle("Book Defaults")
         .navigationBarTitleDisplayMode(.inline)
     }
+
+    private func slider(_ title: String, value: Binding<Double>, in range: ClosedRange<Double>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(value.wrappedValue == 0 ? "Off" : "\(Int((value.wrappedValue * 100).rounded()))%")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: Binding(
+                get: { value.wrappedValue },
+                set: { value.wrappedValue = abs($0) < 0.03 ? 0 : ($0 * 100).rounded() / 100 }
+            ), in: range)
+        }
+    }
+
 }
