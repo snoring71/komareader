@@ -630,7 +630,12 @@ struct BookCell: View {
             slot("bookmark.fill", .orange, book.bookmarked)
             slot("tag.fill", .teal, !book.tags.isEmpty)
             Spacer(minLength: 4)
-            if book.status == .reading, let fraction = book.progressFraction {
+            if book.status == .read {
+                // Finished: a small black-and-white check where the percentage would be.
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.primary)
+                    .accessibilityLabel("Read")
+            } else if book.status == .reading, let fraction = book.progressFraction {
                 Text("\(Int(fraction * 100))%")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -676,13 +681,8 @@ struct BookCell: View {
                 .padding(6)
                 .glassEffect(in: .circle)
                 .padding(6)
-        } else if book.status == .read {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.body)
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, .green)
-                .padding(6)
         }
+        // A read book's check is in the row above the cover.
     }
 }
 

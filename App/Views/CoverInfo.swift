@@ -160,16 +160,13 @@ struct CoverInfoOverlay: View {
         }
     }
 
-    /// In iCloud, downloading or read: shown in the band, in place of the badge in the corner.
+    /// In iCloud or downloading: shown in the band, in place of the badge in the corner.
     private var stateIcon: AnyView? {
         if model.downloading.contains(book.id) {
             return AnyView(ProgressView().controlSize(.mini).tint(.white))
         }
         if !book.isDownloaded {
             return AnyView(Image(systemName: model.queuedDownloads.contains(book.id) ? "icloud.and.arrow.down" : "icloud"))
-        }
-        if book.status == .read {
-            return AnyView(Image(systemName: "checkmark.circle.fill").foregroundStyle(.green))
         }
         return nil
     }
