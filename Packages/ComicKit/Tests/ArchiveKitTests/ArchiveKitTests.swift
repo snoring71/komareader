@@ -141,7 +141,19 @@ import Testing
         #expect(try color(right, 0, 0).blue > 200)
     }
 
-    // MARK: Sharing a page (#60)
+}
+
+/// Sharing a page (#60).
+@Suite struct PageExportTests {
+    func fixture(_ name: String) throws -> URL {
+        try #require(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures"))
+    }
+
+    func tempDir() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
 
     @Test func exportsTheOriginalArchivePageUnderTheBookTitle() async throws {
         let source = try ArchiveBookSource(url: try fixture("sample.cbz"), cacheRoot: try tempDir())
@@ -155,7 +167,7 @@ import Testing
         // A one-page PDF, 200 × 300 points, holding one 400 × 600 image.
         let url = try tempDir().appendingPathComponent("scan.pdf")
         var box = CGRect(x: 0, y: 0, width: 200, height: 300)
-        let pdf = try #require(CGContext(url as CFURL, mediaBox: &box, nil))
+        let pdf = try #require(CGContext(url as CFURL, mediaBox: &box, nil as CFDictionary?))
         let bitmap = try #require(CGContext(data: nil, width: 400, height: 600, bitsPerComponent: 8, bytesPerRow: 0,
                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
         bitmap.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1))
