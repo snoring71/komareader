@@ -16,7 +16,7 @@ struct ProgressRingIcon: View {
                 .stroke(Color.primary.opacity(0.22), lineWidth: 2.4)
             Circle()
                 .trim(from: 0, to: min(max(fraction, 0), 1))
-                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+                .stroke(Color.primary, style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .animation(.easeInOut(duration: 0.3), value: fraction)
             Text(verbatim: "\(percent)")

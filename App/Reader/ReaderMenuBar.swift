@@ -245,14 +245,19 @@ struct ReaderBarButtonStyle: ButtonStyle {
     var tint: Color?
 
     func makeBody(configuration: Configuration) -> some View {
-        let color = tint ?? .accentColor
+        // On, a tinted button (the pink heart, the orange bookmark) keeps its color on a soft
+        // wash; any other is a solid primary circle with the icon in the inverse color (#55).
+        let foreground: Color = isOn ? (tint ?? Color.onAccent) : Color.primary
+        let fill: Color = isOn
+            ? (tint.map { $0.opacity(0.2) } ?? Color.primary)
+            : Color.primary.opacity(isOpen ? 0.14 : 0)
         configuration.label
             .font(.system(size: 19, weight: .medium))
-            .foregroundStyle(isOn ? color : Color.primary)
+            .foregroundStyle(foreground)
             .frame(width: 40, height: 40)
             .background {
                 Circle()
-                    .fill(isOn ? color.opacity(0.2) : Color.primary.opacity(isOpen ? 0.14 : 0))
+                    .fill(fill)
                     .padding(2)
             }
             .contentShape(Circle())

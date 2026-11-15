@@ -34,7 +34,7 @@ struct ChoiceBar<Value: Hashable>: View {
                 } label: {
                     Text(choices[index].1)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(selected ? Color.white : Color.primary)
+                        .foregroundStyle(selected ? Color.onAccent : Color.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .padding(.horizontal, 8)
@@ -50,7 +50,7 @@ struct ChoiceBar<Value: Hashable>: View {
             GeometryReader { geo in
                 let width = geo.size.width / CGFloat(max(choices.count, 1))
                 Capsule()
-                    .fill(Color.accentColor)
+                    .fill(Color.primary)
                     .frame(width: width, height: geo.size.height)
                     .offset(x: width * CGFloat(shownIndex))
             }

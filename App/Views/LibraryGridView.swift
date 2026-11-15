@@ -397,14 +397,10 @@ struct BookCell: View {
 
     @ViewBuilder private var progressBar: some View {
         if book.status == .reading, let fraction = book.progressFraction {
-            GeometryReader { geo in
-                Capsule().fill(.black.opacity(0.35))
-                    .overlay(alignment: .leading) {
-                        Capsule().fill(.tint).frame(width: geo.size.width * fraction)
-                    }
-            }
-            .frame(height: 4)
-            .padding(8)
+            // Full primary on a faded track, over a soft inverse backing so it reads on any cover.
+            MonoProgressBar(fraction: fraction, height: 4)
+                .background(Capsule().fill(Color.onAccent.opacity(0.6)))
+                .padding(8)
         }
     }
 }
