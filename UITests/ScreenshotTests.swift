@@ -307,6 +307,25 @@ final class ScreenshotTests: XCTestCase {
 
         let actions = app.buttons["selection-actions"].firstMatch
         XCTAssertTrue(actions.waitForExistence(timeout: 5))
+
+        // Tags… for the selected books (#64): the sheet keeps the selection when it closes.
+        actions.tap()
+        let tags = app.buttons["selection-tags"].firstMatch
+        XCTAssertTrue(tags.waitForExistence(timeout: 5), "No Tags… in the Actions menu")
+        tags.tap()
+        let tagsDone = app.buttons["tags-done"].firstMatch
+        XCTAssertTrue(tagsDone.waitForExistence(timeout: 5), "The tag editor did not open")
+        let field = app.textFields["tags-new"].firstMatch
+        if field.waitForExistence(timeout: 2) {
+            field.tap()
+            field.typeText("Shelf\n")
+        }
+        sleep(1)
+        save(app, "22b-library-select-tags")
+        tagsDone.tap()
+        XCTAssertTrue(tagsDone.waitForNonExistence(timeout: 5), "The tag editor did not close")
+        XCTAssertTrue(done.exists, "Closing Tags ended Select mode")
+
         actions.tap()
         // Earlier runs may have marked these books already.
         let favorite = app.buttons.matching(NSPredicate(format: "label IN %@", ["Favorite", "Remove from Favorites"])).firstMatch

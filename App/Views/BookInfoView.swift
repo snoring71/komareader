@@ -107,7 +107,7 @@ struct BookInfoView: View {
                     Label("Bookmarked", systemImage: "bookmark")
                 }
                 NavigationLink {
-                    TagEditorView(bookId: book.id, inSheet: false)
+                    TagEditorView(bookIds: [book.id], inSheet: false)
                 } label: {
                     LabeledContent {
                         Text(book.tags.isEmpty ? "None" : book.tags.joined(separator: ", ")).lineLimit(1)

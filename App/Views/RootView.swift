@@ -64,8 +64,8 @@ struct RootView: View {
             BookInfoView(bookId: ref.id)
                 .toggleStyle(MonoToggleStyle())
         }
-        .sheet(item: $model.tagEditor) { ref in
-            TagEditorView(bookId: ref.id)
+        .sheet(item: $model.tagEditor) { request in
+            TagEditorView(bookIds: request.ids)
         }
         .fullScreenCover(item: $model.coverEditor) { request in
             CoverEditorView(book: request.book, initialEdit: request.initialEdit)
