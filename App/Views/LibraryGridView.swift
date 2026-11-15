@@ -178,6 +178,7 @@ struct LibraryGridView: View {
               }
             }
             .environment(\.showTitles, showTitles)
+            .environment(\.libraryIconSize, LibraryIconSize.forCover(width: size))
             .onScrollTargetVisibilityChange(idType: Book.ID.self, threshold: 0.5) { ids in
                 visible.ids = visible.inGridOrder(ids)
                 scrollSpot.firstVisible = visible.ids.first
@@ -540,6 +541,7 @@ struct BookCell: View {
     @Environment(\.coverInfo) private var info
     @Environment(\.showTitles) private var showTitles
     @Environment(\.coverStyle) private var style
+    @Environment(\.libraryIconSize) private var iconSize
     let book: Book
     /// Set in Select mode: whether the book is picked. A tap then picks or unpicks it.
     var isSelected: Bool?
@@ -626,16 +628,17 @@ struct BookCell: View {
     private var iconRow: some View {
         // Each icon keeps its own slot, shown or not, so a heart, bookmark or tag sits in the
         // same place on every book; the percentage keeps to the right edge.
-        HStack(spacing: 5) {
+        HStack(spacing: iconSize * 0.4) {
             slot("heart.fill", .pink, book.favorite)
             slot("bookmark.fill", .orange, book.bookmarked)
             slot("tag.fill", .teal, !book.tags.isEmpty)
-            Spacer(minLength: 4)
+            Spacer(minLength: 2)
             if book.status == .read {
                 // Finished: a solid tab standing on the cover's top edge, where the percentage
                 // would be. An overlay, so the row keeps the same height as every other book's.
                 Text(verbatim: "72%")
                     .monospacedDigit()
+                    .fixedSize()
                     .hidden()
                     .overlay(alignment: .bottomTrailing) { readTab }
                     .accessibilityElement()
@@ -643,10 +646,12 @@ struct BookCell: View {
             } else if book.status == .reading, let fraction = book.progressFraction {
                 Text("\(Int(fraction * 100))%")
                     .monospacedDigit()
+                    .fixedSize() // never cut short to "…"
                     .foregroundStyle(.secondary)
             }
         }
-        .font(.subheadline.weight(.medium))
+        // Sized with the covers (see `LibraryIconSize`), so the row fits at every zoom level.
+        .font(.system(size: iconSize, weight: .semibold))
         .imageScale(.medium)
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -659,11 +664,11 @@ struct BookCell: View {
             .fill(Color.primary)
             .overlay {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 15, weight: .heavy))
+                    .font(.system(size: iconSize, weight: .heavy))
                     .foregroundStyle(Color.onAccent)
                     .padding(.top, 1)
             }
-            .frame(width: 38, height: 26)
+            .frame(width: iconSize * 2.6, height: iconSize * 1.75)
             .offset(x: -max(style.cornerRadius, 3), y: 5) // 5 = the gap between row and cover
             .allowsHitTesting(false)
     }

@@ -14,7 +14,18 @@ enum TitleGrid {
     }
 }
 
+/// The size of the icons and percentage above the covers. It follows the cover size, in about
+/// the proportion other comic apps use (about a ninth of the cover's width), so the row looks the
+/// same zoomed in or out and always fits: three icon slots and "100%" take about 6.5 times it.
+enum LibraryIconSize {
+    static func forCover(width: Double) -> CGFloat {
+        CGFloat(min(max(width * 0.105, 10), 22))
+    }
+}
+
 extension EnvironmentValues {
+    @Entry var libraryIconSize: CGFloat = 13
+
     /// Whether library cells show the title under the cover. Set by each grid from its own setting.
     @Entry var showTitles = true
 }
