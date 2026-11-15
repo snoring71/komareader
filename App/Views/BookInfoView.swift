@@ -15,6 +15,9 @@ struct BookInfoView: View {
     @State private var editingCover = false
     @State private var coverEdit: BookRecord.CoverEdit?
     @State private var confirmRegenerate = false
+    /// Whether the book has reader settings of its own, read from its record.
+    @State private var hasOwnOptions = false
+    @State private var confirmResetOptions = false
 
     private var book: Book? { model.books.first { $0.id == bookId } }
 
@@ -33,7 +36,9 @@ struct BookInfoView: View {
                         CoverEditorView(book: book, source: source, initialEdit: coverEdit)
                     }
                     .task(id: model.coverRevision[book.id]) {
-                        coverEdit = await model.record(for: book.id)?.cover
+                        let record = await model.record(for: book.id)
+                        coverEdit = record?.cover
+                        hasOwnOptions = record.map { !$0.effectiveReaderOptions.isEmpty } ?? false
                     }
             } else {
                 ContentUnavailableView("Book Not Found", systemImage: "book.closed")
@@ -135,6 +140,20 @@ struct BookInfoView: View {
                 )) {
                     Text("Left to Right").tag(false)
                     Text("Right to Left (Manga)").tag(true)
+                }
+                // From the library only: the reader has its own Use Defaults.
+                if source == nil, hasOwnOptions || book.direction != nil {
+                    Button("Reset to Defaults", systemImage: "arrow.uturn.backward") { confirmResetOptions = true }
+                        .tint(.primary)
+                        .accessibilityIdentifier("info-reset-reader-options")
+                        .confirmationDialog("Reset this book's reader settings?", isPresented: $confirmResetOptions, titleVisibility: .visible) {
+                            Button("Reset to Defaults", role: .destructive) {
+                                model.resetReaderOptions(bookId: book.id)
+                                hasOwnOptions = false
+                            }
+                        } message: {
+                            Text("Direction, page layout, fit, background, crop and image adjustments go back to your Book Defaults on all your devices. Reading progress, favorites, bookmarks and tags stay.")
+                        }
                 }
             }
 

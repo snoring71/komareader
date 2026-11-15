@@ -11,6 +11,7 @@ struct LibraryGridView: View {
     @State private var showSettings = false
     @AppStorage("sortOrder") private var sort: SortOrder = .title
     @AppStorage("coverSize") private var coverSize: Double = 150
+    @AppStorage(TitleGrid.books.key) private var showTitles = true
     /// The size while a pinch is in progress; saved to `coverSize` when it ends.
     @State private var pinchSize: Double?
     @State private var pinchStart: Double?
@@ -111,6 +112,8 @@ struct LibraryGridView: View {
         let _ = (visible.books = books)
         ScrollViewReader { proxy in
             ScrollView {
+              // Explicit spacing, so the gaps below are exactly what they say.
+              VStack(alignment: .leading, spacing: 0) {
                 if !continueReading.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Continue Reading").font(.title3.bold())
@@ -131,10 +134,27 @@ struct LibraryGridView: View {
                             // A book that leaves (marked unread or read) fades out, and the
                             // others slide over into its place instead of jumping.
                             .animation(.snappy(duration: 0.4), value: continueReading.prefix(12).map(\.id))
+                            // Room under the covers for their shadows. Without titles the cover is
+                            // the last thing in the cell, and the scroll view clipped its bottom.
+                            .padding(.bottom, 14)
                         }
+                        .scrollClipDisabled()
                     }
                     .padding(.horizontal)
                     .padding(.top, 8)
+
+                    // Where the full list starts (#58). Plain views above the grid, not a
+                    // section in it, so the grid stays one flat run of equal cells.
+                    VStack(alignment: .leading, spacing: 0) {
+                        SoftDivider()
+                            .padding(.top, 12)
+                        Text("All Books")
+                            .font(.title3.bold())
+                            .accessibilityAddTraits(.isHeader)
+                            .padding(.top, 22)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
                 }
 
                 if !subfolders.isEmpty {
@@ -159,9 +179,15 @@ struct LibraryGridView: View {
                 .animation(item == .continueReading ? .snappy(duration: 0.4) : nil,
                            value: item == .continueReading ? books.map(\.id) : [])
                 .scrollTargetLayout()
-                .padding()
+                .padding(.horizontal)
+                .padding(.bottom)
+                // Under the All Books heading, the same 10 pt gap as under Continue Reading's.
+                .padding(.top, continueReading.isEmpty ? 16 : 10)
                 .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index
+              }
             }
+            .environment(\.showTitles, showTitles)
+            .environment(\.libraryIconSize, LibraryIconSize.forCover(width: size))
             .onScrollTargetVisibilityChange(idType: Book.ID.self, threshold: 0.5) { ids in
                 visible.ids = visible.inGridOrder(ids)
                 scrollSpot.firstVisible = visible.ids.first
@@ -172,11 +198,8 @@ struct LibraryGridView: View {
             } action: { _, down in
                 scrollSpot.scrolledDown = down
             }
-            .onChange(of: coverInfo.isOn) {
-                // At the top, Continue Reading and the first rows stay put on their own.
-                guard scrollSpot.scrolledDown, let id = scrollSpot.firstVisible else { return }
-                Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
-            }
+            .onChange(of: coverInfo.isOn) { keepPlace(proxy) }
+            .onChange(of: showTitles) { keepPlace(proxy) }
             .onAppear {
                 // Back where the user left off at the last launch (the first book means the top).
                 guard let id = model.takeRestoreAnchor(for: listKey), id != books.first?.id, books.contains(where: { $0.id == id }) else { return }
@@ -232,7 +255,7 @@ struct LibraryGridView: View {
             if let selection {
                 SelectionToolbar(item: item, selection: selection, visible: books.map(\.id), setSelection: { self.selection = $0 }, confirm: $selectionConfirm)
             } else {
-                LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: showsSort) {
+                LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: showsSort, showTitles: $showTitles) {
                     selection = []
                 }
                 if item == .missing, !books.isEmpty {
@@ -269,6 +292,14 @@ struct LibraryGridView: View {
             Text(kind.message)
         }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
+    }
+
+    /// After a change to the height of every cell (Cover Info, Show Titles), scrolls back to
+    /// the book that was first on screen. At the top, Continue Reading and the first rows stay
+    /// put on their own.
+    private func keepPlace(_ proxy: ScrollViewProxy) {
+        guard scrollSpot.scrolledDown, let id = scrollSpot.firstVisible else { return }
+        Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
     }
 
     private var selectionTitle: String? {
@@ -336,6 +367,8 @@ struct LibraryToolbar: ToolbarContent {
     @Binding var coverSize: Double
     @Binding var showSettings: Bool
     var showsSort = true
+    /// The grid's Show Titles setting; nil where there is none.
+    var showTitles: Binding<Bool>?
     /// Starts Select mode; nil where books cannot be selected.
     var onSelect: (() -> Void)?
     var coverInfo = CoverInfoSettings()
@@ -373,6 +406,13 @@ struct LibraryToolbar: ToolbarContent {
                 Section("Cover Size (or pinch the grid)") {
                     Button("Larger", systemImage: "plus.magnifyingglass") { coverSize = min(LibraryGridView.sizeRange.upperBound, coverSize + 30) }
                     Button("Smaller", systemImage: "minus.magnifyingglass") { coverSize = max(LibraryGridView.sizeRange.lowerBound, coverSize - 30) }
+                }
+                if let showTitles {
+                    Section {
+                        Toggle("Show Titles", systemImage: "textformat", isOn: showTitles)
+                            .toggleStyle(.automatic)
+                            .accessibilityIdentifier("library-show-titles")
+                    }
                 }
                 Section {
                     Button("Rescan Library", systemImage: "arrow.clockwise") { Task { await model.rescan() } }
@@ -443,6 +483,7 @@ struct SeriesGridView: View {
     @State private var showSettings = false
     @AppStorage("sortOrder") private var sort: LibraryGridView.SortOrder = .title
     @AppStorage("coverSize") private var coverSize: Double = 150
+    @AppStorage(TitleGrid.series.key) private var showTitles = true
 
     var body: some View {
         let groups = model.catalog.series.filter { search.isEmpty || $0.name.localizedStandardContains(search) }
@@ -458,6 +499,7 @@ struct SeriesGridView: View {
             }
             .padding()
         }
+        .environment(\.showTitles, showTitles)
         .overlay {
             if groups.isEmpty && !model.isScanning {
                 if search.isEmpty {
@@ -469,46 +511,46 @@ struct SeriesGridView: View {
         }
         .navigationTitle("Series")
         .searchable(text: $search, prompt: "Search series")
-        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: false) }
+        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: false, showTitles: $showTitles) }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
 }
 
 struct SeriesCell: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.coverStyle) private var style
+    @Environment(\.showTitles) private var showTitles
     let group: SeriesGroup
 
     var body: some View {
         let cover = group.books.first
         VStack(alignment: .leading, spacing: 6) {
-            ZStack {
-                // A hint of the volumes behind the first one.
-                if group.books.count > 1 {
-                    RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
-                        .fill(Color(.systemGray3))
-                        .aspectRatio(style.shape.aspect, contentMode: .fit)
-                        .scaleEffect(0.92)
-                        .offset(y: -10)
-                }
-                CoverImage(url: cover.flatMap { model.thumbnails[$0.id] }, title: group.name,
-                           revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0)
+            CoverImage(url: cover.flatMap { model.thumbnails[$0.id] }, title: group.name,
+                       revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0)
+                // The volumes behind the first one, peeking out above it.
+                .background { StackCards(count: min(group.books.count - 1, 2)) }
+                // Every tile keeps room for the stack, one book or many, so all the covers in a
+                // row share a bottom edge and their names line up.
+                .padding(.top, StackCards.peek)
+                .onAppear { if let cover { model.requestCover(for: cover, urgent: true) } }
+            if showTitles {
+                Text(group.name)
+                    .font(.footnote.weight(.medium))
+                    .lineLimit(2, reservesSpace: true)
+                Text(group.books.count == 1 ? "1 book" : "\(group.books.count) books")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
-            .padding(.top, group.books.count > 1 ? 10 : 0)
-            .onAppear { if let cover { model.requestCover(for: cover, urgent: true) } }
-            Text(group.name)
-                .font(.footnote.weight(.medium))
-                .lineLimit(2, reservesSpace: true)
-            Text(group.books.count == 1 ? "1 book" : "\(group.books.count) books")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
+        .contentShape(Rectangle())
     }
 }
 
 struct BookCell: View {
     @Environment(AppModel.self) private var model
     @Environment(\.coverInfo) private var info
+    @Environment(\.showTitles) private var showTitles
+    @Environment(\.coverStyle) private var style
+    @Environment(\.libraryIconSize) private var iconSize
     let book: Book
     /// Set in Select mode: whether the book is picked. A tap then picks or unpicks it.
     var isSelected: Bool?
@@ -523,32 +565,24 @@ struct BookCell: View {
                 Task { await model.activate(book) }
             }
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
+                iconRow
                 CoverImage(url: model.thumbnails[book.id], title: book.title, revision: model.coverRevision[book.id] ?? 0)
                     .overlay {
                         if info.isOn {
-                            CoverInfoOverlay(book: book, status: overlayStatus)
+                            CoverInfoOverlay(book: book)
                         }
                     }
                     .overlay(alignment: .topTrailing) { if !info.isOn { badge } }
-                    .overlay(alignment: .bottom) { if !info.isOn { progressBar } }
                     .overlay(alignment: .topLeading) { selectionMark }
-                if !info.isOn {
+                if showTitles && !info.isOn {
                     // Every cell keeps room for two title lines, so all rows are the same height and the
                     // scroll bar does not jump as rows of different heights come into view.
                     Text(book.title)
                         .font(.footnote.weight(.medium))
                         .lineLimit(2, reservesSpace: true)
                         .foregroundStyle(.primary)
-                    HStack(spacing: 4) {
-                        if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
-                        if book.hasBookmarks { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
-                        if !book.tags.isEmpty { Image(systemName: "tag.fill").foregroundStyle(.teal) }
-                        Text(statusText).foregroundStyle(.secondary)
-                    }
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .imageScale(.small)
+                        .padding(.top, 1)
                 }
             }
             // The whole cell is the tap target, and nothing outside it.
@@ -600,29 +634,63 @@ struct BookCell: View {
         }
     }
 
-    private var downloadStatus: String? {
-        if model.downloading.contains(book.id) { return "Downloading…" }
-        if model.queuedDownloads.contains(book.id) { return "Waiting to Download" }
-        return nil
+    /// Favorite, bookmark, tags and how far in, in a row above the cover starting at the left
+    /// (#57). It keeps its height with nothing in it, so every cell is the same height.
+    private var iconRow: some View {
+        // Each icon keeps its own slot, shown or not, so a heart, bookmark or tag sits in the
+        // same place on every book; the percentage keeps to the right edge.
+        HStack(spacing: iconSize * 0.4) {
+            slot("heart.fill", .pink, book.favorite)
+            slot("bookmark.fill", .orange, book.hasBookmarks)
+            slot("tag.fill", .teal, !book.tags.isEmpty)
+            Spacer(minLength: 2)
+            if book.status == .read {
+                // Finished: a solid tab standing on the cover's top edge, where the percentage
+                // would be. An overlay, so the row keeps the same height as every other book's.
+                Text(verbatim: "72%")
+                    .monospacedDigit()
+                    .fixedSize()
+                    .hidden()
+                    .overlay(alignment: .bottomTrailing) { readTab }
+                    .accessibilityElement()
+                    .accessibilityLabel("Read")
+            } else if book.status == .reading, let fraction = book.progressFraction {
+                Text("\(Int(fraction * 100))%")
+                    .monospacedDigit()
+                    .fixedSize() // never cut short to "…"
+                    .foregroundStyle(.secondary)
+            }
+        }
+        // Sized with the covers (see `LibraryIconSize`), so the row fits at every zoom level.
+        .font(.system(size: iconSize, weight: .semibold))
+        .imageScale(.medium)
+        .lineLimit(1)
+        // Kept in from the ends so nothing sits over the cover's rounded corners.
+        .padding(.horizontal, max(style.cornerRadius, 3) + iconSize * 0.15)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var statusText: String {
-        if let downloadStatus { return downloadStatus }
-        switch book.status {
-        case .read: return "Read"
-        case .reading: return book.progressFraction.map { "\(Int($0 * 100))%" } ?? "Reading"
-        case .unread: return book.format.displayName
-        }
+    /// The Read mark: inverse check on a primary tab with rounded top corners, reaching down
+    /// to touch the cover; the row's padding keeps it clear of the cover's rounded corner.
+    private var readTab: some View {
+        UnevenRoundedRectangle(topLeadingRadius: 6, topTrailingRadius: 6, style: .continuous)
+            .fill(Color.primary)
+            .overlay {
+                Image(systemName: "checkmark")
+                    .font(.system(size: iconSize, weight: .heavy))
+                    .foregroundStyle(Color.onAccent)
+                    .padding(.top, 1)
+            }
+            .frame(width: iconSize * 2.6, height: iconSize * 1.75)
+            .offset(y: 5) // 5 = the gap between row and cover
+            .allowsHitTesting(false)
     }
 
-    /// The overlay shows the format itself when asked to, so it leaves "unread" out.
-    private var overlayStatus: String? {
-        if let downloadStatus { return downloadStatus }
-        switch book.status {
-        case .read: return nil // the band shows a checkmark
-        case .reading: return book.progressFraction.map { "\(Int($0 * 100))%" } ?? "Reading"
-        case .unread: return nil
-        }
+    private func slot(_ symbol: String, _ color: Color, _ shown: Bool) -> some View {
+        Image(systemName: symbol)
+            .foregroundStyle(color)
+            .opacity(shown ? 1 : 0)
+            .accessibilityHidden(!shown)
     }
 
     @ViewBuilder private var selectionMark: some View {
@@ -652,22 +720,8 @@ struct BookCell: View {
                 .padding(6)
                 .glassEffect(in: .circle)
                 .padding(6)
-        } else if book.status == .read {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.body)
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, .green)
-                .padding(6)
         }
-    }
-
-    @ViewBuilder private var progressBar: some View {
-        if book.status == .reading, let fraction = book.progressFraction {
-            // Full primary on a faded track, over a soft inverse backing so it reads on any cover.
-            MonoProgressBar(fraction: fraction, height: 4)
-                .background(Capsule().fill(Color.onAccent.opacity(0.6)))
-                .padding(8)
-        }
+        // A read book's check is in the row above the cover.
     }
 }
 
