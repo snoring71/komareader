@@ -259,7 +259,7 @@ struct LibraryGridView: View {
         } message: { kind in
             Text(kind.message)
         }
-        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
 
     private var selectionTitle: String? {
@@ -335,9 +335,12 @@ struct LibraryToolbar: ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             // Tap to show or hide the info on the covers; hold to choose what it shows.
             Menu {
+                // Menus draw toggles as checkmark items; keep the app's switch style out of them.
                 Toggle("Show Info on Covers", systemImage: "info.circle", isOn: coverInfo.$isOn)
+                    .toggleStyle(.automatic)
                 Section("Show") {
                     CoverInfoFieldControls()
+                        .toggleStyle(.automatic)
                 }
             } label: {
                 Label("Cover Info", systemImage: coverInfo.isOn ? "info.circle.fill" : "info.circle")
@@ -458,7 +461,7 @@ struct SeriesGridView: View {
         .navigationTitle("Series")
         .searchable(text: $search, prompt: "Search series")
         .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: false) }
-        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
 }
 
@@ -613,10 +616,16 @@ struct BookCell: View {
 
     @ViewBuilder private var selectionMark: some View {
         if let isSelected {
+            // Selected: a primary circle with an inverse checkmark and a thin inverse outline, so
+            // it shows on any cover in light and dark mode (#55).
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 .font(.title3)
                 .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.black.opacity(0.25)))
+                .foregroundStyle(isSelected ? Color.onAccent : Color.white,
+                                 isSelected ? Color.primary : Color.black.opacity(0.25))
+                .background {
+                    if isSelected { Circle().stroke(Color.onAccent, lineWidth: 1.5).padding(1) }
+                }
                 .shadow(color: .black.opacity(0.35), radius: 2)
                 .padding(6)
                 .allowsHitTesting(false)
@@ -643,14 +652,10 @@ struct BookCell: View {
 
     @ViewBuilder private var progressBar: some View {
         if book.status == .reading, let fraction = book.progressFraction {
-            GeometryReader { geo in
-                Capsule().fill(.black.opacity(0.35))
-                    .overlay(alignment: .leading) {
-                        Capsule().fill(.tint).frame(width: geo.size.width * fraction)
-                    }
-            }
-            .frame(height: 4)
-            .padding(8)
+            // Full primary on a faded track, over a soft inverse backing so it reads on any cover.
+            MonoProgressBar(fraction: fraction, height: 4)
+                .background(Capsule().fill(Color.onAccent.opacity(0.6)))
+                .padding(8)
         }
     }
 }

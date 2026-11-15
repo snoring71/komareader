@@ -159,7 +159,8 @@ struct CoverInfoOverlay: View {
                     GeometryReader { geo in
                         Capsule().fill(.white.opacity(0.3))
                             .overlay(alignment: .leading) {
-                                Capsule().fill(.tint).frame(width: geo.size.width * reading)
+                                // The band is always dark, so full white on a faded white track.
+                                Capsule().fill(.white).frame(width: geo.size.width * reading)
                             }
                     }
                     .frame(height: 3)

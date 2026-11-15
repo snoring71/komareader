@@ -7,6 +7,9 @@ struct RootView: View {
     @AppStorage(SettingsKeys.coverShadowDirection) private var shadowDirection: CoverShadowDirection = .around
     @AppStorage(SettingsKeys.roundedCorners) private var roundedCorners = true
     var coverInfo = CoverInfoSettings()
+    /// Whether the sidebar is out over the library. The toolbar's sidebar button and the
+    /// swipes both change it.
+    @State private var sidebarShown = false
 
     var body: some View {
         @Bindable var model = model
@@ -17,9 +20,8 @@ struct RootView: View {
             case .needsFolder:
                 WelcomeView()
             case .ready:
-                NavigationSplitView {
-                    SidebarView()
-                } detail: {
+                // The sidebar floats over the library instead of sitting beside it (#56).
+                SidebarOverlay(isShown: $sidebarShown, edgeSwipeEnabled: model.libraryPath.isEmpty) {
                     NavigationStack(path: $model.libraryPath) {
                         Group {
                             switch model.selection ?? .all {
@@ -28,19 +30,39 @@ struct RootView: View {
                             case let item: LibraryGridView(item: item)
                             }
                         }
-                        .navigationDestination(for: SidebarItem.self) { LibraryGridView(item: $0) }
+                        .toolbar { SidebarButton() }
+                        .navigationDestination(for: SidebarItem.self) {
+                            LibraryGridView(item: $0).toolbar { SidebarButton() }
+                        }
                     }
                     // Start from the top of the stack when another sidebar item is picked.
                     .id(model.selection)
                     .overlay(alignment: .bottomTrailing) { ResumeButton() }
+                } sidebar: {
+                    SidebarView()
+                }
+                .environment(\.sidebarToggle, SidebarToggleAction(
+                    toggle: { withAnimation(.snappy(duration: 0.28)) { sidebarShown.toggle() } },
+                    close: { withAnimation(.snappy(duration: 0.28)) { sidebarShown = false } }
+                ))
+                // Picking something in the sidebar puts it away: a short pause so the new
+                // highlight shows first, then a slower slide out.
+                .onChange(of: model.selection) {
+                    guard sidebarShown else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(250))
+                        withAnimation(.easeInOut(duration: 0.45)) { sidebarShown = false }
+                    }
                 }
             }
         }
         .fullScreenCover(item: $model.openBook) { open in
             ReaderScreen(book: open.book, source: open.source, options: open.options, defaults: model.readerDefaults, handOff: open.handOff, intro: open.intro)
+                .toggleStyle(MonoToggleStyle())
         }
         .sheet(item: $model.bookInfo) { ref in
             BookInfoView(bookId: ref.id)
+                .toggleStyle(MonoToggleStyle())
         }
         .sheet(item: $model.tagEditor) { ref in
             TagEditorView(bookId: ref.id)
@@ -72,9 +94,12 @@ struct WelcomeView: View {
         ContentUnavailableView {
             Label("Choose Your Comics Folder", systemImage: "books.vertical")
         } description: {
-            Text("Pick the iCloud Drive folder that holds your comics, such as iCloud Drive › Booklover. Books stay where they are; nothing in the folder is changed.")
+            Text("Pick the iCloud Drive folder that holds your comics, such as iCloud Drive › Comics. Books stay where they are; nothing in the folder is changed.")
         } actions: {
-            Button("Choose Folder…") { showPicker = true }
+            Button { showPicker = true } label: {
+                // Inverse text on the black or white accent glass (#55).
+                Text("Choose Folder…").foregroundStyle(Color.onAccent)
+            }
                 .buttonStyle(.glassProminent)
                 .controlSize(.large)
             Button("Use the Comic Reader Folder") { Task { await model.useAppFolder() } }
@@ -115,6 +140,8 @@ struct ResumeButton: View {
                 .frame(maxWidth: 220, alignment: .leading)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
+                // Inverse text on the black or white accent glass (#55).
+                .foregroundStyle(Color.onAccent)
             } primaryAction: {
                 Task { await model.open(last) }
             }

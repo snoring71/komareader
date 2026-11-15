@@ -99,6 +99,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Black in light mode, white in dark mode: no blue accent anywhere (#55).
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
   # Quick Look thumbnail extension: real covers for comic archives in the Files app.
   ComicThumbnails:
