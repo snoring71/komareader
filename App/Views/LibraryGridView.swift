@@ -117,6 +117,7 @@ struct LibraryGridView: View {
                 if !continueReading.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Continue Reading").font(.title3.bold())
+                            .padding(.horizontal)
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 16) {
                                 ForEach(continueReading.prefix(12)) { book in
@@ -134,9 +135,13 @@ struct LibraryGridView: View {
                             // the last thing in the cell, and the scroll view clipped its bottom.
                             .padding(.bottom, 14)
                         }
+                        // Full width, with the usual 16 pt inset as a content margin, so the fade
+                        // below can reach the screen edge where the letter index sits (#65).
+                        .contentMargins(.leading, 16, for: .scrollContent)
+                        .contentMargins(.trailing, letters == nil ? 16 : EdgeFade.trailingRoom, for: .scrollContent)
                         .scrollClipDisabled()
+                        .modifier(EdgeFade(isOn: letters != nil))
                     }
-                    .padding(.horizontal)
                     .padding(.top, 8)
 
                     // Where the full list starts (#58). Plain views above the grid, not a
@@ -417,6 +422,37 @@ struct LibraryToolbar: ToolbarContent {
         // Top bar, not `.status`: a status item sits in the bottom bar and pushes the Resume button around.
         if model.isScanning {
             ToolbarItem(placement: .topBarTrailing) { ProgressView() }
+        }
+    }
+}
+
+/// Fades the trailing edge of Continue Reading so covers dissolve before they reach the letter
+/// index and its letters stay readable (#65). A mask rather than a painted overlay, so covers and
+/// their shadows fade to whatever is behind them, in light and dark mode alike. The mask stays on
+/// when the index is hidden (just fully opaque), so turning it on or off keeps the row's scroll spot.
+struct EdgeFade: ViewModifier {
+    let isOn: Bool
+
+    /// Fully clear under the index: its 20 pt strip plus 2 pt to the screen edge.
+    static let clearWidth: CGFloat = 22
+    /// The soft part, just inside the index.
+    static let fadeWidth: CGFloat = 40
+    /// Trailing content margin, so the last cover scrolls fully clear of the fade.
+    static let trailingRoom: CGFloat = clearWidth + fadeWidth + 8
+
+    func body(content: Content) -> some View {
+        content.mask {
+            HStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: isOn ? Self.fadeWidth : 0)
+                Color.clear
+                    .frame(width: isOn ? Self.clearWidth : 0)
+            }
+            // Reach past the row above and below, so the icon row and the cover shadows that
+            // scrollClipDisabled() lets through are not cut off; and past the leading edge.
+            .padding(.vertical, -24)
+            .padding(.leading, -24)
         }
     }
 }
