@@ -25,6 +25,10 @@ struct ReaderScreen: View {
     @State private var closing = false
     /// A newer position from another device, until the reader jumps there or says no.
     @State private var handOff: AppModel.HandOff?
+    /// A Read book was turned off its last page: asks whether to start reading it again.
+    @State private var askingRestart = false
+    /// Asked once per opening, so a No isn't asked again on every page.
+    @State private var restartAsked = false
     /// Shows "Copied" on the Select Text bar for a moment after Copy All.
     @State private var copiedText = false
 
@@ -69,6 +73,11 @@ struct ReaderScreen: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .zIndex(3)
                 }
+                if askingRestart {
+                    restartBanner
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(5)
+                }
                 if let handOff {
                     handOffBanner(handOff)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -84,6 +93,7 @@ struct ReaderScreen: View {
         .presentationBackground(.clear)
         .animation(.easeInOut(duration: 0.25), value: state.showChrome)
         .animation(.easeInOut(duration: 0.25), value: handOff)
+        .animation(.easeInOut(duration: 0.25), value: askingRestart)
         .animation(.easeInOut(duration: 0.2), value: state.selectingText)
         .animation(.easeInOut(duration: 0.2), value: state.textStatus)
         .sheet(isPresented: $showInfo) {
@@ -103,6 +113,8 @@ struct ReaderScreen: View {
             let bookId = state.book.id, count = state.pageCount
             let appModel = model
             let handOffPrompt = $handOff
+            let restartPrompt = $askingRestart, restartWasAsked = $restartAsked
+            let wasFinished = state.book.finished, readerState = state
             let coverShown = $showingCover
             if let cover {
                 let style = coverStyle, readerState = state
@@ -127,6 +139,11 @@ struct ReaderScreen: View {
                 appModel?.saveProgress(bookId: bookId, page: page, pageCount: count, finished: finished)
                 // Turning the page answers the hand-off question too.
                 if handOffPrompt.wrappedValue != nil { handOffPrompt.wrappedValue = nil }
+                // A Read book, turned to any page but the last: ask whether to read it again.
+                if wasFinished, !restartWasAsked.wrappedValue, !readerState.currentPages.contains(count - 1) {
+                    restartWasAsked.wrappedValue = true
+                    restartPrompt.wrappedValue = true
+                }
                 // Moving to another page (the scrubber, a hand-off jump) moves past the cover
                 // too. Only the reader's own moves count: the layout settling as the book opens
                 // (page sizes read, the screen's orientation) also renumbers the screens, and
@@ -212,6 +229,39 @@ struct ReaderScreen: View {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) { model.openBook = nil }
+        }
+    }
+
+    /// Asks whether a Read book is being read again. Yes makes it Reading from this page
+    /// (reaching the last page makes it Read again); No leaves it Read.
+    private var restartBanner: some View {
+        VStack {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.body.weight(.semibold))
+                Text("Reset reading progress?")
+                    .font(.subheadline.weight(.medium))
+                Button {
+                    askingRestart = false
+                    model.saveProgress(bookId: state.book.id, page: state.currentPage, pageCount: state.pageCount,
+                                       finished: false, keepFinished: false)
+                } label: {
+                    // Inverse text on the black or white accent glass (#55).
+                    Text("Yes").foregroundStyle(Color.onAccent)
+                }
+                .buttonStyle(.glassProminent)
+                .accessibilityIdentifier("restart-yes")
+                Button("No, Keep as Read") { askingRestart = false }
+                    .buttonStyle(.glass)
+                    .accessibilityIdentifier("restart-no")
+            }
+            .padding(.leading, 18)
+            .padding(.trailing, 8)
+            .padding(.vertical, 8)
+            .glassEffect(in: .capsule)
+            // Below the menu bar while the controls show.
+            .padding(.top, state.showChrome ? 140 : 70)
+            Spacer()
         }
     }
 
