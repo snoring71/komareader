@@ -185,8 +185,6 @@ struct LibraryGridView: View {
         } message: { kind in
             Text(kind.message)
         }
-        // Leaving the screen (another sidebar item) ends Select mode.
-        .onDisappear { selection = nil }
         .sheet(isPresented: $showSettings) { SettingsView() }
     }
 

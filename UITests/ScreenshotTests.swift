@@ -183,6 +183,9 @@ final class ScreenshotTests: XCTestCase {
         select.tap()
         let done = app.buttons["selection-done"].firstMatch
         XCTAssertTrue(done.waitForExistence(timeout: 5), "Select mode did not start")
+        sleep(1)
+        save(app, "17a-library-select-mode")
+        XCTAssertTrue(done.exists, "Select mode ended by itself")
         book.tap()
         let other = app.buttons["book-Starfall 1"].firstMatch
         if other.waitForExistence(timeout: 2) { other.tap() }
