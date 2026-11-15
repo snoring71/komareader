@@ -28,6 +28,8 @@ struct CoverIntroView: View {
     let onToggleChrome: () -> Void
     /// Swiped up: close the book.
     let onClose: () -> Void
+    /// For UI tests: the reader's cover, or the one in the pager before the first page.
+    var identifier = "reader-cover-intro"
 
     @Environment(\.coverStyle) private var coverStyle
     @State private var fullSize: UIImage?
@@ -54,7 +56,7 @@ struct CoverIntroView: View {
         .accessibilityLabel("Cover")
         .accessibilityHint(waits ? "Swipe to start reading" : "")
         .accessibilityAction(named: "Start Reading") { onForward() }
-        .accessibilityIdentifier("reader-cover-intro")
+        .accessibilityIdentifier(identifier)
         .task { await loadFullSize() }
     }
 

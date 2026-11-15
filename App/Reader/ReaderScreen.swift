@@ -108,7 +108,7 @@ struct ReaderScreen: View {
                 state.makeCoverPage = { [weak readerState] in
                     let page = UIHostingController(rootView: AnyView(
                         CoverIntroView(intro: cover, waits: false, rightToLeft: readerState?.rightToLeft ?? false,
-                                       onForward: {}, onToggleChrome: {}, onClose: {})
+                                       onForward: {}, onToggleChrome: {}, onClose: {}, identifier: "reader-cover-page")
                             .environment(\.coverStyle, style)
                     ))
                     page.safeAreaRegions = []
