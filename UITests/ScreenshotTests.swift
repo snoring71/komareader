@@ -250,7 +250,7 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(info.waitForExistence(timeout: 5), "No Cover Info button")
         info.tap()
         sleep(2)
-        save(app, "16-library-cover-info")
+        save(app, "20-library-cover-info")
         info.tap()
         sleep(1)
 
@@ -261,13 +261,13 @@ final class ScreenshotTests: XCTestCase {
         let done = app.buttons["selection-done"].firstMatch
         XCTAssertTrue(done.waitForExistence(timeout: 5), "Select mode did not start")
         sleep(1)
-        save(app, "17a-library-select-mode")
+        save(app, "21-library-select-mode")
         XCTAssertTrue(done.exists, "Select mode ended by itself")
         book.tap()
         let other = app.buttons["book-Starfall 1"].firstMatch
         if other.waitForExistence(timeout: 2) { other.tap() }
         sleep(1)
-        save(app, "17-library-select")
+        save(app, "22-library-select")
         XCTAssertFalse(app.otherElements["reader-page"].firstMatch.exists, "A tap in Select mode opened the book")
 
         let actions = app.buttons["selection-actions"].firstMatch
@@ -277,12 +277,12 @@ final class ScreenshotTests: XCTestCase {
         let favorite = app.buttons.matching(NSPredicate(format: "label IN %@", ["Favorite", "Remove from Favorites"])).firstMatch
         if favorite.waitForExistence(timeout: 3) {
             sleep(1)
-            save(app, "18-library-select-actions")
+            save(app, "23-library-select-actions")
             favorite.tap()
         }
         XCTAssertTrue(done.waitForNonExistence(timeout: 5), "Select mode did not end after an action")
         sleep(1)
-        save(app, "19-library-after-select")
+        save(app, "24-library-after-select")
     }
 
     private func save(_ app: XCUIApplication, _ name: String) {
