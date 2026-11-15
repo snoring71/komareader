@@ -95,14 +95,14 @@ struct CoverInfoFieldControls: View {
 }
 
 /// The info drawn over a cover, on dark see-through bands so white text reads on light and
-/// dark covers alike: the details (status, pages, size, format) along the top, where they
-/// have the whole width, and the name, location and progress along the bottom.
+/// dark covers alike: the details (pages, size, format) along the top, where they have the
+/// whole width, and the name and location along the bottom. Favorite, bookmark and progress
+/// are in the row above the cover (#57), so the bands leave them out.
 struct CoverInfoOverlay: View {
     @Environment(AppModel.self) private var model
     @Environment(\.coverInfo) private var info
     @Environment(\.coverStyle) private var style
     let book: Book
-    let status: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -118,10 +118,8 @@ struct CoverInfoOverlay: View {
 
     @ViewBuilder private var topBand: some View {
         let details = detailParts
-        if !details.isEmpty || book.favorite || book.bookmarked || stateIcon != nil {
+        if !details.isEmpty || stateIcon != nil {
             HStack(alignment: .top, spacing: 4) {
-                if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
-                if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
                 // Wraps onto a second line rather than running off the side of a narrow cover.
                 Text(details.joined(separator: " · "))
                     .lineLimit(2)
@@ -140,8 +138,7 @@ struct CoverInfoOverlay: View {
 
     @ViewBuilder private var bottomBand: some View {
         let name = info.name.text(for: book)
-        let reading = book.status == .reading ? book.progressFraction : nil
-        if name != nil || info.location || reading != nil {
+        if name != nil || info.location {
             VStack(alignment: .leading, spacing: 2) {
                 if let name {
                     Text(name)
@@ -154,16 +151,6 @@ struct CoverInfoOverlay: View {
                         .lineLimit(1)
                         .truncationMode(.head)
                         .opacity(0.85)
-                }
-                if let reading {
-                    GeometryReader { geo in
-                        Capsule().fill(.white.opacity(0.3))
-                            .overlay(alignment: .leading) {
-                                Capsule().fill(.tint).frame(width: geo.size.width * reading)
-                            }
-                    }
-                    .frame(height: 3)
-                    .padding(.top, 2)
                 }
             }
             .padding(.horizontal, 7)
@@ -189,7 +176,6 @@ struct CoverInfoOverlay: View {
 
     private var detailParts: [String] {
         var parts: [String] = []
-        if let status { parts.append(status) }
         if info.pages, let pages = book.pageCount { parts.append(pages == 1 ? "1 page" : "\(pages) pages") }
         if info.size, let size = book.size { parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) }
         if info.format { parts.append(book.format.displayName) }

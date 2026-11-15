@@ -11,6 +11,7 @@ struct LibraryGridView: View {
     @State private var showSettings = false
     @AppStorage("sortOrder") private var sort: SortOrder = .title
     @AppStorage("coverSize") private var coverSize: Double = 150
+    @AppStorage(TitleGrid.books.key) private var showTitles = true
     /// The size while a pinch is in progress; saved to `coverSize` when it ends.
     @State private var pinchSize: Double?
     @State private var pinchStart: Double?
@@ -95,6 +96,8 @@ struct LibraryGridView: View {
         let continueReading = item == .all && search.isEmpty ? continueReading : []
         ScrollViewReader { proxy in
             ScrollView {
+              // Explicit spacing, so the gaps below are exactly what they say.
+              VStack(alignment: .leading, spacing: 0) {
                 if !continueReading.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Continue Reading").font(.title3.bold())
@@ -113,6 +116,19 @@ struct LibraryGridView: View {
                     }
                     .padding(.horizontal)
                     .padding(.top, 8)
+
+                    // Where the full list starts (#58). Plain views above the grid, not a
+                    // section in it, so the grid stays one flat run of equal cells.
+                    VStack(alignment: .leading, spacing: 0) {
+                        SoftDivider()
+                            .padding(.top, 26)
+                        Text("All Books")
+                            .font(.title3.bold())
+                            .accessibilityAddTraits(.isHeader)
+                            .padding(.top, 22)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
                 }
 
                 LazyVGrid(columns: columns, spacing: 22) {
@@ -123,9 +139,14 @@ struct LibraryGridView: View {
                     }
                 }
                 .scrollTargetLayout()
-                .padding()
+                .padding(.horizontal)
+                .padding(.bottom)
+                // Under the All Books heading, the same 10 pt gap as under Continue Reading's.
+                .padding(.top, continueReading.isEmpty ? 16 : 10)
                 .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index
+              }
             }
+            .environment(\.showTitles, showTitles)
             .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.5) { ids in
                 scrollSpot.firstVisible = ids.first
             }
@@ -134,11 +155,8 @@ struct LibraryGridView: View {
             } action: { _, down in
                 scrollSpot.scrolledDown = down
             }
-            .onChange(of: coverInfo.isOn) {
-                // At the top, Continue Reading and the first rows stay put on their own.
-                guard scrollSpot.scrolledDown, let id = scrollSpot.firstVisible else { return }
-                Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
-            }
+            .onChange(of: coverInfo.isOn) { keepPlace(proxy) }
+            .onChange(of: showTitles) { keepPlace(proxy) }
             .overlay(alignment: .trailing) {
                 if let letters {
                     LetterIndex(keys: letters.map(\.key)) { key in
@@ -177,7 +195,7 @@ struct LibraryGridView: View {
             if let selection {
                 SelectionToolbar(item: item, selection: selection, visible: books.map(\.id), setSelection: { self.selection = $0 }, confirm: $selectionConfirm)
             } else {
-                LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: !isSeriesList) {
+                LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: !isSeriesList, showTitles: $showTitles) {
                     selection = []
                 }
                 if item == .missing, !books.isEmpty {
@@ -214,6 +232,14 @@ struct LibraryGridView: View {
             Text(kind.message)
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
+    }
+
+    /// After a change to the height of every cell (Cover Info, Show Titles), scrolls back to
+    /// the book that was first on screen. At the top, Continue Reading and the first rows stay
+    /// put on their own.
+    private func keepPlace(_ proxy: ScrollViewProxy) {
+        guard scrollSpot.scrolledDown, let id = scrollSpot.firstVisible else { return }
+        Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
     }
 
     private var selectionTitle: String? {
@@ -254,6 +280,8 @@ struct LibraryToolbar: ToolbarContent {
     @Binding var coverSize: Double
     @Binding var showSettings: Bool
     var showsSort = true
+    /// The grid's Show Titles setting; nil where there is none.
+    var showTitles: Binding<Bool>?
     /// Starts Select mode; nil where books cannot be selected.
     var onSelect: (() -> Void)?
     var coverInfo = CoverInfoSettings()
@@ -288,6 +316,12 @@ struct LibraryToolbar: ToolbarContent {
                 Section("Cover Size (or pinch the grid)") {
                     Button("Larger", systemImage: "plus.magnifyingglass") { coverSize = min(LibraryGridView.sizeRange.upperBound, coverSize + 30) }
                     Button("Smaller", systemImage: "minus.magnifyingglass") { coverSize = max(LibraryGridView.sizeRange.lowerBound, coverSize - 30) }
+                }
+                if let showTitles {
+                    Section {
+                        Toggle("Show Titles", systemImage: "textformat", isOn: showTitles)
+                            .accessibilityIdentifier("library-show-titles")
+                    }
                 }
                 Section {
                     Button("Rescan Library", systemImage: "arrow.clockwise") { Task { await model.rescan() } }
@@ -358,6 +392,7 @@ struct SeriesGridView: View {
     @State private var showSettings = false
     @AppStorage("sortOrder") private var sort: LibraryGridView.SortOrder = .title
     @AppStorage("coverSize") private var coverSize: Double = 150
+    @AppStorage(TitleGrid.series.key) private var showTitles = true
 
     var body: some View {
         let groups = model.catalog.series.filter { search.isEmpty || $0.name.localizedStandardContains(search) }
@@ -373,6 +408,7 @@ struct SeriesGridView: View {
             }
             .padding()
         }
+        .environment(\.showTitles, showTitles)
         .overlay {
             if groups.isEmpty && !model.isScanning {
                 if search.isEmpty {
@@ -384,46 +420,44 @@ struct SeriesGridView: View {
         }
         .navigationTitle("Series")
         .searchable(text: $search, prompt: "Search series")
-        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: false) }
+        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: false, showTitles: $showTitles) }
         .sheet(isPresented: $showSettings) { SettingsView() }
     }
 }
 
 struct SeriesCell: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.coverStyle) private var style
+    @Environment(\.showTitles) private var showTitles
     let group: SeriesGroup
 
     var body: some View {
         let cover = group.books.first
         VStack(alignment: .leading, spacing: 6) {
-            ZStack {
-                // A hint of the volumes behind the first one.
-                if group.books.count > 1 {
-                    RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
-                        .fill(Color(.systemGray3))
-                        .aspectRatio(style.shape.aspect, contentMode: .fit)
-                        .scaleEffect(0.92)
-                        .offset(y: -10)
-                }
-                CoverImage(url: cover.flatMap { model.thumbnails[$0.id] }, title: group.name,
-                           revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0)
+            CoverImage(url: cover.flatMap { model.thumbnails[$0.id] }, title: group.name,
+                       revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0)
+                // The volumes behind the first one, peeking out above it.
+                .background { StackCards(count: min(group.books.count - 1, 2)) }
+                // Every tile keeps room for the stack, one book or many, so all the covers in a
+                // row share a bottom edge and their names line up.
+                .padding(.top, StackCards.peek)
+                .onAppear { if let cover { model.requestCover(for: cover, urgent: true) } }
+            if showTitles {
+                Text(group.name)
+                    .font(.footnote.weight(.medium))
+                    .lineLimit(2, reservesSpace: true)
+                Text(group.books.count == 1 ? "1 book" : "\(group.books.count) books")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
-            .padding(.top, group.books.count > 1 ? 10 : 0)
-            .onAppear { if let cover { model.requestCover(for: cover, urgent: true) } }
-            Text(group.name)
-                .font(.footnote.weight(.medium))
-                .lineLimit(2, reservesSpace: true)
-            Text(group.books.count == 1 ? "1 book" : "\(group.books.count) books")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
+        .contentShape(Rectangle())
     }
 }
 
 struct BookCell: View {
     @Environment(AppModel.self) private var model
     @Environment(\.coverInfo) private var info
+    @Environment(\.showTitles) private var showTitles
     let book: Book
     /// Set in Select mode: whether the book is picked. A tap then picks or unpicks it.
     var isSelected: Bool?
@@ -438,31 +472,24 @@ struct BookCell: View {
                 Task { await model.activate(book) }
             }
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
+                iconRow
                 CoverImage(url: model.thumbnails[book.id], title: book.title, revision: model.coverRevision[book.id] ?? 0)
                     .overlay {
                         if info.isOn {
-                            CoverInfoOverlay(book: book, status: overlayStatus)
+                            CoverInfoOverlay(book: book)
                         }
                     }
                     .overlay(alignment: .topTrailing) { if !info.isOn { badge } }
-                    .overlay(alignment: .bottom) { if !info.isOn { progressBar } }
                     .overlay(alignment: .topLeading) { selectionMark }
-                if !info.isOn {
+                if showTitles && !info.isOn {
                     // Every cell keeps room for two title lines, so all rows are the same height and the
                     // scroll bar does not jump as rows of different heights come into view.
                     Text(book.title)
                         .font(.footnote.weight(.medium))
                         .lineLimit(2, reservesSpace: true)
                         .foregroundStyle(.primary)
-                    HStack(spacing: 4) {
-                        if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
-                        if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
-                        Text(statusText).foregroundStyle(.secondary)
-                    }
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .imageScale(.small)
+                        .padding(.top, 1)
                 }
             }
             // The whole cell is the tap target, and nothing outside it.
@@ -511,29 +538,26 @@ struct BookCell: View {
         }
     }
 
-    private var downloadStatus: String? {
-        if model.downloading.contains(book.id) { return "Downloading…" }
-        if model.queuedDownloads.contains(book.id) { return "Waiting to Download" }
-        return nil
-    }
-
-    private var statusText: String {
-        if let downloadStatus { return downloadStatus }
-        switch book.status {
-        case .read: return "Read"
-        case .reading: return book.progressFraction.map { "\(Int($0 * 100))%" } ?? "Reading"
-        case .unread: return book.format.displayName
+    /// Favorite, bookmark, tags and how far in, in a row above the cover starting at the left
+    /// (#57). It keeps its height with nothing in it, so every cell is the same height.
+    private var iconRow: some View {
+        ZStack(alignment: .leading) {
+            Text(verbatim: " ").hidden()
+            HStack(spacing: 5) {
+                if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
+                if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
+                // Tags (#46) go here, after the bookmark, once they land.
+                if book.status == .reading, let fraction = book.progressFraction {
+                    Text("\(Int(fraction * 100))%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
-    }
-
-    /// The overlay shows the format itself when asked to, so it leaves "unread" out.
-    private var overlayStatus: String? {
-        if let downloadStatus { return downloadStatus }
-        switch book.status {
-        case .read: return nil // the band shows a checkmark
-        case .reading: return book.progressFraction.map { "\(Int($0 * 100))%" } ?? "Reading"
-        case .unread: return nil
-        }
+        .font(.caption2.weight(.medium))
+        .imageScale(.small)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private var selectionMark: some View {
@@ -563,19 +587,6 @@ struct BookCell: View {
                 .symbolRenderingMode(.palette)
                 .foregroundStyle(.white, .green)
                 .padding(6)
-        }
-    }
-
-    @ViewBuilder private var progressBar: some View {
-        if book.status == .reading, let fraction = book.progressFraction {
-            GeometryReader { geo in
-                Capsule().fill(.black.opacity(0.35))
-                    .overlay(alignment: .leading) {
-                        Capsule().fill(.tint).frame(width: geo.size.width * fraction)
-                    }
-            }
-            .frame(height: 4)
-            .padding(8)
         }
     }
 }
