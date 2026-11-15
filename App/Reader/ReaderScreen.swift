@@ -101,6 +101,7 @@ struct ReaderScreen: View {
             let bookId = state.book.id, count = state.pageCount
             let appModel = model
             let handOffPrompt = $handOff
+            let coverShown = $showingCover
             state.onOptionsChange = { [weak appModel] options in
                 appModel?.saveReaderOptions(bookId: bookId, options: options)
             }
@@ -108,6 +109,13 @@ struct ReaderScreen: View {
                 appModel?.saveProgress(bookId: bookId, page: page, pageCount: count, finished: finished)
                 // Turning the page answers the hand-off question too.
                 if handOffPrompt.wrappedValue != nil { handOffPrompt.wrappedValue = nil }
+                // Moving to another page (the scrubber, a hand-off jump) moves past the cover
+                // too. Only the reader's own moves count: the layout settling as the book opens
+                // (page sizes read, the screen's orientation) also renumbers the screens, and
+                // ending the cover then made it show for less time on some books than others.
+                if coverShown.wrappedValue {
+                    withAnimation(.easeOut(duration: 0.55)) { coverShown.wrappedValue = false }
+                }
             }
             scrubPage = Double(state.currentPage)
             // Record that the book was opened, so it shows under Continue Reading.
@@ -117,8 +125,6 @@ struct ReaderScreen: View {
         .onDisappear { state.cancel() }
         .onChange(of: state.currentSpread) { _, _ in
             if !isScrubbing { scrubPage = Double(state.currentPage) }
-            // Moving to another page (the scrubber, a hand-off jump) moves past the cover too.
-            endIntro()
         }
         .onChange(of: state.closeRequested) { _, requested in
             if requested { closeBySwipe() }
@@ -343,23 +349,29 @@ struct ReaderScreen: View {
         .accessibilityIdentifier("reader-scrub-preview")
     }
 
+    /// The cover, as when the book opened. It sits at the start of the page bar: the left
+    /// for left-to-right books, the right for manga, where the bar runs the other way.
+    @ViewBuilder
+    private var coverButton: some View {
+        if let cover {
+            Button(action: showCover) {
+                Image(uiImage: cover.image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 24, height: 34)
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(Color.primary.opacity(0.2)))
+                    .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Show Cover")
+            .accessibilityIdentifier("reader-show-cover")
+        }
+    }
+
     private var bottomBar: some View {
         HStack(spacing: 14) {
-            if let cover {
-                // The cover, as when the book opened.
-                Button(action: showCover) {
-                    Image(uiImage: cover.image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 24, height: 34)
-                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(Color.primary.opacity(0.2)))
-                        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Show Cover")
-                .accessibilityIdentifier("reader-show-cover")
-            }
+            if !state.rightToLeft { coverButton }
             Text(isScrubbing ? "\(Int(scrubPage) + 1) of \(state.pageCount)" : state.pageLabel)
                 .font(.subheadline.monospacedDigit())
                 .frame(minWidth: 90)
@@ -372,6 +384,7 @@ struct ReaderScreen: View {
                 .environment(\.layoutDirection, state.rightToLeft ? .rightToLeft : .leftToRight)
                 .accessibilityIdentifier("reader-scrubber")
             }
+            if state.rightToLeft { coverButton }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
