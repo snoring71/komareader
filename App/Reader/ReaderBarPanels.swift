@@ -132,7 +132,7 @@ struct BackgroundPanel: View {
                 .padding(4)
                 .overlay {
                     Circle()
-                        .stroke(Color.accentColor, lineWidth: 2.5)
+                        .stroke(Color.primary, lineWidth: 2.5)
                         .opacity(selected ? 1 : 0)
                         .scaleEffect(selected ? 1 : 0.85)
                 }
@@ -365,9 +365,12 @@ struct MoreSettingsPanel: View {
                     .buttonStyle(.bordered)
                     .accessibilityIdentifier("reader-use-defaults-cancel")
                 Spacer()
-                Button("Use as Defaults") {
+                Button {
                     state.useAsDefaults()
                     confirmingDefaults = false
+                } label: {
+                    // Inverse text on the black/white accent fill, so it reads in dark mode too.
+                    Text("Use as Defaults").foregroundStyle(Color.onAccent)
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("reader-use-defaults-confirm")

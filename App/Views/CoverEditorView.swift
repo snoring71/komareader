@@ -463,8 +463,13 @@ private struct PageStrip: View {
                             PageThumbnail(source: source, page: page)
                                 .frame(width: 52, height: 76)
                                 .overlay {
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .stroke(page == selection ? Color.accentColor : Color.clear, lineWidth: 3)
+                                    // Primary outline with a thin inverse edge, so it shows on any page.
+                                    if page == selection {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .stroke(Color.onAccent, lineWidth: 5)
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .stroke(Color.primary, lineWidth: 3)
+                                    }
                                 }
                         }
                         .buttonStyle(.plain)

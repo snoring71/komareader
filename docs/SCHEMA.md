@@ -20,7 +20,7 @@ Comic Reader/
 ## library.json
 
 ```json
-{ "schema": 1, "libraryId": "UUID", "folderName": "Booklover", "createdAt": "2026-11-08T02:00:00.000Z" }
+{ "schema": 1, "libraryId": "UUID", "folderName": "Comics", "createdAt": "2026-11-08T02:00:00.000Z" }
 ```
 
 `folderName` is the name of the folder the user chose as their library. A device that
@@ -131,7 +131,7 @@ The id is SHA-256 of the UTF-8 text `komareader:library:<folderName>` or
 `komareader:book:<path>`, with the name in Unicode NFC. Take the first 16 bytes, set the high
 nibble of byte 6 to `8` and the top two bits of byte 8 to `10` (an RFC 9562 version 8 UUID),
 and write it as an upper-case UUID string. Ids made earlier at random stay valid.
-For example, the folder `Booklover` gives `352A9655-843C-82E4-BDCC-9A7C0DA6E14A` and the path
+For example, the folder `Comics` gives `20E7415A-EB37-81FE-87FB-C83F1AF87C00` and the path
 `Saga/Saga 001.cbz` gives `D0E63AF5-7548-8B27-8544-DCCDDEB4C6FA`.
 
 If two `library.json` files name the same folder, use the one whose `libraryId` is the

@@ -153,7 +153,7 @@ import Testing
 
     @Test func recordStoreMergesWithDisk() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let store = try RecordStore.open(dataRoot: root, folderName: "Booklover")
+        let store = try RecordStore.open(dataRoot: root, folderName: "Comics")
         var first = BookRecord(bookId: "B", file: .init(path: "b.cbz", size: 1, modified: nil))
         first.progress["ipad"] = .init(page: 1, pageCount: 5, finished: false, updatedAt: Date(timeIntervalSince1970: 10))
         try store.write(first)
@@ -165,13 +165,13 @@ import Testing
         #expect(Set(read.progress.keys) == ["ipad", "win"])
 
         // Same folder name finds the same library.
-        let reopened = try RecordStore.open(dataRoot: root, folderName: "Booklover")
+        let reopened = try RecordStore.open(dataRoot: root, folderName: "Comics")
         #expect(reopened.info.libraryId == store.info.libraryId)
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("SCHEMA.md").path))
     }
 
     @Test func stableIdsMatchTheDocumentedRecipe() {
-        #expect(StableID.library(folderName: "Booklover") == "352A9655-843C-82E4-BDCC-9A7C0DA6E14A")
+        #expect(StableID.library(folderName: "Comics") == "20E7415A-EB37-81FE-87FB-C83F1AF87C00")
         #expect(StableID.book(path: "Saga/Saga 001.cbz") == "D0E63AF5-7548-8B27-8544-DCCDDEB4C6FA")
         // Decomposed and precomposed spellings of the same name give the same id.
         #expect(StableID.book(path: "Cafe\u{301}.cbz") == StableID.book(path: "Caf\u{E9}.cbz"))
@@ -183,16 +183,16 @@ import Testing
     }
 
     @Test func devicesThatPickTheSameFolderShareALibraryId() throws {
-        let a = try RecordStore.open(dataRoot: tempRoot(), folderName: "Booklover")
-        let b = try RecordStore.open(dataRoot: tempRoot(), folderName: "Booklover")
+        let a = try RecordStore.open(dataRoot: tempRoot(), folderName: "Comics")
+        let b = try RecordStore.open(dataRoot: tempRoot(), folderName: "Comics")
         #expect(a.info.libraryId == b.info.libraryId)
-        #expect(a.info.libraryId == StableID.library(folderName: "Booklover"))
+        #expect(a.info.libraryId == StableID.library(folderName: "Comics"))
     }
 
     @Test func duplicateLibrariesAreFoldedTogether() throws {
         let root = tempRoot()
         // An older library made with a random id, as builds before stable ids did.
-        let oldInfo = LibraryInfo(libraryId: "0-OLD", folderName: "Booklover")
+        let oldInfo = LibraryInfo(libraryId: "0-OLD", folderName: "Comics")
         let old = try RecordStore(root: root.appendingPathComponent("Libraries/0-OLD"), info: oldInfo)
         try RecordStore.coordinatedWrite(try RecordCoding.encoder().encode(oldInfo), to: old.root.appendingPathComponent("library.json"))
         var record = BookRecord(bookId: "B", file: .init(path: "b.cbz", size: 1, modified: nil))
@@ -201,18 +201,18 @@ import Testing
         try old.writeCover(Data([1]), bookId: "B")
 
         // A second library for the same folder, made by another device.
-        let newInfo = LibraryInfo(libraryId: StableID.library(folderName: "Booklover"), folderName: "Booklover")
+        let newInfo = LibraryInfo(libraryId: StableID.library(folderName: "Comics"), folderName: "Comics")
         let other = try RecordStore(root: root.appendingPathComponent("Libraries/\(newInfo.libraryId)"), info: newInfo)
         try RecordStore.coordinatedWrite(try RecordCoding.encoder().encode(newInfo), to: other.root.appendingPathComponent("library.json"))
 
-        let store = try RecordStore.open(dataRoot: root, folderName: "Booklover")
+        let store = try RecordStore.open(dataRoot: root, folderName: "Comics")
         #expect(store.info.libraryId == newInfo.libraryId)
         #expect(store.read(bookId: "B")?.progress["ipad"]?.page == 3)
         #expect(store.existingCoverURL(bookId: "B") != nil)
     }
 
     @Test func recordsForTheSameFileAreFoldedTogether() throws {
-        let store = try RecordStore.open(dataRoot: tempRoot(), folderName: "Booklover")
+        let store = try RecordStore.open(dataRoot: tempRoot(), folderName: "Comics")
         let path = "Saga/Saga 001.cbz"
         var mine = BookRecord(bookId: "ZZZ", file: .init(path: path, size: 10, modified: nil))
         mine.progress["ipad"] = .init(page: 4, pageCount: 20, finished: false)

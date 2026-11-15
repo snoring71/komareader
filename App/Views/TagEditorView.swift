@@ -53,7 +53,7 @@ struct TagEditorView: View {
                                     Label(tag, systemImage: "tag")
                                         .foregroundStyle(.primary)
                                     Spacer()
-                                    if on { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                                    if on { Image(systemName: "checkmark").foregroundStyle(Color.primary) }
                                 }
                                 .contentShape(Rectangle())
                             }

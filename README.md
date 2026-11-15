@@ -2,7 +2,7 @@
 
 A native comic and manga reader for iPad (iPadOS 26+, Liquid Glass), built in SwiftUI.
 
-- Your library is any iCloud Drive folder you pick (for example `iCloud Drive/Booklover`). Books
+- Your library is any iCloud Drive folder you pick (for example `iCloud Drive/Comics`). Books
   show up whether or not they are downloaded, and you can download or remove each one from the
   device without touching the file in iCloud.
 - Reads CBZ, CBR, CB7, CBT (via the system libarchive), PDF and folders of images, with fit to
