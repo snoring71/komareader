@@ -2,6 +2,7 @@ import ArchiveKit
 import ComicCore
 import SwiftUI
 import UIKit
+import VisionKit
 
 /// Horizontal paging with real UIKit physics, hosted in SwiftUI.
 struct PageViewer: UIViewControllerRepresentable {
@@ -27,6 +28,16 @@ struct PageViewer: UIViewControllerRepresentable {
         let spread = state.currentSpread
         let version = state.layoutVersion
         let direction = state.rightToLeft
+        let selectingText = state.selectingText
+        if selectingText != coordinator.selectingText {
+            coordinator.selectingText = selectingText
+            (controller.viewControllers?.first as? SpreadViewController)?.selectingText = selectingText
+        }
+        let textRetry = state.textRetry
+        if textRetry != coordinator.textRetry {
+            coordinator.textRetry = textRetry
+            (controller.viewControllers?.first as? SpreadViewController)?.retryText()
+        }
         if version != coordinator.layoutVersion || direction != coordinator.rightToLeft {
             if let color = state.background.uiColor { controller.view.backgroundColor = color }
             coordinator.show(in: controller, animated: false)
@@ -41,6 +52,8 @@ struct PageViewer: UIViewControllerRepresentable {
         var displayedSpread = -1
         var layoutVersion = -1
         var rightToLeft = false
+        var selectingText = false
+        var textRetry = 0
         private weak var pageController: UIPageViewController?
 
         init(state: ReaderState) { self.state = state }
@@ -58,6 +71,14 @@ struct PageViewer: UIViewControllerRepresentable {
             let page = makeController(target)
             controller.setViewControllers([page], direction: direction, animated: animated)
             followBackground(of: page)
+            becameCurrent(page)
+        }
+
+        /// Copy All and the Select Text bar follow the spread on screen.
+        private func becameCurrent(_ page: SpreadViewController) {
+            page.selectingText = state.selectingText
+            state.currentTranscript = { [weak page] in page?.transcript ?? "" }
+            page.reportTextStatus()
         }
 
         private func makeController(_ spread: Int) -> SpreadViewController {
@@ -82,9 +103,19 @@ struct PageViewer: UIViewControllerRepresentable {
             )
             let controller = SpreadViewController(
                 spreadIndex: spread, pieces: pieces, rightToLeft: state.rightToLeft,
-                style: style, source: state.source, cache: state.cache, edgeColors: state.edgeColors
+                style: style, source: state.source, cache: state.cache, edgeColors: state.edgeColors,
+                textAnalyzer: state.textAnalyzer
             )
             controller.onTap = { [weak self] fraction in self?.state.handleTap(atFraction: fraction) }
+            // Only the spread on screen speaks for the screen; neighbours read their text quietly.
+            controller.onTextStatus = { [weak self] index, status in
+                // Later, since this can run while SwiftUI is updating the page view.
+                Task { @MainActor [weak self] in
+                    guard let self, index == self.state.currentSpread, self.state.selectingText else { return }
+                    if self.state.textStatus != status { self.state.textStatus = status }
+                }
+            }
+            controller.selectingText = state.selectingText
             controller.onBackgroundChange = { [weak self, weak controller] in
                 guard let self, let controller else { return }
                 if controller.spreadIndex == self.displayedSpread { self.followBackground(of: controller) }
@@ -113,11 +144,17 @@ struct PageViewer: UIViewControllerRepresentable {
             neighbour(of: vc, step: 1)
         }
 
+        func pageViewController(_ pvc: UIPageViewController, willTransitionTo pending: [UIViewController]) {
+            // A neighbour made before Select Text was switched on catches up here.
+            for case let page as SpreadViewController in pending { page.selectingText = state.selectingText }
+        }
+
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
             guard completed, let current = pvc.viewControllers?.first as? SpreadViewController else { return }
             displayedSpread = current.spreadIndex
             state.show(spread: current.spreadIndex)
             followBackground(of: current)
+            becameCurrent(current)
         }
     }
 }
@@ -148,6 +185,13 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     private let cache: PageImageCache
     private let edgeColors: NSCache<NSString, UIColor>
     var onTap: ((CGFloat) -> Void)?
+    private let textAnalyzer: PageTextAnalyzer
+    /// Reports what Live Text found on this spread, with the spread's index.
+    var onTextStatus: ((Int, ReaderState.TextStatus) -> Void)?
+    /// Select Text mode: find the text on the pages and let it be selected.
+    var selectingText = false {
+        didSet { if selectingText != oldValue, isViewLoaded { updateTextSelection() } }
+    }
     /// Called when a Match Page background has been worked out.
     var onBackgroundChange: (() -> Void)?
     private(set) var currentBackground: UIColor?
@@ -161,9 +205,23 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     private var colorTask: Task<Void, Never>?
     private var loadedSize: CGFloat = 0
     private var laidOutContentSize: CGSize = .zero
+    private var textInteractions: [ImageAnalysisInteraction] = []
+    /// Per slot: the image whose text is on the interaction (or being read), and what was found.
+    private var analyzedImages: [UIImage?] = []
+    private var slotStatus: [ReaderState.TextStatus] = []
+    /// Per slot: the image showing is a smaller stand-in until the decode finishes.
+    private var placeholders: [Bool] = []
+    private var textTasks: [Task<Void, Never>?] = []
+    /// Per slot: how many times Try Again has asked for this page, which picks the read sizes.
+    private var readAttempts: [Int] = []
+    /// Sizes to read a page at (longest side in pixels; nil is the image on screen). Small text
+    /// beside furigana reads better sharp, but Live Text sometimes finds nothing on a page at one
+    /// size and everything at another, so an empty read tries the next size, and Try Again
+    /// starts one further along.
+    private static let readSizes: [CGFloat?] = [4096, nil, 2048]
 
     init(spreadIndex: Int, pieces: [Piece], rightToLeft: Bool, style: Style, source: BookSource,
-         cache: PageImageCache, edgeColors: NSCache<NSString, UIColor>) {
+         cache: PageImageCache, edgeColors: NSCache<NSString, UIColor>, textAnalyzer: PageTextAnalyzer) {
         self.spreadIndex = spreadIndex
         self.pieces = pieces
         self.rightToLeft = rightToLeft
@@ -171,6 +229,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         self.source = source
         self.cache = cache
         self.edgeColors = edgeColors
+        self.textAnalyzer = textAnalyzer
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -179,6 +238,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     deinit {
         loadTasks.forEach { $0.cancel() }
         colorTask?.cancel()
+        textTasks.forEach { $0?.cancel() }
     }
 
     override func viewDidLoad() {
@@ -211,6 +271,21 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             spinner.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin, .flexibleBottomMargin]
             imageView.addSubview(spinner)
             spinners.append(spinner)
+            if PageTextAnalyzer.isSupported {
+                // Live Text, idle until Select Text is on. Touches on the page still reach the
+                // scroll view's taps and zoom, so the image view can take them.
+                let interaction = ImageAnalysisInteraction()
+                interaction.preferredInteractionTypes = []
+                interaction.isSupplementaryInterfaceHidden = true
+                imageView.isUserInteractionEnabled = true
+                imageView.addInteraction(interaction)
+                textInteractions.append(interaction)
+            }
+            analyzedImages.append(nil)
+            slotStatus.append(.idle)
+            placeholders.append(false)
+            textTasks.append(nil)
+            readAttempts.append(0)
         }
         let isSpread = pieces.count == 2 || (pieces.count == 1 && pieces[0].fold.map { $0 > 0.1 && $0 < 0.9 } == true)
         if isSpread, style.bindingShadow > 0 {
@@ -228,6 +303,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         view.accessibilityIdentifier = "reader-page"
 
         load(size: PageImageCache.screenPixelSize)
+        if selectingText { updateTextSelection() }
     }
 
     private var screenOrder: [Piece] { rightToLeft ? Array(pieces.reversed()) : pieces }
@@ -301,12 +377,15 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             let page = piece.page.page
             if let cached = cache.image(for: page, minSize: size) {
                 display(cached, in: slot)
+                placeholders[slot] = false
+                if selectingText { readText(slot: slot) }
                 continue
             }
             // Until the page is decoded, show a smaller copy if there is one, or a spinner, rather than a black page.
             if imageViews[slot].image == nil {
                 if let smaller = cache.image(for: page, minSize: 0) {
                     display(smaller, in: slot)
+                    placeholders[slot] = true
                 } else {
                     spinners[slot].startAnimating()
                 }
@@ -316,11 +395,142 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
                 let image = await cache.load(page: page, size: size, from: source)
                 guard let self, !Task.isCancelled else { return }
                 self.spinners[slot].stopAnimating()
-                guard let image else { return }
+                guard let image else {
+                    if self.selectingText, self.imageViews[slot].image == nil || self.placeholders[slot] {
+                        self.slotStatus[slot] = .none
+                        self.reportTextStatus()
+                    }
+                    return
+                }
                 self.display(image, in: slot)
+                self.placeholders[slot] = false
                 self.view.setNeedsLayout()
+                if self.selectingText { self.readText(slot: slot) }
             })
         }
+    }
+
+    // MARK: Select Text
+
+    private func updateTextSelection() {
+        guard !textInteractions.isEmpty else { return }
+        for slot in textInteractions.indices {
+            let interaction = textInteractions[slot]
+            if selectingText {
+                interaction.preferredInteractionTypes = .automaticTextOnly
+                interaction.selectableItemsHighlighted = interaction.analysis != nil
+                readText(slot: slot)
+            } else {
+                textTasks[slot]?.cancel()
+                textTasks[slot] = nil
+                interaction.selectableItemsHighlighted = false
+                interaction.preferredInteractionTypes = []
+                if slotStatus[slot] == .searching || slotStatus[slot] == .failed {
+                    // Unfinished: read it again next time.
+                    analyzedImages[slot] = nil
+                    slotStatus[slot] = .idle
+                }
+            }
+        }
+        reportTextStatus()
+    }
+
+    /// Reads the text on one page, once its image is the full screen-size decode.
+    private func readText(slot: Int) {
+        guard textInteractions.indices.contains(slot), let shown = imageViews[slot].image else { return }
+        if shown === analyzedImages[slot] { return }
+        // A smaller copy stands in while the page decodes; wait for the real one.
+        if placeholders[slot] {
+            slotStatus[slot] = .searching
+            reportTextStatus()
+            return
+        }
+        analyzedImages[slot] = shown
+        slotStatus[slot] = .searching
+        reportTextStatus()
+        let piece = screenOrder[slot], analyzer = textAnalyzer, source = source
+        let sizes = Self.readSizes.indices.map { Self.readSizes[($0 + readAttempts[slot]) % Self.readSizes.count] }
+        textTasks[slot]?.cancel()
+        textTasks[slot] = Task { [weak self] in
+            var result: VisionKit.ImageAnalysis?
+            for size in sizes.prefix(2) {
+                let image: UIImage?
+                if let size {
+                    image = await Task.detached(priority: .userInitiated) {
+                        guard let full = try? await source.image(at: piece.page.page, maxPixelSize: size) else { return nil }
+                        let cut = piece.page.isHalf || piece.crop != nil ? PagePieces.cut(full, part: piece.page.part, crop: piece.crop) : full
+                        return UIImage(cgImage: cut)
+                    }.value
+                } else {
+                    image = shown
+                }
+                if Task.isCancelled { return }
+                guard let image else { continue }
+                let key = "\(piece.colorKey)|\(size.map { Int($0) } ?? 0)"
+                guard let analysis = await analyzer.analysis(key: key, image: image) else { continue }
+                if result == nil || analysis.hasResults(for: .text) { result = analysis }
+                if analysis.hasResults(for: .text) { break }
+            }
+            guard let self, !Task.isCancelled, self.selectingText, self.imageViews[slot].image === shown else { return }
+            // The read may come from a sharper copy than the one on screen; Live Text places its
+            // text by position within the image, so it lines up all the same.
+            let interaction = self.textInteractions[slot]
+            interaction.analysis = result
+            interaction.selectableItemsHighlighted = result != nil
+            if let result {
+                self.slotStatus[slot] = result.hasResults(for: .text) ? .found : .none
+            } else {
+                self.slotStatus[slot] = .failed
+            }
+            self.reportTextStatus()
+        }
+        // A safety net: the analyzer gives up on a stuck read itself, but pages queue one at a
+        // time, so allow for a few ahead of this one.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(90))
+            guard let self, self.selectingText, self.analyzedImages[slot] === shown, self.slotStatus[slot] == .searching else { return }
+            self.slotStatus[slot] = .failed
+            self.reportTextStatus()
+        }
+    }
+
+    /// Reads again the pages where nothing was found (or the read failed), at other sizes.
+    func retryText() {
+        guard selectingText else { return }
+        for slot in slotStatus.indices where slotStatus[slot] == .failed || slotStatus[slot] == .none {
+            readAttempts[slot] += 1
+            analyzedImages[slot] = nil
+            readText(slot: slot)
+        }
+        reportTextStatus()
+    }
+
+    /// Tells the reader what was found across this spread's pages. A page that couldn't be
+    /// read counts even when the other page has text, so a missed page is never silent.
+    func reportTextStatus() {
+        let status: ReaderState.TextStatus
+        if !selectingText || slotStatus.isEmpty {
+            status = .idle
+        } else if slotStatus.contains(.searching) || slotStatus.contains(.idle) {
+            status = .searching
+        } else if slotStatus.contains(.failed) {
+            status = .failed
+        } else if slotStatus.contains(.found) {
+            // Text on one page and none on the other is worth a second look.
+            status = slotStatus.contains(.none) ? .partial : .found
+        } else {
+            status = .none
+        }
+        onTextStatus?(spreadIndex, status)
+    }
+
+    /// The text found on this spread's pages, in reading order.
+    var transcript: String {
+        let readingOrder = rightToLeft ? Array(textInteractions.reversed()) : textInteractions
+        return readingOrder.compactMap { $0.analysis?.transcript }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
     }
 
     /// Puts a decoded image in its slot, cut to the half and crop this page shows.
