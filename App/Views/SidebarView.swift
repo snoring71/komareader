@@ -18,7 +18,7 @@ struct SidebarView: View {
                 row(.all, count: counts[.all])
                 row(.continueReading, count: counts[.continueReading])
                 row(.series, count: model.catalog.series.count)
-                row(.folders, count: model.catalog.folders.count - 1)
+                row(.folders, count: max(0, model.catalog.folders.count - 1)) // less the library folder itself
                 row(.downloaded, count: counts[.downloaded])
             }
             if !pinned.isEmpty {
