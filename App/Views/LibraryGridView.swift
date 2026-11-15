@@ -125,8 +125,12 @@ struct LibraryGridView: View {
                                         .environment(\.coverInfo, CoverInfo())
                                         // Its own id, so scrolling to a book finds it in the grid below.
                                         .id("continue-\(book.id)")
+                                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
                                 }
                             }
+                            // A book that leaves (marked unread or read) fades out, and the
+                            // others slide over into its place instead of jumping.
+                            .animation(.snappy(duration: 0.4), value: continueReading.prefix(12).map(\.id))
                         }
                     }
                     .padding(.horizontal)
@@ -147,8 +151,13 @@ struct LibraryGridView: View {
                     // the cells it had already made, and a tap in Select mode opened the book.
                     ForEach(books) { book in
                         BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }) { toggle(book.id) }
+                            .transition(.opacity.combined(with: .scale(scale: 0.85)))
                     }
                 }
+                // In Continue Reading, a book that leaves fades out and the others slide into
+                // place. Only there: animating the whole library on every change would be slow.
+                .animation(item == .continueReading ? .snappy(duration: 0.4) : nil,
+                           value: item == .continueReading ? books.map(\.id) : [])
                 .scrollTargetLayout()
                 .padding()
                 .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index

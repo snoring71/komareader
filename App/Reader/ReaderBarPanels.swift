@@ -319,16 +319,22 @@ struct MoreSettingsPanel: View {
                     if let left = pages.first { share(left) }
                 }
                 .buttonStyle(.bordered)
+                .lineLimit(1)
+                .fixedSize()
                 .accessibilityIdentifier("reader-share-left")
                 Button("Right Page") {
                     choosingPage = false
                     if let right = pages.last { share(right) }
                 }
                 .buttonStyle(.bordered)
+                .lineLimit(1)
+                .fixedSize()
                 .accessibilityIdentifier("reader-share-right")
-                Spacer()
+                Spacer(minLength: 0)
                 Button("Cancel") { choosingPage = false }
                     .buttonStyle(.borderless)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .tint(.primary)
         }

@@ -19,8 +19,8 @@ public struct BookRecord: Codable, Equatable, Sendable {
     public var readerOptions: ReaderOptions?
     /// Reading position per device id. Newest entry wins when opening a book.
     public var progress: [String: Progress]
-    /// Set when the book's reading progress was reset (marked unread, or closed on its first
-    /// page). Progress entries from before it are ignored on every device.
+    /// Set when the book was marked unread. Progress entries from before it are ignored on
+    /// every device.
     public var progressReset: ProgressReset?
     /// The pages the user bookmarked in the reader.
     public var pageBookmarks: PageBookmarks?

@@ -297,7 +297,7 @@ public final class LibraryIndex: @unchecked Sendable {
             book.finished = latest.finished
             book.lastReadAt = latest.updatedAt
         } else if record.wasReset(after: book.lastReadAt) {
-            // Marked unread (or closed on its first page) on some device: as if never opened.
+            // Marked unread on some device: as if never opened.
             book.currentPage = nil
             book.finished = false
             book.lastReadAt = nil

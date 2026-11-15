@@ -136,17 +136,24 @@ struct ReaderScreen: View {
                 }
             }
             scrubPage = Double(state.currentPage)
-            // Record that the book was opened, so it shows under Continue Reading. Not on the
-            // first page: closing there leaves the book unread, so opening it doesn't count yet.
-            if state.currentSpread > 0 {
+            // Record that the book was opened, so it shows under Continue Reading. Not while
+            // the cover shows: opening a book to its cover and closing it doesn't count as
+            // reading (see onDisappear).
+            if !showingCover {
                 model.saveProgress(bookId: bookId, page: state.currentPage, pageCount: count, finished: state.currentPages.contains(count - 1) && count > 1)
             }
             state.prefetch()
         }
         .onDisappear {
             state.cancel()
-            // Closed on the first page: back to as if never opened.
-            model.readerClosed(bookId: state.book.id, onFirstScreen: state.currentSpread == 0 && state.spreads.count > 1)
+            // Closing anywhere but the cover counts as reading, even on the first page. From
+            // the cover nothing is saved: an unread book stays unread, and a book read before
+            // keeps the page it was left on.
+            if !showingCover {
+                model.saveProgress(bookId: state.book.id, page: state.currentPage, pageCount: state.pageCount,
+                                   finished: state.currentPages.contains(state.pageCount - 1) && state.pageCount > 1,
+                                   immediately: true)
+            }
         }
         .onChange(of: state.currentSpread) { _, _ in
             if !isScrubbing { scrubPage = Double(state.currentPage) }

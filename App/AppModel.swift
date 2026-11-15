@@ -679,8 +679,9 @@ final class AppModel {
         saveProgress(bookId: book.id, page: page, pageCount: pageCount, finished: false, immediately: true, keepFinished: false)
     }
 
-    /// Resets reading progress as if the book had never been opened: no progress bar, status
-    /// Unread, out of Continue Reading. Every device's position goes (see
+    /// Mark as Unread: resets reading progress as if the book had never been opened: no
+    /// progress bar, status Unread, out of Continue Reading. This is the only way a book goes
+    /// back to unread. Every device's position goes (see
     /// `BookRecord.progressReset`); the book's reader settings stay.
     func resetProgress(_ book: Book) {
         resetProgress([book.id])
@@ -700,14 +701,6 @@ final class AppModel {
         }
         let now = Date()
         updateRecords(changed) { record, _ in record.resetProgress(at: now) }
-    }
-
-    /// The reader has closed. Closing on the screen that shows the first page resets the book.
-    /// A book that was never opened (just looked at, then closed) is left alone.
-    func readerClosed(bookId: String, onFirstScreen: Bool) {
-        guard onFirstScreen, let book = books.first(where: { $0.id == bookId }),
-              book.lastReadAt != nil || book.finished || book.currentPage != nil else { return }
-        resetProgress(book)
     }
 
     /// Called on every page turn. The index updates at once; the synced record is written

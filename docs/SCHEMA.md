@@ -87,8 +87,8 @@ copies tag by tag, keeping whichever entry has the later `updatedAt`.
   and every `progress` entry's. An app that lists the book as missing should then drop it. If a
   file turns up at `file.path` again, show it as a new book. The app that deletes a book
   replaces the record with one holding only `file` and `removed`, and deletes its covers.
-- `progressReset` is set when the user resets a book's reading progress (marks it unread, or
-  closes it on its first page). Every `progress` entry with an `updatedAt` at or before it is
+- `progressReset` is set when the user resets a book's reading progress (marks it unread).
+  Every `progress` entry with an `updatedAt` at or before it is
   ignored, on every device: the book shows as never opened until someone reads it again. An
   app that resets progress also removes the old entries from the file it writes.
 - `pageBookmarks.pages` lists the pages the user bookmarked in the reader (zero-based, sorted,
