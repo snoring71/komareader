@@ -206,7 +206,7 @@ struct LibraryGridView: View {
                 } else if case .tag(let name) = item {
                     ContentUnavailableView("No Books Tagged “\(name)”", systemImage: "tag", description: Text("Long-press a book and choose Tags… to add this tag. The tag stays until you delete it from the sidebar."))
                 } else if item == .bookmarked {
-                    ContentUnavailableView("No Bookmarked Books", systemImage: "bookmark", description: Text("Books you bookmark appear here."))
+                    ContentUnavailableView("No Bookmarked Books", systemImage: "bookmark", description: Text("Books you bookmark, and books with a bookmarked page, appear here. To bookmark a page, tap the bookmark button in the reader."))
                 } else {
                     ContentUnavailableView("No Books", systemImage: "books.vertical", description: Text("Comics you add to \(model.libraryName) appear here."))
                 }
@@ -530,7 +530,7 @@ struct BookCell: View {
                         .foregroundStyle(.primary)
                     HStack(spacing: 4) {
                         if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
-                        if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
+                        if book.hasBookmarks { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
                         if !book.tags.isEmpty { Image(systemName: "tag.fill").foregroundStyle(.teal) }
                         Text(statusText).foregroundStyle(.secondary)
                     }
@@ -578,10 +578,12 @@ struct BookCell: View {
             } else {
                 Button("Download", systemImage: "icloud.and.arrow.down") { Task { await model.download(book) } }
             }
-            if book.status == .read {
-                Button("Mark as Unread", systemImage: "circle") { model.setFinished(book, false) }
-            } else {
+            if book.status != .read {
                 Button("Mark as Read", systemImage: "checkmark.circle") { model.setFinished(book, true) }
+            }
+            // Also for a book in progress: it goes back to as if never opened.
+            if book.status != .unread {
+                Button("Mark as Unread", systemImage: "circle") { model.setFinished(book, false) }
             }
         }
     }

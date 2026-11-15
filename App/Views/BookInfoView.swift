@@ -88,11 +88,26 @@ struct BookInfoView: View {
 
             Section("Status") {
                 Picker("Reading Status", selection: Binding(
-                    get: { book.status == .read },
-                    set: { model.setFinished(book, $0) }
+                    get: { book.status },
+                    set: { status in
+                        switch status {
+                        case .unread: model.setFinished(book, false)
+                        case .reading: model.markReading(book)
+                        case .read: model.setFinished(book, true)
+                        }
+                    }
                 )) {
-                    Text(book.status == .reading ? "Reading (\(percent(book)))" : "Unread").tag(false)
-                    Text("Read").tag(true)
+                    Text("Unread").tag(Book.Status.unread)
+                    Text(book.status == .reading ? "Reading (\(percent(book)))" : "Reading").tag(Book.Status.reading)
+                    Text("Read").tag(Book.Status.read)
+                }
+                .accessibilityIdentifier("info-status")
+                if !book.pageBookmarks.isEmpty {
+                    LabeledContent {
+                        Text(book.pageBookmarks.map { String($0 + 1) }.joined(separator: ", "))
+                    } label: {
+                        Label("Bookmarked Pages", systemImage: "bookmark.fill")
+                    }
                 }
                 Toggle(isOn: Binding(get: { book.favorite }, set: { model.setFavorite(book, $0) })) {
                     Label("Favorite", systemImage: "heart")

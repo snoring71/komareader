@@ -140,4 +140,42 @@ import Testing
         #expect(right.width == 2 && right.height == 2)
         #expect(try color(right, 0, 0).blue > 200)
     }
+
+    // MARK: Sharing a page (#60)
+
+    @Test func exportsTheOriginalArchivePageUnderTheBookTitle() async throws {
+        let source = try ArchiveBookSource(url: try fixture("sample.cbz"), cacheRoot: try tempDir())
+        let file = try await PageExport.export(source, page: 2, title: "Night: Market / 2", to: try tempDir())
+        #expect(file.lastPathComponent == "Night- Market - 2 - p3.png")
+        let original = try await source.pageURL(at: 2)
+        #expect(try Data(contentsOf: file) == Data(contentsOf: original))
+    }
+
+    @Test func exportsAPDFPageAtTheScannedImageSize() async throws {
+        // A one-page PDF, 200 × 300 points, holding one 400 × 600 image.
+        let url = try tempDir().appendingPathComponent("scan.pdf")
+        var box = CGRect(x: 0, y: 0, width: 200, height: 300)
+        let pdf = try #require(CGContext(url as CFURL, mediaBox: &box, nil))
+        let bitmap = try #require(CGContext(data: nil, width: 400, height: 600, bitsPerComponent: 8, bytesPerRow: 0,
+                                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        bitmap.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1))
+        bitmap.fill(CGRect(x: 0, y: 0, width: 400, height: 600))
+        let image = try #require(bitmap.makeImage())
+        pdf.beginPDFPage(nil)
+        pdf.draw(image, in: box)
+        pdf.endPDFPage()
+        pdf.closePDF()
+
+        let source = try PDFBookSource(url: url)
+        let file = try await PageExport.export(source, page: 0, title: "Scan", to: try tempDir())
+        #expect(file.lastPathComponent == "Scan - p1.jpg")
+        let size = try #require(ImageDecoder.pixelSize(url: file))
+        #expect(size == CGSize(width: 400, height: 600))
+    }
+
+    @Test func shareFileNames() {
+        #expect(PageExport.fileName(title: "Saga 001", page: 11, ext: "jpg") == "Saga 001 - p12.jpg")
+        #expect(PageExport.fileName(title: "  ", page: 0, ext: "png") == "Page - p1.png")
+        #expect(PageExport.fileName(title: ".hidden", page: 0, ext: "png") == "hidden - p1.png")
+    }
 }

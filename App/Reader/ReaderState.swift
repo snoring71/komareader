@@ -122,7 +122,7 @@ final class ReaderState {
 
     /// The images on screen, left to right as they sit on the screen. One image when a single
     /// page shows, or when the two halves of one split image do.
-    var pagesOnScreenLeftToRight: [Int] { rightToLeft ? currentPages.reversed() : currentPages }
+    var pagesOnScreenLeftToRight: [Int] { rightToLeft ? Array(currentPages.reversed()) : currentPages }
 
     // MARK: Settings (the book's own, else the defaults)
 

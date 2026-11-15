@@ -118,10 +118,10 @@ struct CoverInfoOverlay: View {
 
     @ViewBuilder private var topBand: some View {
         let details = detailParts
-        if !details.isEmpty || book.favorite || book.bookmarked || stateIcon != nil {
+        if !details.isEmpty || book.favorite || book.hasBookmarks || stateIcon != nil {
             HStack(alignment: .top, spacing: 4) {
                 if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
-                if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
+                if book.hasBookmarks { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
                 // Wraps onto a second line rather than running off the side of a narrow cover.
                 Text(details.joined(separator: " · "))
                     .lineLimit(2)

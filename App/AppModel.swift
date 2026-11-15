@@ -162,7 +162,7 @@ final class AppModel {
             counts[.all, default: 0] += 1
             if book.isDownloaded { counts[.downloaded, default: 0] += 1 }
             if book.favorite { counts[.favorites, default: 0] += 1 }
-            if book.bookmarked { counts[.bookmarked, default: 0] += 1 }
+            if book.hasBookmarks { counts[.bookmarked, default: 0] += 1 }
             switch book.status {
             case .unread: counts[.unread, default: 0] += 1
             case .reading: counts[.reading, default: 0] += 1

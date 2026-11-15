@@ -29,8 +29,8 @@ struct ReaderScreen: View {
     @State private var copiedText = false
 
     init(book: Book, source: BookSource, options: ReaderOptions, defaults: ReaderDefaults,
-         handOff: AppModel.HandOff? = nil, intro: CoverIntro? = nil) {
-        _state = State(initialValue: ReaderState(book: book, source: source, options: options, defaults: defaults))
+         handOff: AppModel.HandOff? = nil, intro: CoverIntro? = nil, bookmarks: [Int]? = nil) {
+        _state = State(initialValue: ReaderState(book: book, source: source, options: options, defaults: defaults, bookmarks: bookmarks))
         _handOff = State(initialValue: handOff)
         _cover = State(initialValue: intro)
         _showingCover = State(initialValue: intro != nil && CoverIntro.isEnabled)
@@ -119,6 +119,9 @@ struct ReaderScreen: View {
             state.onOptionsChange = { [weak appModel] options in
                 appModel?.saveReaderOptions(bookId: bookId, options: options)
             }
+            state.onBookmarksChange = { [weak appModel] pages in
+                appModel?.savePageBookmarks(bookId: bookId, pages: pages)
+            }
             state.onPageChange = { [weak appModel] page, finished in
                 appModel?.saveProgress(bookId: bookId, page: page, pageCount: count, finished: finished)
                 // Turning the page answers the hand-off question too.
@@ -132,11 +135,18 @@ struct ReaderScreen: View {
                 }
             }
             scrubPage = Double(state.currentPage)
-            // Record that the book was opened, so it shows under Continue Reading.
-            model.saveProgress(bookId: bookId, page: state.currentPage, pageCount: count, finished: state.currentPages.contains(count - 1) && count > 1)
+            // Record that the book was opened, so it shows under Continue Reading. Not on the
+            // first page: closing there leaves the book unread, so opening it doesn't count yet.
+            if state.currentSpread > 0 {
+                model.saveProgress(bookId: bookId, page: state.currentPage, pageCount: count, finished: state.currentPages.contains(count - 1) && count > 1)
+            }
             state.prefetch()
         }
-        .onDisappear { state.cancel() }
+        .onDisappear {
+            state.cancel()
+            // Closed on the first page: back to as if never opened.
+            model.readerClosed(bookId: state.book.id, onFirstScreen: state.currentSpread == 0 && state.spreads.count > 1)
+        }
         .onChange(of: state.currentSpread) { _, _ in
             if !isScrubbing { scrubPage = Double(state.currentPage) }
         }
@@ -411,6 +421,10 @@ struct ReaderScreen: View {
                 // Manga scrubs from right to left, like the pages.
                 .environment(\.layoutDirection, state.rightToLeft ? .rightToLeft : .leftToRight)
                 .accessibilityIdentifier("reader-scrubber")
+                // Bookmarked pages, as small marks above the track.
+                .overlay(alignment: .top) {
+                    BookmarkTicks(pages: state.bookmarks, pageCount: state.pageCount, rightToLeft: state.rightToLeft)
+                }
             }
             if state.rightToLeft { coverButton }
         }
@@ -418,5 +432,30 @@ struct ReaderScreen: View {
         .padding(.vertical, 12)
         .glassEffect(in: .capsule)
         .frame(maxWidth: 720)
+    }
+}
+
+/// Small orange marks above the page scrubber at the bookmarked pages.
+private struct BookmarkTicks: View {
+    let pages: [Int]
+    let pageCount: Int
+    let rightToLeft: Bool
+    /// How far the slider's track starts in from its ends (about half its thumb).
+    private let inset: CGFloat = 14
+
+    var body: some View {
+        GeometryReader { geo in
+            let track = max(0, geo.size.width - inset * 2)
+            ForEach(pages, id: \.self) { page in
+                let fraction = pageCount > 1 ? CGFloat(page) / CGFloat(pageCount - 1) : 0
+                Capsule()
+                    .fill(Color.orange)
+                    .frame(width: 3, height: 8)
+                    .position(x: inset + track * (rightToLeft ? 1 - fraction : fraction), y: -4)
+            }
+        }
+        .frame(height: 0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

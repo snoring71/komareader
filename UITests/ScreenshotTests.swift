@@ -231,6 +231,47 @@ final class ScreenshotTests: XCTestCase {
             sleep(1)
         }
 
+        // Bookmark the page, then see it in the Bookmarks list (#54).
+        let bookmark = app.buttons["reader-bar-bookmark"]
+        if bookmark.waitForExistence(timeout: 3) {
+            bookmark.tap()
+            sleep(1)
+            XCTAssertTrue(app.buttons["Page Bookmarked, on"].waitForExistence(timeout: 3), "The page was not bookmarked")
+            let list = app.buttons["reader-bar-bookmarks"]
+            if list.waitForExistence(timeout: 3) {
+                list.tap()
+                XCTAssertTrue(app.descendants(matching: .any)["reader-bookmarks-panel"].firstMatch.waitForExistence(timeout: 3), "No Bookmarks list")
+                sleep(1)
+                save(app, "17d-reader-bookmarks")
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+                sleep(1)
+            }
+        }
+
+        // Share Page under More (#60): the share sheet, or the left/right question first.
+        if more.waitForExistence(timeout: 3) {
+            more.tap()
+            let share = app.buttons["reader-share-page"]
+            if share.waitForExistence(timeout: 3) {
+                share.tap()
+                sleep(2)
+                let left = app.buttons["reader-share-left"]
+                if left.exists {
+                    save(app, "17e-reader-share-which-page")
+                    left.tap()
+                    sleep(2)
+                }
+                save(app, "17f-reader-share-sheet")
+            }
+            // Out of the share sheet and the panel.
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+            sleep(1)
+            if app.descendants(matching: .any)["reader-more-panel"].firstMatch.exists {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+                sleep(1)
+            }
+        }
+
         // The cover button in the page bar goes back to the cover; a tap forward returns.
         let showCover = app.buttons["reader-show-cover"]
         if showCover.waitForExistence(timeout: 3) {
