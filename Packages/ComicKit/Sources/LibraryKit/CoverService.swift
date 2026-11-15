@@ -80,9 +80,27 @@ public actor CoverService {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
+    /// Every thumbnail already made, by book id, from one listing of the thumbnail folder
+    /// (much quicker at launch than checking each book's file in turn).
+    public nonisolated func existingThumbnails() -> [String: URL] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: thumbnailDirectory, includingPropertiesForKeys: nil)) ?? []
+        var found: [String: URL] = [:]
+        found.reserveCapacity(files.count)
+        for url in files where url.pathExtension == "jpg" {
+            found[url.deletingPathExtension().lastPathComponent] = url
+        }
+        return found
+    }
+
     /// Queues cover work. `urgent` books (on screen now) jump to the front.
     public func request(_ book: Book, fileURL: URL, urgent: Bool) {
-        guard !book.isMissing, existingThumbnail(bookId: book.id) == nil, !failed.contains(book.id), !running.contains(book.id) else { return }
+        guard !book.isMissing, !failed.contains(book.id), !running.contains(book.id) else { return }
+        if let thumbnail = existingThumbnail(bookId: book.id) {
+            // Made already, but the app has not heard about it yet: say so, rather than
+            // leaving the cell on its placeholder until the next rescan.
+            onCoverReady?(book.id, thumbnail)
+            return
+        }
         let needsCloud: Bool
         if let job = jobs[book.id] {
             needsCloud = job.needsCloud

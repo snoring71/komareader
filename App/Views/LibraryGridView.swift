@@ -14,6 +14,7 @@ struct LibraryGridView: View {
     /// The size while a pinch is in progress; saved to `coverSize` when it ends.
     @State private var pinchSize: Double?
     @State private var pinchStart: Double?
+    @State private var visible = VisibleBooks()
     /// The books picked in Select mode; nil when not selecting.
     @State private var selection: Set<String>?
     @State private var confirmDeleteAll = false
@@ -43,10 +44,17 @@ struct LibraryGridView: View {
         let search = appliedSearch
         var books = model.books.filter(item.includes)
         if !search.isEmpty {
-            books = books.filter { $0.title.localizedStandardContains(search) || $0.folder.localizedStandardContains(search) || $0.series.localizedStandardContains(search) }
+            books = books.filter {
+                $0.title.localizedStandardContains(search) || $0.folder.localizedStandardContains(search)
+                    || $0.series.localizedStandardContains(search) || $0.tags.contains { $0.localizedStandardContains(search) }
+            }
         }
         if case .seriesNamed = item {
             return books.sorted(by: SeriesGroup.readingOrder)
+        }
+        if item == .continueReading {
+            // The book read last comes first, whatever the sort menu says.
+            return books.sorted { ($0.lastReadAt ?? .distantPast) > ($1.lastReadAt ?? .distantPast) }
         }
         switch sort {
         case .title:
@@ -69,8 +77,7 @@ struct LibraryGridView: View {
     /// equal cells: a lazy grid split into sections has to guess the height of the sections it
     /// has not drawn yet, and the scroll bar jumped each time a guess was corrected.
     private func letterAnchors(_ books: [Book]) -> [LetterAnchor]? {
-        guard sort == .title, appliedSearch.isEmpty, books.count > 24 else { return nil }
-        if case .seriesNamed = item { return nil }
+        guard sort == .title, appliedSearch.isEmpty, books.count > 24, showsSort else { return nil }
         var seen: Set<String> = []
         var anchors: [LetterAnchor] = []
         for book in books {
@@ -89,10 +96,19 @@ struct LibraryGridView: View {
         [GridItem(.adaptive(minimum: size, maximum: size * 1.35), spacing: 16, alignment: .top)]
     }
 
+    /// Subfolders, shown above a folder's own books.
+    private var subfolders: [FolderInfo] {
+        guard case .folder(let path) = item, appliedSearch.isEmpty, let folder = model.catalog.folders[path] else { return [] }
+        return folder.children.compactMap { model.catalog.folders[$0] }
+    }
+
     var body: some View {
         let books = visibleBooks
         let letters = letterAnchors(books)
         let continueReading = item == .all && search.isEmpty ? continueReading : []
+        let subfolders = subfolders
+        let listKey = item.storageKey
+        let _ = (visible.books = books)
         ScrollViewReader { proxy in
             ScrollView {
                 if !continueReading.isEmpty {
@@ -107,12 +123,23 @@ struct LibraryGridView: View {
                                         // Always the plain look, so the row keeps its height and
                                         // the page does not jump when Cover Info is turned on or off.
                                         .environment(\.coverInfo, CoverInfo())
+                                        // Its own id, so scrolling to a book finds it in the grid below.
+                                        .id("continue-\(book.id)")
                                 }
                             }
                         }
                     }
                     .padding(.horizontal)
                     .padding(.top, 8)
+                }
+
+                if !subfolders.isEmpty {
+                    LazyVGrid(columns: columns, spacing: 22) {
+                        ForEach(subfolders) { FolderLink(folder: $0) }
+                    }
+                    .padding([.horizontal, .top])
+                    .padding(.trailing, letters == nil ? 0 : 14)
+                    if !books.isEmpty { Divider().padding(.horizontal).padding(.top, 8) }
                 }
 
                 LazyVGrid(columns: columns, spacing: 22) {
@@ -126,8 +153,10 @@ struct LibraryGridView: View {
                 .padding()
                 .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index
             }
-            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.5) { ids in
-                scrollSpot.firstVisible = ids.first
+            .onScrollTargetVisibilityChange(idType: Book.ID.self, threshold: 0.5) { ids in
+                visible.ids = visible.inGridOrder(ids)
+                scrollSpot.firstVisible = visible.ids.first
+                if let top = visible.ids.first { LibraryPosition.noteTopBook(.init(list: listKey, bookId: top)) }
             }
             .onScrollGeometryChange(for: Bool.self) { geo in
                 geo.contentOffset.y + geo.contentInsets.top > 60
@@ -138,6 +167,21 @@ struct LibraryGridView: View {
                 // At the top, Continue Reading and the first rows stay put on their own.
                 guard scrollSpot.scrolledDown, let id = scrollSpot.firstVisible else { return }
                 Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
+            }
+            .onAppear {
+                // Back where the user left off at the last launch (the first book means the top).
+                guard let id = model.takeRestoreAnchor(for: listKey), id != books.first?.id, books.contains(where: { $0.id == id }) else { return }
+                Task { @MainActor in
+                    await Task.yield()
+                    proxy.scrollTo(id, anchor: .top)
+                }
+            }
+            .onChange(of: size) { _, _ in
+                // Keep the books that were on screen in view as the columns change.
+                guard let id = visible.zoomAnchor ?? visible.middle else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { proxy.scrollTo(id, anchor: .center) }
             }
             .overlay(alignment: .trailing) {
                 if let letters {
@@ -152,13 +196,15 @@ struct LibraryGridView: View {
         }
         .simultaneousGesture(pinchGesture)
         .overlay {
-            if books.isEmpty && !model.isScanning {
+            if books.isEmpty && subfolders.isEmpty && !model.isScanning {
                 if !appliedSearch.isEmpty {
                     ContentUnavailableView.search(text: appliedSearch)
                 } else if item == .favorites {
                     ContentUnavailableView("No Favorites", systemImage: "heart", description: Text("Books you mark as Favorite appear here."))
                 } else if item == .downloaded {
                     ContentUnavailableView("No Downloaded Books", systemImage: "arrow.down.circle", description: Text("Books that are downloaded to this iPad appear here. Long-press a book and choose Download to keep it on this iPad."))
+                } else if case .tag(let name) = item {
+                    ContentUnavailableView("No Books Tagged “\(name)”", systemImage: "tag", description: Text("Long-press a book and choose Tags… to add this tag. The tag stays until you delete it from the sidebar."))
                 } else if item == .bookmarked {
                     ContentUnavailableView("No Bookmarked Books", systemImage: "bookmark", description: Text("Books you bookmark appear here."))
                 } else {
@@ -177,7 +223,7 @@ struct LibraryGridView: View {
             if let selection {
                 SelectionToolbar(item: item, selection: selection, visible: books.map(\.id), setSelection: { self.selection = $0 }, confirm: $selectionConfirm)
             } else {
-                LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: !isSeriesList) {
+                LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: showsSort) {
                     selection = []
                 }
                 if item == .missing, !books.isEmpty {
@@ -227,15 +273,17 @@ struct LibraryGridView: View {
         selection = current
     }
 
-    private var isSeriesList: Bool {
-        if case .seriesNamed = item { return true }
-        return false
+    /// Series list in volume order and Continue Reading by last read, so no sort menu.
+    private var showsSort: Bool {
+        if case .seriesNamed = item { return false }
+        return item != .continueReading
     }
 
     private var pinchGesture: some Gesture {
         MagnifyGesture(minimumScaleDelta: 0.04)
             .onChanged { value in
                 let start = pinchStart ?? coverSize
+                if pinchStart == nil { visible.zoomAnchor = visible.middle }
                 pinchStart = start
                 pinchSize = min(max(start * value.magnification, Self.sizeRange.lowerBound), Self.sizeRange.upperBound)
             }
@@ -243,7 +291,32 @@ struct LibraryGridView: View {
                 if let pinchSize { coverSize = pinchSize }
                 pinchSize = nil
                 pinchStart = nil
+                visible.zoomAnchor = nil
             }
+    }
+}
+
+/// The books on screen, kept outside SwiftUI's state so scrolling does not redraw the grid.
+@MainActor
+final class VisibleBooks {
+    /// Visible book ids, in grid order.
+    var ids: [String] = []
+    /// The book to keep in view during a pinch.
+    var zoomAnchor: String?
+    var books: [Book] = [] { didSet { order = nil } }
+    private var order: [String: Int]?
+
+    var middle: String? { ids.isEmpty ? nil : ids[ids.count / 2] }
+
+    func inGridOrder(_ ids: [String]) -> [String] {
+        if order == nil {
+            var order: [String: Int] = [:]
+            order.reserveCapacity(books.count)
+            for (i, book) in books.enumerated() { order[book.id] = i }
+            self.order = order
+        }
+        guard let order else { return ids }
+        return ids.sorted { (order[$0] ?? .max) < (order[$1] ?? .max) }
     }
 }
 
@@ -458,6 +531,7 @@ struct BookCell: View {
                     HStack(spacing: 4) {
                         if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
                         if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
+                        if !book.tags.isEmpty { Image(systemName: "tag.fill").foregroundStyle(.teal) }
                         Text(statusText).foregroundStyle(.secondary)
                     }
                     .font(.caption2)
@@ -488,6 +562,7 @@ struct BookCell: View {
             // The file is gone: all that is left to do is to delete what the app kept of it.
             Button("Delete from Library", systemImage: "trash", role: .destructive) { confirmDelete = true }
         } else {
+            Button("Tags…", systemImage: "tag") { model.tagEditor = .init(id: book.id) }
             Button("Edit Cover…", systemImage: "crop") { Task { await model.editCover(book) } }
             Button("Regenerate Cover", systemImage: "arrow.triangle.2.circlepath") { Task { await model.regenerateCover(book) } }
             Section {

@@ -27,6 +27,8 @@ public struct Book: Codable, FetchableRecord, PersistableRecord, Identifiable, H
     /// From the record's metadata, else worked out from the file name (`SeriesName`).
     public var series: String
     public var number: String?
+    /// The user's own tags, from the synced record, in the user's spelling.
+    public var tags: [String] = []
     /// From the file's own metadata (ComicInfo.xml or the PDF's attributes), once it has been
     /// read on this device: see `metadataRead`.
     public var author: String?
@@ -103,6 +105,17 @@ public final class LibraryIndex: @unchecked Sendable {
         // any device, whichever build it ran, ends up with all of them.
         migrator.registerMigration("v3") { db in try addMissingColumns(db) }
         migrator.registerMigration("v4") { db in try addMissingColumns(db) }
+        // Named for what it adds rather than "v3", so it cannot clash with a migration added
+        // on another branch: a database that already ran another "v3" would skip it and then
+        // fail to read any book.
+        migrator.registerMigration("tags") { db in
+            // A test build from this branch named this migration "v3"; that copy may have run.
+            guard try !db.columns(in: "book").contains(where: { $0.name == "tags" }) else { return }
+            try db.alter(table: "book") { t in
+                // A JSON array of strings.
+                t.add(column: "tags", .text).notNull().defaults(to: "[]")
+            }
+        }
         return migrator
     }
 
@@ -268,6 +281,9 @@ public final class LibraryIndex: @unchecked Sendable {
         if let flags = record.flags {
             book.favorite = flags.favorite
             book.bookmarked = flags.bookmarked
+        }
+        if let tags = record.tags {
+            book.tags = tags.value
         }
         if let series = record.metadata?.series?.trimmingCharacters(in: .whitespaces), !series.isEmpty {
             book.series = series
