@@ -6,14 +6,14 @@ struct SidebarView: View {
     @State private var renaming: String?
     @State private var newName = ""
     @State private var deleting: String?
+    @Environment(\.sidebarToggle) private var sidebarToggle
 
     var body: some View {
-        @Bindable var model = model
         // Only precomputed counts are read here, so the sidebar redraws when a count changes,
         // not on every change to the books.
         let counts = model.summary.counts
         let pinned = model.pinnedFolders.filter { model.catalog.folders[$0] != nil }
-        List(selection: $model.selection) {
+        List {
             Section {
                 row(.all, count: counts[.all])
                 row(.continueReading, count: counts[.continueReading])
@@ -55,8 +55,16 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .labelStyle(SidebarLabelStyle())
-        .navigationTitle(model.libraryName)
+        .environment(\.defaultMinListRowHeight, 38)
+        .navigationTitle("Library")
+        .navigationBarTitleDisplayMode(.inline)
+        // Let the panel's frosted background show through the bar and the list.
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Close Sidebar", systemImage: "sidebar.left") { sidebarToggle.close() }
+            }
+        }
         .refreshable { await model.rescan() }
         .alert("Rename Tag", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Tag", text: $newName)
@@ -72,58 +80,36 @@ struct SidebarView: View {
         }
     }
 
+    /// A row: icon, title and a pill with the count right after it, on a soft grey band when
+    /// selected. Picking a row shows it in the library and puts the sidebar away.
     private func row(_ item: SidebarItem, count: Int?) -> some View {
-        // The count is drawn in the label, not with `.badge`, so it can switch to the inverse
-        // color on the selected row's black or white highlight (#55).
-        Label {
-            SidebarTitle(title: item.title, count: count ?? 0)
-        } icon: {
-            Image(systemName: item.systemImage)
-        }
-            .tag(item)
-            .accessibilityIdentifier("sidebar-\(item.title)")
-    }
-}
-
-/// A sidebar row's title with its count on the right, in the inverse color on the selected
-/// row's highlight.
-private struct SidebarTitle: View {
-    let title: String
-    let count: Int
-    @Environment(\.backgroundProminence) private var prominence
-
-    var body: some View {
-        let selected = prominence == .increased
-        HStack {
-            Text(title)
-                .foregroundStyle(selected ? Color.onAccent : Color.primary)
-            Spacer(minLength: 8)
-            if count > 0 {
-                Text(count, format: .number)
-                    .monospacedDigit()
-                    .foregroundStyle(selected ? Color.onAccent.opacity(0.75) : Color.secondary)
+        let selected = (model.selection ?? .all) == item
+        return Button {
+            if selected { sidebarToggle.close() } else { model.selection = item }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: item.systemImage)
+                    .frame(width: 22)
+                Text(item.title)
+                    .lineLimit(1)
+                if let count, count > 0 {
+                    Text(count, format: .number)
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.primary.opacity(0.1)))
+                }
+                Spacer(minLength: 0)
             }
+            .font(.subheadline)
+            .foregroundStyle(Color.primary)
+            .contentShape(Rectangle())
         }
-    }
-}
-
-/// Sidebar icons in black (light mode) or white (dark mode) instead of the accent color. The
-/// selected row's highlight is the accent (black or white), so there they take the inverse.
-struct SidebarLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Label {
-            configuration.title
-        } icon: {
-            SidebarIcon(icon: configuration.icon)
-        }
-    }
-
-    private struct SidebarIcon<Icon: View>: View {
-        let icon: Icon
-        @Environment(\.backgroundProminence) private var prominence
-
-        var body: some View {
-            icon.foregroundStyle(prominence == .increased ? AnyShapeStyle(Color.onAccent) : AnyShapeStyle(.primary))
-        }
+        .buttonStyle(.plain)
+        .listRowBackground(selected ? Color.primary.opacity(0.1) : Color.clear)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("sidebar-\(item.title)")
     }
 }

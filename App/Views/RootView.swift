@@ -45,9 +45,10 @@ struct RootView: View {
                     }
                     .containerBackground(.clear, for: .navigation)
                 }
-                .environment(\.sidebarToggle, SidebarToggleAction {
-                    withAnimation(.snappy(duration: 0.28)) { sidebarShown.toggle() }
-                })
+                .environment(\.sidebarToggle, SidebarToggleAction(
+                    toggle: { withAnimation(.snappy(duration: 0.28)) { sidebarShown.toggle() } },
+                    close: { withAnimation(.snappy(duration: 0.28)) { sidebarShown = false } }
+                ))
                 // Picking something in the sidebar puts it away.
                 .onChange(of: model.selection) {
                     if sidebarShown { withAnimation(.snappy(duration: 0.28)) { sidebarShown = false } }

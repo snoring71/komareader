@@ -11,8 +11,7 @@ struct SidebarOverlay<Library: View, Sidebar: View>: View {
     @ViewBuilder var library: Library
     @ViewBuilder var sidebar: Sidebar
 
-    static var width: CGFloat { 340 }
-    private static var inset: CGFloat { 10 }
+    static var width: CGFloat { 300 }
     private static var edgeWidth: CGFloat { 22 }
     private static var maxDim: Double { 0.28 }
 
@@ -22,7 +21,7 @@ struct SidebarOverlay<Library: View, Sidebar: View>: View {
     /// scrolling in the sidebar is left alone.
     @State private var dragIsSideways: Bool?
 
-    private var travel: CGFloat { Self.width + Self.inset }
+    private var travel: CGFloat { Self.width }
 
     /// 0 when hidden, 1 when fully out.
     private var progress: CGFloat {
@@ -63,14 +62,15 @@ struct SidebarOverlay<Library: View, Sidebar: View>: View {
     }
 
     private var panel: some View {
+        // A full-height frosted sheet along the left edge, like a system slide-over sidebar.
         sidebar
             .frame(width: Self.width)
             .frame(maxHeight: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .shadow(color: .black.opacity(0.18 * progress), radius: 18, x: 4)
-            .padding(.leading, Self.inset)
-            .padding(.vertical, Self.inset)
+            .background(.regularMaterial, ignoresSafeAreaEdges: .all)
+            .overlay(alignment: .trailing) {
+                Rectangle().fill(Color.primary.opacity(0.08)).frame(width: 0.5).ignoresSafeArea()
+            }
+            .shadow(color: .black.opacity(0.15 * progress), radius: 12, x: 2)
             .simultaneousGesture(closeGesture)
     }
 
@@ -121,6 +121,7 @@ struct SidebarOverlay<Library: View, Sidebar: View>: View {
 /// Opens and closes the sidebar from anywhere below the root view (the toolbar button).
 struct SidebarToggleAction {
     var toggle: () -> Void = {}
+    var close: () -> Void = {}
 }
 
 extension EnvironmentValues {
