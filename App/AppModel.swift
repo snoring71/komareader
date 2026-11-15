@@ -533,10 +533,12 @@ final class AppModel {
         }
     }
 
-    /// Opens a book's pages, downloading it first if it is only in iCloud.
-    func source(for book: Book) async -> BookSource? {
+    /// Opens a book's pages, downloading it first if it is only in iCloud. `quiet` (reopening
+    /// the reader after iOS ended the app, #66) neither downloads nor shows an error.
+    func source(for book: Book, quiet: Bool = false) async -> BookSource? {
         guard let url = fileURL(for: book) else { return nil }
         if !book.isDownloaded || !CloudFiles.isDownloaded(url) {
+            if quiet { return nil }
             await download(book)
             guard CloudFiles.isDownloaded(url) else { return nil }
         }
@@ -544,13 +546,22 @@ final class AppModel {
             let cache = cacheRoot.appendingPathComponent(Self.pageCacheName, isDirectory: true)
             return try await BookSourceFactory.open(url: url, format: book.format, cacheDirectory: cache)
         } catch {
-            errorMessage = "Could not open \(book.title): \(error.localizedDescription)"
+            if !quiet { errorMessage = "Could not open \(book.title): \(error.localizedDescription)" }
             return nil
         }
     }
 
-    func open(_ book: Book) async {
-        guard let source = await source(for: book) else { return }
+    /// Reopens the reader on the book that was open when iOS ended the app (#66). The page
+    /// comes from the saved progress, as on any open. A book that is gone, missing or only in
+    /// iCloud is skipped quietly, leaving the library.
+    func restoreReader(bookId: String) async {
+        guard !Self.isDemo, openBook == nil, let book = book(id: bookId), !book.isMissing, book.isDownloaded else { return }
+        await open(book, restoring: true)
+    }
+
+    /// `restoring`: reopened after iOS ended the app, so no cover intro and no error messages.
+    func open(_ book: Book, restoring: Bool = false) async {
+        guard let source = await source(for: book, quiet: restoring) else { return }
         var current = books.first { $0.id == book.id } ?? book
         let record = await record(for: book.id)
         // The newest position wins on open, even if it arrived from another device since the last scan.
@@ -580,7 +591,9 @@ final class AppModel {
         bookInfo = nil
         var options = record?.effectiveReaderOptions ?? ReaderOptions(updatedAt: .distantPast)
         if record == nil, let direction = current.direction { options.direction = ReaderOptions.Direction(rawValue: direction) }
-        let intro = await coverIntro(for: current)
+        let intro = restoring ? nil : await coverIntro(for: current)
+        // Something else may have opened in the meantime.
+        if restoring, openBook != nil { return }
         openBook = OpenBook(book: current, source: source, handOff: handOff, options: options, intro: intro,
                             bookmarks: record?.pageBookmarks?.pages)
     }
@@ -692,6 +705,7 @@ final class AppModel {
         for id in ids {
             progressTasks[id]?.cancel()
             progressTasks[id] = nil
+            pendingProgress[id] = nil
         }
         if let reading = readingBook, ids.contains(reading.id) { readingBook = nil }
         let changed = updateBooks(ids) { book in
@@ -728,18 +742,41 @@ final class AppModel {
         guard let store, let book = (whileReading ? readingBook : nil) ?? books.first(where: { $0.id == bookId }) else { return }
         let deviceId = deviceId
         let index = whileReading ? index : nil
-        progressTasks[bookId]?.cancel()
-        progressTasks[bookId] = Task.detached(priority: .utility) {
-            if !immediately {
-                try? await Task.sleep(for: .seconds(1))
-                if Task.isCancelled { return }
-            }
+        let write: @Sendable () -> Void = {
             try? index?.save(book)
             var record = store.read(bookId: bookId) ?? BookRecord(bookId: bookId, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
             record.file = .init(path: book.relativePath, size: book.size, modified: book.modified, fingerprint: record.file.fingerprint)
             record.progress[deviceId] = .init(page: page, pageCount: pageCount, finished: isFinished, updatedAt: now)
             try? store.write(record)
         }
+        progressTasks[bookId]?.cancel()
+        let token = UUID()
+        pendingProgress[bookId] = immediately ? nil : (token, write)
+        progressTasks[bookId] = Task.detached(priority: .utility) { [weak self] in
+            if !immediately {
+                try? await Task.sleep(for: .seconds(1))
+                if Task.isCancelled { return }
+            }
+            write()
+            // Written: nothing left for flushProgress (unless a newer write took its place).
+            await MainActor.run {
+                if self?.pendingProgress[bookId]?.token == token { self?.pendingProgress[bookId] = nil }
+            }
+        }
+    }
+
+    /// Progress writes still waiting out `saveProgress`'s pause, so `flushProgress` can make them
+    /// at once.
+    @ObservationIgnored private var pendingProgress: [String: (token: UUID, write: @Sendable () -> Void)] = [:]
+
+    /// Writes waiting progress now, when the app leaves the foreground, so the page is on disk
+    /// before iOS can end the app (#66).
+    func flushProgress() {
+        guard !pendingProgress.isEmpty else { return }
+        let writes = pendingProgress.values.map(\.write)
+        for id in pendingProgress.keys { progressTasks[id]?.cancel() }
+        pendingProgress = [:]
+        for write in writes { write() }
     }
 
     /// Sets a book's reading direction from Book Info (the reader saves its settings itself).
