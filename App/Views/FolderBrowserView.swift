@@ -9,6 +9,7 @@ struct FolderBrowserView: View {
     @State private var showSettings = false
     @AppStorage("folderSortOrder") private var sort: LibraryGridView.SortOrder = .title
     @AppStorage("coverSize") private var coverSize: Double = 150
+    @AppStorage(TitleGrid.folders.key) private var showTitles = true
 
     private var folders: [FolderInfo] {
         let all = model.catalog.folders
@@ -83,7 +84,7 @@ struct FolderBrowserView: View {
         }
         .navigationTitle("Folders")
         .searchable(text: $search, prompt: "Search folders")
-        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings) }
+        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showTitles: $showTitles) }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
 
@@ -129,6 +130,9 @@ struct FolderLink: View {
 struct FolderCell: View {
     @Environment(AppModel.self) private var model
     @Environment(\.coverStyle) private var style
+    /// Read here rather than from the grid, so folder tiles inside a folder's own page follow
+    /// the folder browser's Show Titles too.
+    @AppStorage(TitleGrid.folders.key) private var showTitles = true
     let folder: FolderInfo
     var showsPath = false
 
@@ -145,14 +149,16 @@ struct FolderCell: View {
                         .padding(6)
                 }
                 .onAppear { if let cover { model.requestCover(for: cover, urgent: true) } }
-            Text(folder.name)
-                .font(.footnote.weight(.medium))
-                .lineLimit(2, reservesSpace: true)
-                .foregroundStyle(.primary)
-            Text(detail)
-                .font(.caption2)
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
+            if showTitles {
+                Text(folder.name)
+                    .font(.footnote.weight(.medium))
+                    .lineLimit(2, reservesSpace: true)
+                    .foregroundStyle(.primary)
+                Text(detail)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
         }
         .contentShape(Rectangle())
     }

@@ -695,6 +695,13 @@ final class AppModel {
         }
     }
 
+    /// Clears a book's own reader settings (#53), so it follows Book Defaults again. Written
+    /// as an empty settings group with a new date, so it syncs and wins over older settings on
+    /// other devices. Progress, favorite, bookmark, tags, cover and metadata stay.
+    func resetReaderOptions(bookId: String) {
+        saveReaderOptions(bookId: bookId, options: ReaderOptions(updatedAt: Date()))
+    }
+
     /// The direction a book reads in: its own, else the default for books.
     func direction(of book: Book) -> ReaderOptions.Direction {
         let own = directionAfterReading?.id == book.id ? directionAfterReading?.direction : book.direction
