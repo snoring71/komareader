@@ -276,13 +276,14 @@ final class ScreenshotTests: XCTestCase {
                 }
                 save(app, "17f-reader-share-sheet")
             }
-            // Out of the share sheet and the panel.
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
-            sleep(1)
-            if app.descendants(matching: .any)["reader-more-panel"].firstMatch.exists {
-                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+            // Out of the share sheet and the panel, however many taps that takes.
+            let morePanel = app.descendants(matching: .any)["reader-more-panel"].firstMatch
+            let shareSheet = app.otherElements["ActivityListView"].firstMatch
+            for _ in 0..<4 where morePanel.exists || shareSheet.exists {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
                 sleep(1)
             }
+            XCTAssertFalse(morePanel.exists, "The More panel did not close after sharing")
         }
 
         // The cover button in the page bar goes back to the cover; a tap forward returns.
@@ -295,6 +296,7 @@ final class ScreenshotTests: XCTestCase {
             sleep(1)
         }
 
+        save(app, "17g-reader-before-swipe-up")
         // A swipe up on the page closes the book.
         let readerPage = app.otherElements["reader-page"].firstMatch
         readerPage.swipeUp(velocity: .fast)
