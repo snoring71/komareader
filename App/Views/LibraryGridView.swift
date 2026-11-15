@@ -86,7 +86,7 @@ struct LibraryGridView: View {
     var body: some View {
         let books = visibleBooks
         let letters = letterAnchors(books)
-        let continueReading = item == .all && search.isEmpty && selection == nil ? continueReading : []
+        let continueReading = item == .all && search.isEmpty ? continueReading : []
         ScrollViewReader { proxy in
             ScrollView {
                 if !continueReading.isEmpty {
@@ -95,7 +95,9 @@ struct LibraryGridView: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 16) {
                                 ForEach(continueReading.prefix(12)) { book in
-                                    BookCell(book: book).frame(width: size)
+                                    // Selectable here too, so Select mode leaves the page where it is.
+                                    BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }) { toggle(book.id) }
+                                        .frame(width: size)
                                         // Always the plain look, so the row keeps its height and
                                         // the page does not jump when Cover Info is turned on or off.
                                         .environment(\.coverInfo, CoverInfo())
