@@ -27,6 +27,7 @@ public actor CoverService {
     private var wakeTask: Task<Void, Never>?
     private var failed: Set<String> = []
     private var onCoverReady: (@Sendable (String, URL) -> Void)?
+    private var onMetadata: (@Sendable (String, FileMetadata) -> Void)?
     /// When false, books that are not on the device wait (for Wi-Fi, a charger, and so on).
     public private(set) var allowsCloudDownloads = true
     /// Pause between two books fetched from iCloud, so a big library does not saturate the network.
@@ -42,6 +43,12 @@ public actor CoverService {
 
     public func setHandler(_ handler: @escaping @Sendable (String, URL) -> Void) {
         onCoverReady = handler
+    }
+
+    /// Called with a book's file metadata when a cover job had the file at hand anyway
+    /// (it read the first page) and the book's metadata had not been read yet.
+    public func setMetadataHandler(_ handler: @escaping @Sendable (String, FileMetadata) -> Void) {
+        onMetadata = handler
     }
 
     public func setAllowsCloudDownloads(_ allowed: Bool) {
@@ -147,12 +154,13 @@ public actor CoverService {
         running.insert(id)
         if cloud { cloudRunning += 1 }
         Task.detached(priority: .utility) { [store, thumbnailDirectory] in
-            let result = await Self.makeCover(book: job.book, fileURL: job.fileURL, store: store, thumbnailDirectory: thumbnailDirectory)
-            await self.finish(id: id, thumbnail: result, cloud: cloud)
+            let (result, metadata) = await Self.makeCover(book: job.book, fileURL: job.fileURL, store: store, thumbnailDirectory: thumbnailDirectory)
+            await self.finish(id: id, thumbnail: result, metadata: metadata, cloud: cloud)
         }
     }
 
-    private func finish(id: String, thumbnail: URL?, cloud: Bool) {
+    private func finish(id: String, thumbnail: URL?, metadata: FileMetadata?, cloud: Bool) {
+        if let metadata { onMetadata?(id, metadata) }
         running.remove(id)
         if cloud {
             cloudRunning -= 1
@@ -162,13 +170,13 @@ public actor CoverService {
         pump()
     }
 
-    private static func makeCover(book: Book, fileURL: URL, store: RecordStore, thumbnailDirectory: URL) async -> URL? {
+    private static func makeCover(book: Book, fileURL: URL, store: RecordStore, thumbnailDirectory: URL) async -> (URL?, FileMetadata?) {
         let thumbURL = thumbnailDirectory.appendingPathComponent("\(book.id).jpg")
         do {
             // 1. A cover made by another device (or the Windows app) is already synced.
             if let shared = store.existingCoverURL(bookId: book.id) {
                 try writeThumbnail(from: try ImageDecoder.downsample(url: shared, maxPixelSize: thumbnailHeight), to: thumbURL)
-                return thumbURL
+                return (thumbURL, nil)
             }
             // 2. Otherwise read the first page, fetching the book from iCloud if needed.
             let wasDownloaded = CloudFiles.isDownloaded(fileURL)
@@ -176,12 +184,14 @@ public actor CoverService {
             defer { if !wasDownloaded { try? CloudFiles.evict(fileURL) } }
 
             let cover = try await BookSourceFactory.firstPageImage(url: fileURL, format: book.format, maxPixelSize: sharedCoverHeight)
-            guard let jpeg = ImageDecoder.jpegData(cover, quality: 0.85) else { return nil }
+            // While the file is here (a book in iCloud is removed again below), read its metadata too.
+            let metadata = book.metadataRead ? nil : MetadataReader.read(url: fileURL, format: book.format)
+            guard let jpeg = ImageDecoder.jpegData(cover, quality: 0.85) else { return (nil, metadata) }
             try store.writeCover(jpeg, bookId: book.id)
             try writeThumbnail(from: try ImageDecoder.downsample(data: jpeg, maxPixelSize: thumbnailHeight), to: thumbURL)
-            return thumbURL
+            return (thumbURL, metadata)
         } catch {
-            return nil
+            return (nil, nil)
         }
     }
 

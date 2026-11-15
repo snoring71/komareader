@@ -126,6 +126,8 @@ struct BookInfoView: View {
             Section("Metadata") {
                 LabeledContent("Series", value: book.series)
                 LabeledContent("Number", value: book.number ?? "–")
+                if let author = book.author { LabeledContent("Author", value: author) }
+                if let publisher = book.publisher { LabeledContent("Publisher", value: publisher) }
             }
 
             Section("Details") {

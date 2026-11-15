@@ -83,6 +83,11 @@ copies tag by tag, keeping whichever entry has the later `updatedAt`.
 - `tags` holds the user's own tags for the book, in the user's spelling. Tags are matched
   ignoring case, and a book lists each tag once. Renaming or deleting a tag rewrites `tags`
   on every book that has it, and updates `tags.json`.
+- `removed` (`{ "updatedAt": "..." }`) means the user deleted the book from the library after
+  its file went missing. It counts only while its `updatedAt` is later than every other group's
+  and every `progress` entry's. An app that lists the book as missing should then drop it. If a
+  file turns up at `file.path` again, show it as a new book. The app that deletes a book
+  replaces the record with one holding only `file` and `removed`, and deletes its covers.
 - `readerSettings` holds the reading direction as version 0.1 wrote it: `direction` is `ltr` or
   `rtl`; `layout` is `auto`, `single` or `double`. Once a record has `readerOptions`, use that
   instead, but keep `readerSettings.direction` up to date for older versions.
@@ -133,7 +138,7 @@ record whose `bookId` is the worked-out id, else the lowest `bookId`, merge the 
 Two devices may change the same record at the same time. When two copies differ
 (for example an iCloud conflict copy), merge them like this:
 
-1. For `metadata`, `tags`, `cover`, `flags`, `readerSettings` and `readerOptions`, keep whichever copy has the later `updatedAt`.
+1. For `metadata`, `tags`, `cover`, `flags`, `readerSettings`, `readerOptions` and `removed`, keep whichever copy has the later `updatedAt`.
 2. For `progress`, keep every device key; for a key in both copies, keep the later `updatedAt`.
 3. Write files atomically (write a temporary file, then rename over the original).
 

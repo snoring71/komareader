@@ -199,6 +199,17 @@ public final class RecordStore: @unchecked Sendable {
         }
     }
 
+    /// Deletes a book from the library for good (after its file went missing): its covers go,
+    /// and its record is replaced, not merged, by one that only says it was removed, so other
+    /// devices drop the book too. See `BookRecord.isRemoved`.
+    public func markRemoved(bookId: String, file: BookRecord.FileInfo, at date: Date = Date()) throws {
+        for custom in [true, false] { try deleteCover(bookId: bookId, custom: custom) }
+        var record = BookRecord(bookId: bookId, file: file)
+        record.removed = .init(updatedAt: date)
+        // An older conflict version merged in later keeps the removal: its dates are older.
+        try Self.coordinatedWrite(try RecordCoding.encoder().encode(record), to: recordURL(bookId: bookId))
+    }
+
     // MARK: Covers
 
     public func coverURL(bookId: String, custom: Bool = false) -> URL {

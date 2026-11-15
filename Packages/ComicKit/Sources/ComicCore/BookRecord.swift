@@ -19,6 +19,9 @@ public struct BookRecord: Codable, Equatable, Sendable {
     public var readerOptions: ReaderOptions?
     /// Reading position per device id. Newest entry wins when opening a book.
     public var progress: [String: Progress]
+    /// Set when the user deletes the book from the library after its file went missing.
+    /// See `isRemoved`.
+    public var removed: Removed?
 
     public init(bookId: String, file: FileInfo) {
         self.schema = Self.currentSchema
@@ -59,6 +62,23 @@ public struct BookRecord: Codable, Equatable, Sendable {
             self.year = year
             self.updatedAt = updatedAt
         }
+    }
+
+    /// The book was deleted from the library (only offered once its file is missing).
+    public struct Removed: Codable, Equatable, Sendable {
+        public var updatedAt: Date
+        public init(updatedAt: Date = Date()) { self.updatedAt = updatedAt }
+    }
+
+    /// True while the deletion is the newest thing that happened to the book. Anything set
+    /// later (reading it, a Favorite) means the book came back, so it counts as not removed.
+    public var isRemoved: Bool {
+        guard let removed else { return false }
+        let others: [Date?] = [
+            metadata?.updatedAt, tags?.updatedAt, cover?.updatedAt, flags?.updatedAt,
+            readerSettings?.updatedAt, readerOptions?.updatedAt, latestProgress?.progress.updatedAt,
+        ]
+        return others.allSatisfy { ($0 ?? .distantPast) <= removed.updatedAt }
     }
 
     public struct Tags: Codable, Equatable, Sendable {
@@ -160,6 +180,7 @@ public extension BookRecord {
         result.flags = Self.newer(flags, other.flags) { $0.updatedAt }
         result.readerSettings = Self.newer(readerSettings, other.readerSettings) { $0.updatedAt }
         result.readerOptions = Self.newer(readerOptions, other.readerOptions) { $0.updatedAt }
+        result.removed = Self.newer(removed, other.removed) { $0.updatedAt }
         if result.file.fingerprint == nil { result.file.fingerprint = other.file.fingerprint }
         for (device, theirs) in other.progress {
             if let mine = result.progress[device], mine.updatedAt >= theirs.updatedAt { continue }
