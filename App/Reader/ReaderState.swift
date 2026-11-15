@@ -64,18 +64,65 @@ final class ReaderState {
     @ObservationIgnored var onPageChange: ((_ page: Int, _ finished: Bool) -> Void)?
     /// Called with the book's own settings whenever they change, to save them.
     @ObservationIgnored var onOptionsChange: ((ReaderOptions) -> Void)?
+    /// Called with the bookmarked pages whenever they change, to save them.
+    @ObservationIgnored var onBookmarksChange: (([Int]) -> Void)?
 
-    init(book: Book, source: BookSource, options: ReaderOptions, defaults: ReaderDefaults) {
+    /// Bookmarked pages (image indexes), sorted.
+    private(set) var bookmarks: [Int]
+
+    init(book: Book, source: BookSource, options: ReaderOptions, defaults: ReaderDefaults, bookmarks: [Int]? = nil) {
         self.book = book
         self.source = source
         self.pageCount = source.pageCount
         self.options = options
         self.defaults = defaults
+        self.bookmarks = Array(Set(bookmarks ?? book.pageBookmarks)).filter { $0 >= 0 && $0 < source.pageCount }.sorted()
         self.textAnalyzer = PageTextAnalyzer()
-        let start = min(max(0, book.finished ? 0 : (book.currentPage ?? 0)), max(0, source.pageCount - 1))
-        rebuild(keeping: start)
+        rebuild(keeping: Self.startPage(for: book, pageCount: source.pageCount))
         loadPageSizes()
     }
+
+    /// Where a book opens: a finished book on its last page (so opening and closing it keeps
+    /// it Read), any other book where it was left.
+    static func startPage(for book: Book, pageCount: Int) -> Int {
+        let page = book.finished ? pageCount - 1 : (book.currentPage ?? 0)
+        return min(max(0, page), max(0, pageCount - 1))
+    }
+
+    // MARK: Bookmarks
+
+    /// The bookmarked pages on screen now.
+    var bookmarksOnScreen: [Int] { currentPages.filter { bookmarks.contains($0) } }
+
+    var isBookmarkedHere: Bool { !bookmarksOnScreen.isEmpty }
+
+    /// Bookmarks the page on screen (in a two-page spread, the first page in reading order),
+    /// or removes the bookmarks on screen if there are any.
+    func toggleBookmark() {
+        let here = bookmarksOnScreen
+        if here.isEmpty {
+            setBookmarks(bookmarks + [currentPage])
+        } else {
+            setBookmarks(bookmarks.filter { !here.contains($0) })
+        }
+    }
+
+    func removeBookmark(_ page: Int) {
+        setBookmarks(bookmarks.filter { $0 != page })
+    }
+
+    private func setBookmarks(_ pages: [Int]) {
+        let sorted = Array(Set(pages)).sorted()
+        guard sorted != bookmarks else { return }
+        bookmarks = sorted
+        onBookmarksChange?(sorted)
+    }
+
+    // MARK: Sharing
+
+    /// The images on screen, left to right as they sit on the screen. One image when a single
+    /// page shows, or when the two halves of one split image do.
+    var pagesOnScreenLeftToRight: [Int] { rightToLeft ? Array(currentPages.reversed()) : currentPages }
 
     // MARK: Settings (the book's own, else the defaults)
 

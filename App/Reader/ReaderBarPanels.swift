@@ -1,3 +1,4 @@
+import ArchiveKit
 import ComicCore
 import SwiftUI
 
@@ -245,10 +246,29 @@ struct MoreSettingsPanel: View {
     let state: ReaderState
     /// Use as Defaults was tapped once and is waiting to be confirmed.
     @State private var confirmingDefaults = false
+    /// Two pages are on screen: Share Page asks which one.
+    @State private var choosingPage = false
+    /// The page file is being made (an archive page still unpacking, a PDF page rendering).
+    @State private var preparingShare = false
+    @State private var shareFailed = false
+    @State private var shareAnchor = ShareAnchor.Holder()
 
     var body: some View {
         BarPanel(title: "More", width: 320) {
             VStack(spacing: 0) {
+                if choosingPage {
+                    choosePage
+                        .transition(.opacity)
+                } else {
+                    row(shareFailed ? "Couldn’t Share This Page" : "Share Page", systemImage: "square.and.arrow.up") { sharePage() }
+                        .overlay(alignment: .trailing) {
+                            if preparingShare { ProgressView().padding(.trailing, 12) }
+                        }
+                        .disabled(preparingShare)
+                        .accessibilityIdentifier("reader-share-page")
+                        .transition(.opacity)
+                }
+                Divider().padding(.leading, 40)
                 if confirmingDefaults {
                     confirmDefaults
                         .transition(.opacity)
@@ -270,8 +290,75 @@ struct MoreSettingsPanel: View {
                 .foregroundStyle(.secondary)
         }
         .animation(.easeInOut(duration: 0.2), value: confirmingDefaults)
+        .animation(.easeInOut(duration: 0.2), value: choosingPage)
+        // The share sheet points at the panel.
+        .background(ShareAnchor(holder: shareAnchor))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-more-panel")
+    }
+
+    /// Shares the page on screen as it is in the book (no crop, split or adjustments). With
+    /// two pages showing, asks which one first.
+    private func sharePage() {
+        let pages = state.pagesOnScreenLeftToRight
+        if pages.count > 1 {
+            choosingPage = true
+        } else if let page = pages.first {
+            share(page)
+        }
+    }
+
+    private var choosePage: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Share which page?")
+                .font(.subheadline)
+            HStack {
+                let pages = state.pagesOnScreenLeftToRight
+                Button("Left Page") {
+                    choosingPage = false
+                    if let left = pages.first { share(left) }
+                }
+                .buttonStyle(.bordered)
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityIdentifier("reader-share-left")
+                Button("Right Page") {
+                    choosingPage = false
+                    if let right = pages.last { share(right) }
+                }
+                .buttonStyle(.bordered)
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityIdentifier("reader-share-right")
+                Spacer(minLength: 0)
+                Button("Cancel") { choosingPage = false }
+                    .buttonStyle(.borderless)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .tint(.primary)
+        }
+        .padding(12)
+    }
+
+    private func share(_ page: Int) {
+        preparingShare = true
+        shareFailed = false
+        let source = state.source, title = state.book.title
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Shared Pages", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        Task { @MainActor in
+            defer { preparingShare = false }
+            do {
+                let file = try await PageExport.export(source, page: page, title: title, to: directory)
+                shareAnchor.present([file]) {
+                    try? FileManager.default.removeItem(at: directory)
+                }
+            } catch {
+                shareFailed = true
+            }
+        }
     }
 
     /// Asks before changing every book in the library.
@@ -314,6 +401,136 @@ struct MoreSettingsPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// The reader's bookmarked pages: tap one to go there.
+struct BookmarksPanel: View {
+    let state: ReaderState
+    let close: () -> Void
+
+    var body: some View {
+        BarPanel(title: "Bookmarks", width: 320) {
+            if state.bookmarks.isEmpty {
+                Text("No bookmarked pages yet. Tap the bookmark button to bookmark the page you’re on.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(Array(state.bookmarks.enumerated()), id: \.element) { index, page in
+                            if index > 0 { Divider().padding(.leading, 64) }
+                            BookmarkRow(state: state, page: page) {
+                                state.jump(toPage: page)
+                                close()
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 380)
+                .scrollBounceBehavior(.basedOnSize)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(PanelFill.color))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(PanelFill.edge))
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("reader-bookmarks-panel")
+    }
+}
+
+private struct BookmarkRow: View {
+    let state: ReaderState
+    let page: Int
+    let open: () -> Void
+    @State private var thumbnail: UIImage?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: open) {
+                HStack(spacing: 12) {
+                    Group {
+                        if let thumbnail {
+                            Image(uiImage: thumbnail).resizable().scaledToFit()
+                        } else {
+                            Color.primary.opacity(0.08)
+                        }
+                    }
+                    .frame(width: 36, height: 52)
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    Text("Page \(page + 1)")
+                        .font(.body.monospacedDigit())
+                        .foregroundStyle(Color.primary)
+                    if state.currentPages.contains(page) {
+                        Text("Showing")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Page \(page + 1)")
+            .accessibilityIdentifier("reader-bookmark-\(page + 1)")
+            Button {
+                state.removeBookmark(page)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove Bookmark on Page \(page + 1)")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .task(id: page) { thumbnail = await state.thumbnail(for: page) }
+    }
+}
+
+/// An invisible view in a panel that the share sheet is shown from, so on iPad it points at
+/// the panel rather than the middle of the screen.
+struct ShareAnchor: UIViewRepresentable {
+    @MainActor
+    final class Holder {
+        weak var view: UIView?
+
+        func present(_ items: [Any], completion: @escaping () -> Void) {
+            guard let view, var top = view.owningViewController ?? view.window?.rootViewController else { return }
+            while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
+            let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
+            sheet.popoverPresentationController?.sourceView = view
+            sheet.popoverPresentationController?.sourceRect = view.bounds
+            sheet.completionWithItemsHandler = { _, _, _, _ in completion() }
+            top.present(sheet, animated: true)
+        }
+    }
+
+    let holder: Holder
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        holder.view = view
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        holder.view = view
+    }
+}
+
+private extension UIView {
+    /// The view controller whose view holds this one.
+    var owningViewController: UIViewController? {
+        var responder: UIResponder? = next
+        while let current = responder {
+            if let controller = current as? UIViewController { return controller }
+            responder = current.next
+        }
+        return nil
     }
 }
 

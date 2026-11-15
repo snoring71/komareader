@@ -80,7 +80,7 @@ enum SidebarItem: Hashable {
         case .series, .folders: return !book.isMissing
         case .downloaded: return !book.isMissing && book.isDownloaded
         case .favorites: return !book.isMissing && book.favorite
-        case .bookmarked: return !book.isMissing && book.bookmarked
+        case .bookmarked: return !book.isMissing && book.hasBookmarks
         case .seriesNamed(let name): return !book.isMissing && book.series.caseInsensitiveCompare(name) == .orderedSame
         case .unread: return !book.isMissing && book.status == .unread
         case .reading: return !book.isMissing && book.status == .reading

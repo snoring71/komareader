@@ -57,7 +57,7 @@ struct RootView: View {
             }
         }
         .fullScreenCover(item: $model.openBook) { open in
-            ReaderScreen(book: open.book, source: open.source, options: open.options, defaults: model.readerDefaults, handOff: open.handOff, intro: open.intro)
+            ReaderScreen(book: open.book, source: open.source, options: open.options, defaults: model.readerDefaults, handOff: open.handOff, intro: open.intro, bookmarks: open.bookmarks)
                 .toggleStyle(MonoToggleStyle())
         }
         .sheet(item: $model.bookInfo) { ref in

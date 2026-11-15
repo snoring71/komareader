@@ -25,12 +25,16 @@ struct ReaderScreen: View {
     @State private var closing = false
     /// A newer position from another device, until the reader jumps there or says no.
     @State private var handOff: AppModel.HandOff?
+    /// A Read book was turned off its last page: asks whether to start reading it again.
+    @State private var askingRestart = false
+    /// Asked once per opening, so a No isn't asked again on every page.
+    @State private var restartAsked = false
     /// Shows "Copied" on the Select Text bar for a moment after Copy All.
     @State private var copiedText = false
 
     init(book: Book, source: BookSource, options: ReaderOptions, defaults: ReaderDefaults,
-         handOff: AppModel.HandOff? = nil, intro: CoverIntro? = nil) {
-        _state = State(initialValue: ReaderState(book: book, source: source, options: options, defaults: defaults))
+         handOff: AppModel.HandOff? = nil, intro: CoverIntro? = nil, bookmarks: [Int]? = nil) {
+        _state = State(initialValue: ReaderState(book: book, source: source, options: options, defaults: defaults, bookmarks: bookmarks))
         _handOff = State(initialValue: handOff)
         _cover = State(initialValue: intro)
         _showingCover = State(initialValue: intro != nil && CoverIntro.isEnabled)
@@ -69,6 +73,11 @@ struct ReaderScreen: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .zIndex(3)
                 }
+                if askingRestart {
+                    restartBanner
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(5)
+                }
                 if let handOff {
                     handOffBanner(handOff)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -84,6 +93,7 @@ struct ReaderScreen: View {
         .presentationBackground(.clear)
         .animation(.easeInOut(duration: 0.25), value: state.showChrome)
         .animation(.easeInOut(duration: 0.25), value: handOff)
+        .animation(.easeInOut(duration: 0.25), value: askingRestart)
         .animation(.easeInOut(duration: 0.2), value: state.selectingText)
         .animation(.easeInOut(duration: 0.2), value: state.textStatus)
         .sheet(isPresented: $showInfo) {
@@ -103,6 +113,8 @@ struct ReaderScreen: View {
             let bookId = state.book.id, count = state.pageCount
             let appModel = model
             let handOffPrompt = $handOff
+            let restartPrompt = $askingRestart, restartWasAsked = $restartAsked
+            let wasFinished = state.book.finished, readerState = state
             let coverShown = $showingCover
             if let cover {
                 let style = coverStyle, readerState = state
@@ -120,10 +132,18 @@ struct ReaderScreen: View {
             state.onOptionsChange = { [weak appModel] options in
                 appModel?.saveReaderOptions(bookId: bookId, options: options)
             }
+            state.onBookmarksChange = { [weak appModel] pages in
+                appModel?.savePageBookmarks(bookId: bookId, pages: pages)
+            }
             state.onPageChange = { [weak appModel] page, finished in
                 appModel?.saveProgress(bookId: bookId, page: page, pageCount: count, finished: finished)
                 // Turning the page answers the hand-off question too.
                 if handOffPrompt.wrappedValue != nil { handOffPrompt.wrappedValue = nil }
+                // A Read book, turned to any page but the last: ask whether to read it again.
+                if wasFinished, !restartWasAsked.wrappedValue, !readerState.currentPages.contains(count - 1) {
+                    restartWasAsked.wrappedValue = true
+                    restartPrompt.wrappedValue = true
+                }
                 // Moving to another page (the scrubber, a hand-off jump) moves past the cover
                 // too. Only the reader's own moves count: the layout settling as the book opens
                 // (page sizes read, the screen's orientation) also renumbers the screens, and
@@ -133,11 +153,25 @@ struct ReaderScreen: View {
                 }
             }
             scrubPage = Double(state.currentPage)
-            // Record that the book was opened, so it shows under Continue Reading.
-            model.saveProgress(bookId: bookId, page: state.currentPage, pageCount: count, finished: state.currentPages.contains(count - 1) && count > 1)
+            // Record that the book was opened, so it shows under Continue Reading. Not while
+            // the cover shows: opening a book to its cover and closing it doesn't count as
+            // reading (see onDisappear).
+            if !showingCover {
+                model.saveProgress(bookId: bookId, page: state.currentPage, pageCount: count, finished: state.currentPages.contains(count - 1) && count > 1)
+            }
             state.prefetch()
         }
-        .onDisappear { state.cancel() }
+        .onDisappear {
+            state.cancel()
+            // Closing anywhere but the cover counts as reading, even on the first page. From
+            // the cover nothing is saved: an unread book stays unread, and a book read before
+            // keeps the page it was left on.
+            if !showingCover {
+                model.saveProgress(bookId: state.book.id, page: state.currentPage, pageCount: state.pageCount,
+                                   finished: state.currentPages.contains(state.pageCount - 1) && state.pageCount > 1,
+                                   immediately: true)
+            }
+        }
         .onChange(of: state.currentSpread) { _, _ in
             if !isScrubbing { scrubPage = Double(state.currentPage) }
         }
@@ -195,6 +229,39 @@ struct ReaderScreen: View {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) { model.openBook = nil }
+        }
+    }
+
+    /// Asks whether a Read book is being read again. Yes makes it Reading from this page
+    /// (reaching the last page makes it Read again); No leaves it Read.
+    private var restartBanner: some View {
+        VStack {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.body.weight(.semibold))
+                Text("Reset reading progress?")
+                    .font(.subheadline.weight(.medium))
+                Button {
+                    askingRestart = false
+                    model.saveProgress(bookId: state.book.id, page: state.currentPage, pageCount: state.pageCount,
+                                       finished: false, keepFinished: false)
+                } label: {
+                    // Inverse text on the black or white accent glass (#55).
+                    Text("Yes").foregroundStyle(Color.onAccent)
+                }
+                .buttonStyle(.glassProminent)
+                .accessibilityIdentifier("restart-yes")
+                Button("No, Keep as Read") { askingRestart = false }
+                    .buttonStyle(.glass)
+                    .accessibilityIdentifier("restart-no")
+            }
+            .padding(.leading, 18)
+            .padding(.trailing, 8)
+            .padding(.vertical, 8)
+            .glassEffect(in: .capsule)
+            // Below the menu bar while the controls show.
+            .padding(.top, state.showChrome ? 140 : 70)
+            Spacer()
         }
     }
 
@@ -417,6 +484,10 @@ struct ReaderScreen: View {
                 // Manga scrubs from right to left, like the pages.
                 .environment(\.layoutDirection, state.rightToLeft ? .rightToLeft : .leftToRight)
                 .accessibilityIdentifier("reader-scrubber")
+                // Bookmarked pages, as small marks above the track.
+                .overlay(alignment: .top) {
+                    BookmarkTicks(pages: state.bookmarks, pageCount: state.pageCount, rightToLeft: state.rightToLeft)
+                }
             }
             if state.rightToLeft { coverButton }
         }
@@ -424,5 +495,30 @@ struct ReaderScreen: View {
         .padding(.vertical, 12)
         .glassEffect(in: .capsule)
         .frame(maxWidth: 720)
+    }
+}
+
+/// Small orange marks above the page scrubber at the bookmarked pages.
+private struct BookmarkTicks: View {
+    let pages: [Int]
+    let pageCount: Int
+    let rightToLeft: Bool
+    /// How far the slider's track starts in from its ends (about half its thumb).
+    private let inset: CGFloat = 14
+
+    var body: some View {
+        GeometryReader { geo in
+            let track = max(0, geo.size.width - inset * 2)
+            ForEach(pages, id: \.self) { page in
+                let fraction = pageCount > 1 ? CGFloat(page) / CGFloat(pageCount - 1) : 0
+                Capsule()
+                    .fill(Color.orange)
+                    .frame(width: 3, height: 8)
+                    .position(x: inset + track * (rightToLeft ? 1 - fraction : fraction), y: -4)
+            }
+        }
+        .frame(height: 0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

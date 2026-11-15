@@ -40,6 +40,8 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         LSRequiresIPhoneOS: true
         LSSupportsOpeningDocumentsInPlace: true
+        # Save Image in the share sheet (Share Page) only shows when the app may add to Photos.
+        NSPhotoLibraryAddUsageDescription: Save pages you share from the reader to your photo library.
         UILaunchScreen: {}
         # Comic archive types, so the thumbnail extension can claim them in the Files app.
         UTImportedTypeDeclarations:
