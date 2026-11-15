@@ -166,6 +166,8 @@ final class AppModel {
         var handOff: HandOff?
         /// The book's own reader settings.
         var options: ReaderOptions
+        /// The book's cover, shown first if Show Cover First is on, and from the page bar.
+        var intro: CoverIntro?
         var id: String { book.id }
     }
 
@@ -475,7 +477,29 @@ final class AppModel {
         bookInfo = nil
         var options = record?.effectiveReaderOptions ?? ReaderOptions(updatedAt: .distantPast)
         if record == nil, let direction = current.direction { options.direction = ReaderOptions.Direction(rawValue: direction) }
-        openBook = OpenBook(book: current, source: source, handOff: handOff, options: options)
+        let intro = await coverIntro(for: current)
+        openBook = OpenBook(book: current, source: source, handOff: handOff, options: options, intro: intro)
+    }
+
+    /// Average cover colours, so a book opened again gets its background at once.
+    private let coverColors = NSCache<NSString, UIColor>()
+
+    /// The cover intro for a book, from its library thumbnail (already on disk, so it is quick).
+    private func coverIntro(for book: Book) async -> CoverIntro? {
+        guard let thumbnailURL = thumbnails[book.id] else { return nil }
+        let key = "\(book.id)|\(coverRevision[book.id] ?? 0)" as NSString
+        let knownColor = coverColors.object(forKey: key)
+        let store = store, bookId = book.id
+        let loaded = await Task.detached(priority: .userInitiated) { () -> (image: UIImage, color: UIColor, fullSize: URL?)? in
+            guard let data = try? Data(contentsOf: thumbnailURL), let decoded = UIImage(data: data) else { return nil }
+            let image = decoded.preparingForDisplay() ?? decoded
+            let color = knownColor ?? image.cgImage.flatMap { PageFilter.averageColor(of: $0) } ?? UIColor(white: 0.2, alpha: 1)
+            return (image, color, store?.existingCoverURL(bookId: bookId))
+        }.value
+        guard let loaded else { return nil }
+        coverColors.setObject(loaded.color, forKey: key)
+        let firstOpen = book.lastReadAt == nil && (book.currentPage ?? 0) == 0 && !book.finished
+        return CoverIntro(image: loaded.image, color: loaded.color, fullSizeURL: loaded.fullSize, waits: firstOpen)
     }
 
     /// The book's synced record, read fresh from the data folder.
