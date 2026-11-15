@@ -31,7 +31,14 @@ final class ScreenshotTests: XCTestCase {
         let page = app.otherElements["reader-page"].firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 20), "Reader did not open")
         sleep(2)
-        save(app, "03-reader-cover-with-controls")
+        // A book opened for the first time waits on its cover until the reader moves on.
+        let intro = app.descendants(matching: .any)["reader-cover-intro"].firstMatch
+        XCTAssertTrue(intro.waitForExistence(timeout: 5), "No cover intro on a first open")
+        save(app, "03-reader-cover-intro")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(intro.waitForNonExistence(timeout: 5), "The cover intro did not give way to page 1")
+        sleep(1)
+        save(app, "03a-reader-cover-with-controls")
 
         // Select Text (Live Text), where the simulator supports it.
         let selectText = app.buttons["reader-select-text"]
@@ -150,12 +157,45 @@ final class ScreenshotTests: XCTestCase {
         save(app, "14-reader-handoff")
         jump.tap()
         sleep(1)
-        let settings = app.buttons["reader-settings"]
-        if settings.waitForExistence(timeout: 3) {
-            settings.tap()
+        let bar = app.descendants(matching: .any)["reader-menu-bar"].firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 5), "No menu bar in the reader")
+        save(app, "15-reader-menu-bar")
+        let layout = app.buttons["reader-bar-layout"]
+        if layout.waitForExistence(timeout: 3) {
+            layout.tap()
             sleep(1)
-            save(app, "15-reader-settings-menu")
+            save(app, "15b-reader-page-layout")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+            sleep(1)
         }
+        let adjust = app.buttons["reader-bar-adjust"]
+        if adjust.waitForExistence(timeout: 3) {
+            adjust.tap()
+            let contrast = app.sliders["adjust-contrast"]
+            if contrast.waitForExistence(timeout: 3) { contrast.adjust(toNormalizedSliderPosition: 0.85) }
+            let grain = app.sliders["adjust-grain"]
+            if grain.waitForExistence(timeout: 3) { grain.adjust(toNormalizedSliderPosition: 0.7) }
+            sleep(2)
+            save(app, "16-reader-adjustments")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+            sleep(1)
+        }
+        let more = app.buttons["reader-bar-more"]
+        if more.waitForExistence(timeout: 3) {
+            more.tap()
+            sleep(1)
+            save(app, "17-reader-more")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+            sleep(1)
+        }
+
+        // A swipe up on the page closes the book.
+        let readerPage = app.otherElements["reader-page"].firstMatch
+        readerPage.swipeUp(velocity: .fast)
+        XCTAssertTrue(readerPage.waitForNonExistence(timeout: 10), "Swiping up did not close the book")
+        XCTAssertTrue(harbor.waitForExistence(timeout: 10))
+        sleep(1)
+        save(app, "18-library-after-swipe-up")
     }
 
     private func save(_ app: XCUIApplication, _ name: String) {

@@ -13,15 +13,20 @@ struct ReaderScreen: View {
     @State private var scrubThumbnail: UIImage?
     @State private var showInfo = false
     @State private var showCrop = false
-    @State private var showSettings = false
+    /// The cover shown first while the book opens (see `CoverIntro`).
+    @State private var intro: CoverIntro?
+    /// Fading out after a swipe up, before the reader goes away.
+    @State private var closing = false
     /// A newer position from another device, until the reader jumps there or says no.
     @State private var handOff: AppModel.HandOff?
     /// Shows "Copied" on the Select Text bar for a moment after Copy All.
     @State private var copiedText = false
 
-    init(book: Book, source: BookSource, options: ReaderOptions, defaults: ReaderDefaults, handOff: AppModel.HandOff? = nil) {
+    init(book: Book, source: BookSource, options: ReaderOptions, defaults: ReaderDefaults,
+         handOff: AppModel.HandOff? = nil, intro: CoverIntro? = nil) {
         _state = State(initialValue: ReaderState(book: book, source: source, options: options, defaults: defaults))
         _handOff = State(initialValue: handOff)
+        _intro = State(initialValue: intro)
     }
 
     /// The live row for this book (Favorite and Bookmarked can change while reading).
@@ -33,6 +38,16 @@ struct ReaderScreen: View {
                 Color(uiColor: state.background.uiColor ?? .black).ignoresSafeArea()
                 PageViewer(state: state)
                     .ignoresSafeArea()
+                if let intro {
+                    CoverIntroView(
+                        intro: intro, rightToLeft: state.rightToLeft,
+                        onForward: { endIntro() },
+                        onToggleChrome: { state.showChrome.toggle() },
+                        onClose: { state.closeRequested = true }
+                    )
+                    // A book read before: the cover grows into the page as it fades.
+                    .transition(intro.waits ? .opacity : .opacity.combined(with: .scale(scale: 1.12)))
+                }
                 if state.showChrome {
                     chrome
                         .transition(.opacity)
@@ -49,6 +64,10 @@ struct ReaderScreen: View {
             .onAppear { state.setLandscape(geo.size.width > geo.size.height) }
             .onChange(of: geo.size) { _, size in state.setLandscape(size.width > size.height) }
         }
+        .opacity(closing ? 0 : 1)
+        .scaleEffect(closing ? 0.96 : 1)
+        // Clear behind the reader, so the library shows through as it fades after a swipe up.
+        .presentationBackground(.clear)
         .animation(.easeInOut(duration: 0.2), value: state.showChrome)
         .animation(.easeInOut(duration: 0.25), value: handOff)
         .animation(.easeInOut(duration: 0.2), value: state.selectingText)
@@ -85,6 +104,17 @@ struct ReaderScreen: View {
         .onDisappear { state.cancel() }
         .onChange(of: state.currentSpread) { _, _ in
             if !isScrubbing { scrubPage = Double(state.currentPage) }
+            // Moving to another page (the scrubber, a hand-off jump) moves past the cover too.
+            endIntro()
+        }
+        .onChange(of: state.closeRequested) { _, requested in
+            if requested { closeBySwipe() }
+        }
+        .task {
+            // A book read before: show the cover for a moment while the pages load beneath it.
+            guard let intro, !intro.waits else { return }
+            try? await Task.sleep(for: .milliseconds(550))
+            endIntro()
         }
         .task(id: isScrubbing ? Int(scrubPage) : -1) {
             guard isScrubbing else { scrubThumbnail = nil; return }
@@ -92,6 +122,24 @@ struct ReaderScreen: View {
             try? await Task.sleep(for: .milliseconds(40))
             if Task.isCancelled { return }
             if let image = await state.thumbnail(for: page), !Task.isCancelled { scrubThumbnail = image }
+        }
+    }
+
+    private func endIntro() {
+        guard intro != nil else { return }
+        withAnimation(.easeInOut(duration: 0.35)) { intro = nil }
+    }
+
+    /// After a swipe up: the page has flown up; fade the reader to the library and close.
+    private func closeBySwipe() {
+        guard !closing else { return }
+        withAnimation(.easeOut(duration: 0.25)) { closing = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            // Already faded: close without the slide-down of the close button.
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { model.openBook = nil }
         }
     }
 
@@ -115,7 +163,8 @@ struct ReaderScreen: View {
             .padding(.trailing, 8)
             .padding(.vertical, 8)
             .glassEffect(in: .capsule)
-            .padding(.top, 70)
+            // Below the menu bar while the controls show.
+            .padding(.top, state.showChrome ? 140 : 70)
             Spacer()
         }
     }
@@ -123,7 +172,14 @@ struct ReaderScreen: View {
     private var chrome: some View {
         GlassEffectContainer(spacing: 16) {
             VStack {
-                topBar
+                // Apart enough that the glass of the title and the bar don't run together.
+                VStack(spacing: 22) {
+                    topBar
+                    ReaderMenuBar(items: ReaderBarItem.items(state: state, book: liveBook, model: model) {
+                        // Let the panel close before the crop editor opens.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showCrop = true }
+                    })
+                }
                 Spacer()
                 if isScrubbing {
                     scrubPreview
@@ -165,27 +221,6 @@ struct ReaderScreen: View {
                 } else {
                     selectTextButton.buttonStyle(.glass)
                 }
-            }
-
-            // A popover rather than a menu: with this many settings (and submenus) the menu
-            // rebuilt itself under the finger and missed taps.
-            Button {
-                showSettings = true
-            } label: {
-                Image(systemName: "textformat.size").font(.body.weight(.semibold)).frame(width: 28, height: 28)
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .accessibilityLabel("Reader Settings")
-            .accessibilityIdentifier("reader-settings")
-            .popover(isPresented: $showSettings, arrowEdge: .top) {
-                ReaderSettingsPanel(state: state, book: liveBook) {
-                    showSettings = false
-                    // Let the popover close before the crop editor opens.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showCrop = true }
-                }
-                .frame(idealWidth: 380, idealHeight: 640)
-                .presentationCompactAdaptation(.popover)
             }
 
             Button {

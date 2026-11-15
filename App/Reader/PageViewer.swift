@@ -38,6 +38,11 @@ struct PageViewer: UIViewControllerRepresentable {
             coordinator.textRetry = textRetry
             (controller.viewControllers?.first as? SpreadViewController)?.retryText()
         }
+        let look = state.look
+        if look != coordinator.look {
+            coordinator.look = look
+            coordinator.applyLook()
+        }
         if version != coordinator.layoutVersion || direction != coordinator.rightToLeft {
             if let color = state.background.uiColor { controller.view.backgroundColor = color }
             coordinator.show(in: controller, animated: false)
@@ -54,9 +59,21 @@ struct PageViewer: UIViewControllerRepresentable {
         var rightToLeft = false
         var selectingText = false
         var textRetry = 0
+        var look = PageLook()
         private weak var pageController: UIPageViewController?
+        /// Every spread made and still alive (on screen, or kept ready beside it), so a new
+        /// look reaches the neighbours too.
+        private let live = NSHashTable<SpreadViewController>.weakObjects()
 
-        init(state: ReaderState) { self.state = state }
+        init(state: ReaderState) {
+            self.state = state
+            self.look = state.look
+        }
+
+        /// Redraws the pages already made with the current look.
+        func applyLook() {
+            for page in live.allObjects { page.look = look }
+        }
 
         func show(in controller: UIPageViewController, animated: Bool) {
             let target = state.currentSpread
@@ -116,6 +133,9 @@ struct PageViewer: UIViewControllerRepresentable {
                 }
             }
             controller.selectingText = state.selectingText
+            controller.look = look
+            controller.onSwipeUp = { [weak self] in self?.state.closeRequested = true }
+            live.add(controller)
             controller.onBackgroundChange = { [weak self, weak controller] in
                 guard let self, let controller else { return }
                 if controller.spreadIndex == self.displayedSpread { self.followBackground(of: controller) }
@@ -160,7 +180,7 @@ struct PageViewer: UIViewControllerRepresentable {
 }
 
 /// One screen: one or two pages side by side, zoomable.
-final class SpreadViewController: UIViewController, UIScrollViewDelegate {
+final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     /// One page on this screen: an image (or half of one) and the crop to show of it.
     struct Piece {
         let page: DisplayPage
@@ -192,6 +212,16 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     var selectingText = false {
         didSet { if selectingText != oldValue, isViewLoaded { updateTextSelection() } }
     }
+    /// Contrast, sharpness and paper. Changing it redraws the pages showing.
+    var look = PageLook() {
+        didSet {
+            guard look != oldValue, isViewLoaded else { return }
+            updateGrain()
+            if look.adjustments != oldValue.adjustments { refilter() }
+        }
+    }
+    /// Called when the page has been swiped up past the point of closing the book.
+    var onSwipeUp: (() -> Void)?
     /// Called when a Match Page background has been worked out.
     var onBackgroundChange: (() -> Void)?
     private(set) var currentBackground: UIColor?
@@ -199,6 +229,12 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     private let scrollView = UIScrollView()
     private let contentView = UIView()
     private var imageViews: [UIImageView] = []
+    /// Per slot: the paper texture over the page.
+    private var grainViews: [UIView] = []
+    private var lookTask: Task<Void, Never>?
+    /// The look changed again while the pages were being redrawn.
+    private var lookPending = false
+    private var swipeToClose: UIPanGestureRecognizer?
     private var spinners: [UIActivityIndicatorView] = []
     private var bindingShadow: BindingShadowView?
     private var loadTasks: [Task<Void, Never>] = []
@@ -238,6 +274,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     deinit {
         loadTasks.forEach { $0.cancel() }
         colorTask?.cancel()
+        lookTask?.cancel()
         textTasks.forEach { $0?.cancel() }
     }
 
@@ -271,6 +308,12 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             spinner.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin, .flexibleBottomMargin]
             imageView.addSubview(spinner)
             spinners.append(spinner)
+            let grain = UIView(frame: imageView.bounds)
+            grain.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            grain.isUserInteractionEnabled = false
+            grain.isHidden = true
+            imageView.addSubview(grain)
+            grainViews.append(grain)
             if PageTextAnalyzer.isSupported {
                 // Live Text, idle until Select Text is on. Touches on the page still reach the
                 // scroll view's taps and zoom, so the image view can take them.
@@ -300,7 +343,12 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         singleTap.require(toFail: doubleTap)
         scrollView.addGestureRecognizer(singleTap)
+        let swipe = UIPanGestureRecognizer(target: self, action: #selector(handleSwipeUp(_:)))
+        swipe.delegate = self
+        view.addGestureRecognizer(swipe)
+        swipeToClose = swipe
         view.accessibilityIdentifier = "reader-page"
+        updateGrain()
 
         load(size: PageImageCache.screenPixelSize)
         if selectingText { updateTextSelection() }
@@ -373,9 +421,10 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     private func load(size: CGFloat) {
         guard size > loadedSize else { return }
         loadedSize = size
+        let adjustments = look.adjustments
         for (slot, piece) in screenOrder.enumerated() {
             let page = piece.page.page
-            if let cached = cache.image(for: page, minSize: size) {
+            if let cached = cache.image(for: page, minSize: size, adjustments: adjustments) {
                 display(cached, in: slot)
                 placeholders[slot] = false
                 if selectingText { readText(slot: slot) }
@@ -392,9 +441,11 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             }
             let source = source, cache = cache
             loadTasks.append(Task { [weak self] in
-                let image = await cache.load(page: page, size: size, from: source)
+                let image = await cache.load(page: page, size: size, from: source, adjustments: adjustments)
                 guard let self, !Task.isCancelled else { return }
                 self.spinners[slot].stopAnimating()
+                // Drawn with a look that has changed since: the redraw for the new one shows it.
+                if adjustments != self.look.adjustments, self.imageViews[slot].image != nil, !self.placeholders[slot] { return }
                 guard let image else {
                     if self.selectingText, self.imageViews[slot].image == nil || self.placeholders[slot] {
                         self.slotStatus[slot] = .none
@@ -408,6 +459,114 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
                 if self.selectingText { self.readText(slot: slot) }
             })
         }
+    }
+
+    // MARK: Look
+
+    /// Shows the paper texture over each page at the look's strength.
+    private func updateGrain() {
+        let amount = look.paperGrain
+        for grain in grainViews {
+            grain.isHidden = amount < 0.005
+            guard !grain.isHidden else { continue }
+            if grain.backgroundColor == nil { grain.backgroundColor = PaperGrain.pattern }
+            grain.alpha = CGFloat(min(1, amount) * 0.7)
+        }
+    }
+
+    /// Redraws the pages showing with the current adjustments. While a slider is dragged
+    /// this is asked for faster than pages can be filtered, so one redraw runs at a time and
+    /// the latest look follows it.
+    private func refilter() {
+        if lookTask != nil {
+            lookPending = true
+            return
+        }
+        let adjustments = look.adjustments, size = loadedSize
+        guard size > 0 else { return }
+        lookTask = Task { [weak self] in
+            guard let self else { return }
+            for (slot, piece) in self.screenOrder.enumerated() {
+                let image = await self.cache.load(page: piece.page.page, size: size, from: self.source, adjustments: adjustments)
+                if Task.isCancelled { return }
+                if let image, adjustments == self.look.adjustments || self.lookPending {
+                    self.display(image, in: slot)
+                    self.placeholders[slot] = false
+                }
+            }
+            self.lookTask = nil
+            if self.lookPending {
+                self.lookPending = false
+                self.refilter()
+            } else if self.selectingText {
+                for slot in self.imageViews.indices { self.readText(slot: slot) }
+            }
+        }
+    }
+
+    // MARK: Swipe up to close
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let swipe = swipeToClose, gestureRecognizer === swipe else { return true }
+        // Zoomed in, a drag moves around the page; selecting text, it selects.
+        guard !selectingText, scrollView.zoomScale <= 1.01 else { return false }
+        let velocity = swipe.velocity(in: view)
+        guard velocity.y < 0, abs(velocity.y) > abs(velocity.x) * 1.5 else { return false }
+        // A page taller than the screen (Fit Width) scrolls first; at its bottom, a swipe up closes.
+        let maxY = scrollView.contentSize.height - scrollView.bounds.height
+        return maxY <= 1 || scrollView.contentOffset.y >= maxY - 1
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        gestureRecognizer === swipeToClose
+    }
+
+    @objc private func handleSwipeUp(_ gesture: UIPanGestureRecognizer) {
+        let lift = min(0, gesture.translation(in: view).y)
+        let progress = min(1, -lift / 320)
+        switch gesture.state {
+        case .began:
+            // Stop the page from also sliding sideways or scrolling under the finger.
+            for scroller in enclosingScrollViews() {
+                scroller.panGestureRecognizer.isEnabled = false
+                scroller.panGestureRecognizer.isEnabled = true
+            }
+        case .changed:
+            let scale = 1 - 0.08 * progress
+            view.transform = CGAffineTransform(translationX: 0, y: lift).scaledBy(x: scale, y: scale)
+        case .ended:
+            let velocity = gesture.velocity(in: view).y
+            if lift < -140 || (velocity < -900 && lift < -30) {
+                let distance = view.bounds.height * 0.6
+                UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+                    self.view.transform = CGAffineTransform(translationX: 0, y: -distance).scaledBy(x: 0.85, y: 0.85)
+                    self.view.alpha = 0
+                }
+                onSwipeUp?()
+            } else {
+                springBack()
+            }
+        default:
+            springBack()
+        }
+    }
+
+    private func springBack() {
+        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+            self.view.transform = .identity
+            self.view.alpha = 1
+        }
+    }
+
+    /// The page's own scroll view and the pager's, which both take drags.
+    private func enclosingScrollViews() -> [UIScrollView] {
+        var found: [UIScrollView] = [scrollView]
+        var next = view.superview
+        while let current = next {
+            if let scroller = current as? UIScrollView { found.append(scroller) }
+            next = current.superview
+        }
+        return found
     }
 
     // MARK: Select Text

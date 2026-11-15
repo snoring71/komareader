@@ -123,6 +123,7 @@ import Testing
         options.fit = .width
         options.background = .fromRGB(red: 1, green: 0.5, blue: 0)
         options.crop = .init(left: [0.06, 0.02, 0.9, 0.96], right: BookRecord.ReaderOptions.PageCrop.mirror([0.06, 0.02, 0.9, 0.96]), link: .mirrored)
+        options.contrast = 0.25
         record.readerOptions = options
         // Once the book has its own options, they win (here: direction back to the default).
         #expect(record.effectiveReaderOptions.direction == nil)
@@ -131,6 +132,8 @@ import Testing
         let json = String(decoding: data, as: UTF8.self)
         #expect(json.contains("\"background\" : \"#FF8000\""))
         #expect(!json.contains("portraitLayout"))
+        #expect(json.contains("\"contrast\" : 0.25"))
+        #expect(!json.contains("paperGrain"))
         let decoded = try RecordCoding.decoder().decode(BookRecord.self, from: data)
         #expect(decoded == record)
         let crop = try #require(decoded.readerOptions?.crop)

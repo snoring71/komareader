@@ -88,6 +88,34 @@ final class ReaderState {
     var splitDoublePages: Bool { options.splitDoublePages ?? defaults.splitDoublePages }
     var crop: ReaderOptions.PageCrop? { options.crop }
 
+    /// How pages are drawn (contrast, sharpness, paper): the values being dragged in the
+    /// adjustments panel while a slider moves, else the book's own, else the defaults.
+    var look: PageLook { previewLook ?? savedLook }
+
+    var savedLook: PageLook {
+        PageLook(contrast: options.contrast ?? defaults.contrast, sharpness: options.sharpness ?? defaults.sharpness,
+                 paperGrain: options.paperGrain ?? defaults.paperGrain, paperTint: options.paperTint ?? defaults.paperTint)
+    }
+
+    /// Slider values shown live but not saved yet (see `commitLook`).
+    var previewLook: PageLook?
+
+    /// Saves the previewed look as this book's own, for the values that changed.
+    func commitLook() {
+        guard let preview = previewLook else { return }
+        let saved = savedLook
+        change { options in
+            if preview.contrast != saved.contrast { options.contrast = preview.contrast }
+            if preview.sharpness != saved.sharpness { options.sharpness = preview.sharpness }
+            if preview.paperGrain != saved.paperGrain { options.paperGrain = preview.paperGrain }
+            if preview.paperTint != saved.paperTint { options.paperTint = preview.paperTint }
+        }
+        previewLook = nil
+    }
+
+    /// Set by a swipe up on the page: the reader closes.
+    var closeRequested = false
+
     /// Whether the book sets anything itself (other than its crop, which has no default).
     var hasOwnSettings: Bool {
         var settings = options
@@ -105,6 +133,11 @@ final class ReaderState {
         resolved.background = background
         resolved.bindingShadow = bindingShadow
         resolved.splitDoublePages = splitDoublePages
+        let look = savedLook
+        resolved.contrast = look.contrast
+        resolved.sharpness = look.sharpness
+        resolved.paperGrain = look.paperGrain
+        resolved.paperTint = look.paperTint
         return resolved
     }
 
@@ -114,9 +147,27 @@ final class ReaderState {
         edit(&updated)
         guard updated != options else { return }
         updated.updatedAt = Date()
+        let layoutChanged = Self.withoutLook(updated) != Self.withoutLook(options)
         options = updated
         onOptionsChange?(updated)
-        relayout()
+        if layoutChanged {
+            relayout()
+        } else {
+            // Only the look changed: the page view redraws the pages it has, and the pages
+            // ahead are made again with the new look.
+            prefetch()
+        }
+    }
+
+    /// The settings that decide which pages show where, leaving out how they are drawn.
+    private static func withoutLook(_ options: ReaderOptions) -> ReaderOptions {
+        var options = options
+        options.contrast = nil
+        options.sharpness = nil
+        options.paperGrain = nil
+        options.paperTint = nil
+        options.updatedAt = .distantPast
+        return options
     }
 
     /// The book goes back to following the defaults (its crop stays).
@@ -314,10 +365,11 @@ final class ReaderState {
             for page in spreads[spread] where !indices.contains(page.page) { indices.append(page.page) }
         }
         let source = source, cache = cache, size = PageImageCache.screenPixelSize
+        let adjustments = savedLook.adjustments
         prefetchTask = Task.detached(priority: .userInitiated) {
             for page in indices {
                 if Task.isCancelled { return }
-                _ = await cache.load(page: page, size: size, from: source)
+                _ = await cache.load(page: page, size: size, from: source, adjustments: adjustments)
             }
         }
     }
@@ -359,6 +411,7 @@ final class PageImageCache: @unchecked Sendable {
 
     init() {
         cache.totalCostLimit = 300 * 1024 * 1024
+        adjusted.totalCostLimit = 200 * 1024 * 1024
     }
 
     /// Longest screen side in pixels, which is what pages are decoded at until the user zooms.
@@ -387,6 +440,55 @@ final class PageImageCache: @unchecked Sendable {
                 return image
             }
             loading[page] = (size, task)
+            return task
+        }
+        return await task.value
+    }
+
+    // MARK: Adjusted pages
+
+    /// Pages with contrast, sharpness or tint applied, by page and adjustments.
+    private let adjusted = NSCache<NSString, Entry>()
+    private var adjusting: [String: Task<UIImage?, Never>] = [:]
+
+    private static func key(_ page: Int, _ adjustments: PageAdjustments) -> NSString {
+        "\(page)|\(adjustments.key)" as NSString
+    }
+
+    /// The page drawn with `adjustments`, if it is in memory.
+    func image(for page: Int, minSize: CGFloat, adjustments: PageAdjustments) -> UIImage? {
+        if adjustments.isNone { return image(for: page, minSize: minSize) }
+        guard let entry = adjusted.object(forKey: Self.key(page, adjustments)), entry.size >= minSize * 0.99 else { return nil }
+        return entry.image
+    }
+
+    /// The page at `size` drawn with `adjustments`: decoded as usual, then filtered once
+    /// off the main thread and kept, so turning back to it is instant.
+    func load(page: Int, size: CGFloat, from source: BookSource, adjustments: PageAdjustments) async -> UIImage? {
+        if adjustments.isNone { return await load(page: page, size: size, from: source) }
+        if let cached = image(for: page, minSize: size, adjustments: adjustments) { return cached }
+        let key = Self.key(page, adjustments)
+        let taskKey = "\(key)|\(Int(size))"
+        let task: Task<UIImage?, Never> = lock.withLock {
+            if let running = adjusting[taskKey] { return running }
+            let task = Task.detached(priority: .userInitiated) { [weak self] () -> UIImage? in
+                guard let self else { return nil }
+                let raw = await self.load(page: page, size: size, from: source)
+                var result = raw
+                if let cgImage = raw?.cgImage, let filtered = PageFilter.apply(adjustments, to: cgImage) {
+                    let image = UIImage(cgImage: filtered)
+                    let cost = Int(image.size.width * image.size.height * 4)
+                    if let existing = self.adjusted.object(forKey: key), existing.size >= size {
+                        // A larger copy is already there.
+                    } else {
+                        self.adjusted.setObject(Entry(image: image, size: size), forKey: key, cost: cost)
+                    }
+                    result = image
+                }
+                self.lock.withLock { self.adjusting[taskKey] = nil }
+                return result
+            }
+            adjusting[taskKey] = task
             return task
         }
         return await task.value
