@@ -631,9 +631,20 @@ struct BookCell: View {
             slot("tag.fill", .teal, !book.tags.isEmpty)
             Spacer(minLength: 4)
             if book.status == .read {
-                // Finished: a small black-and-white check where the percentage would be.
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.primary)
+                // Finished: a black-and-white check where the percentage would be, as wide as
+                // "72%". Drawn as an overlay so it never makes the row taller than other books'.
+                Text(verbatim: "72%")
+                    .monospacedDigit()
+                    .hidden()
+                    .overlay {
+                        Image(systemName: "checkmark")
+                            .resizable()
+                            .scaledToFit()
+                            .fontWeight(.bold)
+                            .foregroundStyle(.primary)
+                            .padding(.vertical, -2)
+                    }
+                    .accessibilityElement()
                     .accessibilityLabel("Read")
             } else if book.status == .reading, let fraction = book.progressFraction {
                 Text("\(Int(fraction * 100))%")
