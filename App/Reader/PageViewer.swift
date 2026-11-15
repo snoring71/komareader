@@ -38,6 +38,16 @@ struct PageViewer: UIViewControllerRepresentable {
             coordinator.textRetry = textRetry
             (controller.viewControllers?.first as? SpreadViewController)?.retryText()
         }
+        let turnToCover = state.turnToCover
+        if turnToCover != coordinator.turnToCover {
+            coordinator.turnToCover = turnToCover
+            coordinator.showCoverPage(in: controller)
+        }
+        let look = state.look
+        if look != coordinator.look {
+            coordinator.look = look
+            coordinator.applyLook()
+        }
         if version != coordinator.layoutVersion || direction != coordinator.rightToLeft {
             if let color = state.background.uiColor { controller.view.backgroundColor = color }
             coordinator.show(in: controller, animated: false)
@@ -54,9 +64,44 @@ struct PageViewer: UIViewControllerRepresentable {
         var rightToLeft = false
         var selectingText = false
         var textRetry = 0
+        var look = PageLook()
+        var turnToCover = 0
         private weak var pageController: UIPageViewController?
+        /// Every spread made and still alive (on screen, or kept ready beside it), so a new
+        /// look reaches the neighbours too.
+        private let live = NSHashTable<SpreadViewController>.weakObjects()
 
-        init(state: ReaderState) { self.state = state }
+        init(state: ReaderState) {
+            self.state = state
+            self.look = state.look
+        }
+
+        /// A tap back from the first page: the cover turns in like a page, as a swipe does.
+        func showCoverPage(in controller: UIPageViewController) {
+            guard let cover = state.makeCoverPage?() else { return }
+            cover.view.accessibilityIdentifier = "reader-cover-page"
+            // Back comes from the left in left-to-right books, from the right in manga.
+            let direction: UIPageViewController.NavigationDirection = state.rightToLeft ? .forward : .reverse
+            controller.setViewControllers([CoverPageController(cover)], direction: direction, animated: true) { [weak self, weak controller] finished in
+                guard let self, let controller, finished else { return }
+                self.coverPageShown(in: controller)
+            }
+        }
+
+        /// The cover page is on screen: the reader's cover takes over (it looks the same, and
+        /// appears at once), then the first page goes back underneath it.
+        private func coverPageShown(in controller: UIPageViewController) {
+            state.coverRequested = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak controller] in
+                guard let self, let controller else { return }
+                self.show(in: controller, animated: false)
+            }
+        }
+
+        /// Redraws the pages already made with the current look.
+        func applyLook() {
+            for page in live.allObjects { page.look = look }
+        }
 
         func show(in controller: UIPageViewController, animated: Bool) {
             let target = state.currentSpread
@@ -116,6 +161,9 @@ struct PageViewer: UIViewControllerRepresentable {
                 }
             }
             controller.selectingText = state.selectingText
+            controller.look = look
+            controller.onSwipeUp = { [weak self] in self?.state.closeRequested = true }
+            live.add(controller)
             controller.onBackgroundChange = { [weak self, weak controller] in
                 guard let self, let controller else { return }
                 if controller.spreadIndex == self.displayedSpread { self.followBackground(of: controller) }
@@ -132,6 +180,11 @@ struct PageViewer: UIViewControllerRepresentable {
         private func neighbour(of controller: UIViewController, step: Int) -> UIViewController? {
             guard let current = controller as? SpreadViewController else { return nil }
             let target = current.spreadIndex + (state.rightToLeft ? -step : step)
+            // Back from the first page: the cover slides in, like turning back to it in a book.
+            if target == -1, let cover = state.makeCoverPage?() {
+                cover.view.accessibilityIdentifier = "reader-cover-page"
+                return CoverPageController(cover)
+            }
             guard state.spreads.indices.contains(target) else { return nil }
             return makeController(target)
         }
@@ -150,17 +203,45 @@ struct PageViewer: UIViewControllerRepresentable {
         }
 
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-            guard completed, let current = pvc.viewControllers?.first as? SpreadViewController else { return }
+            guard completed else { return }
+            if pvc.viewControllers?.first is CoverPageController {
+                coverPageShown(in: pvc)
+                return
+            }
+            guard let current = pvc.viewControllers?.first as? SpreadViewController else { return }
             displayedSpread = current.spreadIndex
             state.show(spread: current.spreadIndex)
+            // Turning the page by swiping puts the controls away.
+            if state.showChrome { state.showChrome = false }
             followBackground(of: current)
             becameCurrent(current)
         }
     }
 }
 
+/// The cover as a page in the pager, before the first page, holding the reader's cover view.
+final class CoverPageController: UIViewController {
+    private let content: UIViewController
+
+    init(_ content: UIViewController) {
+        self.content = content
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        addChild(content)
+        content.view.frame = view.bounds
+        content.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(content.view)
+        content.didMove(toParent: self)
+    }
+}
+
 /// One screen: one or two pages side by side, zoomable.
-final class SpreadViewController: UIViewController, UIScrollViewDelegate {
+final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     /// One page on this screen: an image (or half of one) and the crop to show of it.
     struct Piece {
         let page: DisplayPage
@@ -192,6 +273,15 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     var selectingText = false {
         didSet { if selectingText != oldValue, isViewLoaded { updateTextSelection() } }
     }
+    /// Contrast, sharpness and paper. Changing it redraws the pages showing.
+    var look = PageLook() {
+        didSet {
+            guard look != oldValue, isViewLoaded else { return }
+            if look.adjustments != oldValue.adjustments { refilter() }
+        }
+    }
+    /// Called when the page has been swiped up past the point of closing the book.
+    var onSwipeUp: (() -> Void)?
     /// Called when a Match Page background has been worked out.
     var onBackgroundChange: (() -> Void)?
     private(set) var currentBackground: UIColor?
@@ -199,6 +289,10 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     private let scrollView = UIScrollView()
     private let contentView = UIView()
     private var imageViews: [UIImageView] = []
+    private var lookTask: Task<Void, Never>?
+    /// The look changed again while the pages were being redrawn.
+    private var lookPending = false
+    private var swipeToClose: UIPanGestureRecognizer?
     private var spinners: [UIActivityIndicatorView] = []
     private var bindingShadow: BindingShadowView?
     private var loadTasks: [Task<Void, Never>] = []
@@ -238,6 +332,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     deinit {
         loadTasks.forEach { $0.cancel() }
         colorTask?.cancel()
+        lookTask?.cancel()
         textTasks.forEach { $0?.cancel() }
     }
 
@@ -300,6 +395,10 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
         let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         singleTap.require(toFail: doubleTap)
         scrollView.addGestureRecognizer(singleTap)
+        let swipe = UIPanGestureRecognizer(target: self, action: #selector(handleSwipeUp(_:)))
+        swipe.delegate = self
+        view.addGestureRecognizer(swipe)
+        swipeToClose = swipe
         view.accessibilityIdentifier = "reader-page"
 
         load(size: PageImageCache.screenPixelSize)
@@ -373,9 +472,10 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
     private func load(size: CGFloat) {
         guard size > loadedSize else { return }
         loadedSize = size
+        let adjustments = look.adjustments
         for (slot, piece) in screenOrder.enumerated() {
             let page = piece.page.page
-            if let cached = cache.image(for: page, minSize: size) {
+            if let cached = cache.image(for: page, minSize: size, adjustments: adjustments) {
                 display(cached, in: slot)
                 placeholders[slot] = false
                 if selectingText { readText(slot: slot) }
@@ -392,9 +492,11 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
             }
             let source = source, cache = cache
             loadTasks.append(Task { [weak self] in
-                let image = await cache.load(page: page, size: size, from: source)
+                let image = await cache.load(page: page, size: size, from: source, adjustments: adjustments)
                 guard let self, !Task.isCancelled else { return }
                 self.spinners[slot].stopAnimating()
+                // Drawn with a look that has changed since: the redraw for the new one shows it.
+                if adjustments != self.look.adjustments, self.imageViews[slot].image != nil, !self.placeholders[slot] { return }
                 guard let image else {
                     if self.selectingText, self.imageViews[slot].image == nil || self.placeholders[slot] {
                         self.slotStatus[slot] = .none
@@ -408,6 +510,103 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate {
                 if self.selectingText { self.readText(slot: slot) }
             })
         }
+    }
+
+    // MARK: Look
+
+    /// Redraws the pages showing with the current adjustments. While a slider is dragged
+    /// this is asked for faster than pages can be filtered, so one redraw runs at a time and
+    /// the latest look follows it.
+    private func refilter() {
+        if lookTask != nil {
+            lookPending = true
+            return
+        }
+        let adjustments = look.adjustments, size = loadedSize
+        guard size > 0 else { return }
+        lookTask = Task { [weak self] in
+            guard let self else { return }
+            for (slot, piece) in self.screenOrder.enumerated() {
+                let image = await self.cache.load(page: piece.page.page, size: size, from: self.source, adjustments: adjustments)
+                if Task.isCancelled { return }
+                if let image, adjustments == self.look.adjustments || self.lookPending {
+                    self.display(image, in: slot)
+                    self.placeholders[slot] = false
+                }
+            }
+            self.lookTask = nil
+            if self.lookPending {
+                self.lookPending = false
+                self.refilter()
+            } else if self.selectingText {
+                for slot in self.imageViews.indices { self.readText(slot: slot) }
+            }
+        }
+    }
+
+    // MARK: Swipe up to close
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let swipe = swipeToClose, gestureRecognizer === swipe else { return true }
+        // Zoomed in, a drag moves around the page; selecting text, it selects.
+        guard !selectingText, scrollView.zoomScale <= 1.01 else { return false }
+        let velocity = swipe.velocity(in: view)
+        guard velocity.y < 0, abs(velocity.y) > abs(velocity.x) * 1.5 else { return false }
+        // A page taller than the screen (Fit Width) scrolls first; at its bottom, a swipe up closes.
+        let maxY = scrollView.contentSize.height - scrollView.bounds.height
+        return maxY <= 1 || scrollView.contentOffset.y >= maxY - 1
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        gestureRecognizer === swipeToClose
+    }
+
+    @objc private func handleSwipeUp(_ gesture: UIPanGestureRecognizer) {
+        let lift = min(0, gesture.translation(in: view).y)
+        let progress = min(1, -lift / 320)
+        switch gesture.state {
+        case .began:
+            // Stop the page from also sliding sideways or scrolling under the finger.
+            for scroller in enclosingScrollViews() {
+                scroller.panGestureRecognizer.isEnabled = false
+                scroller.panGestureRecognizer.isEnabled = true
+            }
+        case .changed:
+            let scale = 1 - 0.08 * progress
+            view.transform = CGAffineTransform(translationX: 0, y: lift).scaledBy(x: scale, y: scale)
+        case .ended:
+            let velocity = gesture.velocity(in: view).y
+            if lift < -140 || (velocity < -900 && lift < -30) {
+                let distance = view.bounds.height * 0.6
+                UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+                    self.view.transform = CGAffineTransform(translationX: 0, y: -distance).scaledBy(x: 0.85, y: 0.85)
+                    self.view.alpha = 0
+                }
+                onSwipeUp?()
+            } else {
+                springBack()
+            }
+        default:
+            springBack()
+        }
+    }
+
+    private func springBack() {
+        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+            self.view.transform = .identity
+            self.view.alpha = 1
+        }
+    }
+
+    /// The page's own scroll view and the pager's, which both take drags.
+    private func enclosingScrollViews() -> [UIScrollView] {
+        var found: [UIScrollView] = [scrollView]
+        var next = view.superview
+        while let current = next {
+            if let scroller = current as? UIScrollView { found.append(scroller) }
+            next = current.superview
+        }
+        return found
     }
 
     // MARK: Select Text

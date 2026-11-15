@@ -56,7 +56,9 @@ struct ChoiceBar<Value: Hashable>: View {
             }
         }
         .padding(3)
-        .background(Capsule().fill(Color(uiColor: .tertiarySystemFill)))
+        // Visible on glass in dark mode too, where the system fill all but disappears.
+        .background(Capsule().fill(PanelFill.color))
+        .overlay(Capsule().strokeBorder(PanelFill.edge))
         .animation(Self.slide, value: shownIndex)
         .onDisappear { commitNow() }
     }

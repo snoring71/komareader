@@ -19,6 +19,10 @@ final class ReaderDefaults {
     var background: ReaderOptions.Background { didSet { save() } }
     var bindingShadow: Double { didSet { save() } }
     var splitDoublePages: Bool { didSet { save() } }
+    var contrast: Double { didSet { save() } }
+    var sharpness: Double { didSet { save() } }
+    var paperGrain: Double { didSet { save() } }
+    var paperTint: Double { didSet { save() } }
 
     private static let key = "readerDefaults"
 
@@ -30,6 +34,11 @@ final class ReaderDefaults {
         var background: ReaderOptions.Background
         var bindingShadow: Double
         var splitDoublePages: Bool
+        // Added later: optional, so defaults saved by an older build still load.
+        var contrast: Double?
+        var sharpness: Double?
+        var paperGrain: Double?
+        var paperTint: Double?
     }
 
     init() {
@@ -42,6 +51,10 @@ final class ReaderDefaults {
             background = stored.background
             bindingShadow = stored.bindingShadow
             splitDoublePages = stored.splitDoublePages
+            contrast = stored.contrast ?? 0
+            sharpness = stored.sharpness ?? 0
+            paperGrain = stored.paperGrain ?? 0
+            paperTint = stored.paperTint ?? 0
             return
         }
         // Start from what the reader last used before defaults existed (version 0.1 kept one
@@ -60,11 +73,16 @@ final class ReaderDefaults {
         background = .black
         bindingShadow = 0
         splitDoublePages = false
+        contrast = 0
+        sharpness = 0
+        paperGrain = 0
+        paperTint = 0
     }
 
     private func save() {
         let stored = Stored(direction: direction, portraitLayout: portraitLayout, landscapeLayout: landscapeLayout,
-                            fit: fit, background: background, bindingShadow: bindingShadow, splitDoublePages: splitDoublePages)
+                            fit: fit, background: background, bindingShadow: bindingShadow, splitDoublePages: splitDoublePages,
+                            contrast: contrast, sharpness: sharpness, paperGrain: paperGrain, paperTint: paperTint)
         if let data = try? JSONEncoder().encode(stored) { UserDefaults.standard.set(data, forKey: Self.key) }
     }
 
@@ -78,6 +96,10 @@ final class ReaderDefaults {
         if let value = options.background { background = value }
         if let value = options.bindingShadow { bindingShadow = value }
         if let value = options.splitDoublePages { splitDoublePages = value }
+        if let value = options.contrast { contrast = value }
+        if let value = options.sharpness { sharpness = value }
+        if let value = options.paperGrain { paperGrain = value }
+        if let value = options.paperTint { paperTint = value }
     }
 }
 

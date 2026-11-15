@@ -128,6 +128,14 @@ public extension BookRecord {
         public var bindingShadow: Double?
         /// Whether images holding two pages are shown as two separate pages.
         public var splitDoublePages: Bool?
+        /// Page contrast, from -1 (flatter) through 0 (unchanged) to 1 (punchier).
+        public var contrast: Double?
+        /// Page sharpening, from 0 (none) to 1.
+        public var sharpness: Double?
+        /// A printed-paper texture over the page, from 0 (none) to 1.
+        public var paperGrain: Double?
+        /// A warm, aged-paper tint, from 0 (none) to 1.
+        public var paperTint: Double?
         /// Only set per book; there is no default crop.
         public var crop: PageCrop?
         public var updatedAt: Date
@@ -140,6 +148,7 @@ public extension BookRecord {
         public var isEmpty: Bool {
             direction == nil && portraitLayout == nil && landscapeLayout == nil && fit == nil
                 && background == nil && bindingShadow == nil && splitDoublePages == nil && crop == nil
+                && contrast == nil && sharpness == nil && paperGrain == nil && paperTint == nil
         }
     }
 

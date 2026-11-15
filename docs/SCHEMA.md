@@ -39,7 +39,8 @@ picks a folder with the same name uses the same `libraryId`.
   "readerSettings": { "direction": "rtl", "layout": "auto", "updatedAt": "..." },
   "readerOptions": {
     "direction": "rtl", "landscapeLayout": "double", "fit": "width", "background": "#202020",
-    "bindingShadow": 0.6, "splitDoublePages": true,
+    "bindingShadow": 0.6, "splitDoublePages": true, "contrast": 0.3, "sharpness": 0.5,
+    "paperGrain": 0.4, "paperTint": 0.2,
     "crop": { "left": [0.06, 0.02, 0.9, 0.96], "right": [0.04, 0.02, 0.9, 0.96], "link": "mirrored" },
     "updatedAt": "..."
   },
@@ -74,7 +75,9 @@ picks a folder with the same name uses the same `libraryId`.
   `direction` (`ltr` or `rtl`); `portraitLayout` and `landscapeLayout` (`single` or `double`);
   `fit` (`screen`, `width` or `height`); `background` (`black`, `gray`, `white`, `dynamic` for
   the colour at the page's edges, or a colour as `#RRGGBB`); `bindingShadow` (0 for none to 1);
-  `splitDoublePages` (show an image that holds two pages as two pages); and `crop`.
+  `splitDoublePages` (show an image that holds two pages as two pages); `contrast` (-1 to 1,
+  0 unchanged); `sharpness`, `paperGrain` (a printed-paper texture) and `paperTint` (a warm
+  paper colour), each 0 for none to 1; and `crop`.
 - `crop` trims the margins of every page. `left` and `right` are `[x, y, width, height]` as
   fractions of a page, for left pages and right pages as they sit in a two-page spread: the
   cover sits on the right (on the left in `rtl` books); after it, pages pair up with the first
