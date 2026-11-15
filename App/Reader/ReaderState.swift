@@ -116,6 +116,11 @@ final class ReaderState {
 
     /// Set by a swipe up on the page: the reader closes.
     var closeRequested = false
+    /// Set by going back from the first page (a tap or a swipe): the cover shows.
+    var coverRequested = false
+    /// Makes the page the pager slides in before the first one: the cover, as the reader
+    /// shows it. Nil when the book has no cover.
+    @ObservationIgnored var makeCoverPage: (() -> UIViewController)?
 
     /// Whether the book sets anything itself (other than its crop, which has no default).
     var hasOwnSettings: Bool {
@@ -323,6 +328,15 @@ final class ReaderState {
     }
 
     func next() { show(spread: currentSpread + 1) }
+
+    /// The previous page, or the cover from the first one.
+    private func back() {
+        if currentSpread == 0, makeCoverPage != nil {
+            coverRequested = true
+        } else {
+            previous()
+        }
+    }
     func previous() { show(spread: currentSpread - 1) }
 
     func jump(toPage page: Int) {
@@ -332,10 +346,10 @@ final class ReaderState {
     /// Tap zones: the outer thirds turn pages (mirrored for right-to-left), the middle shows controls.
     func handleTap(atFraction x: CGFloat) {
         if x < 0.3 {
-            rightToLeft ? next() : previous()
+            rightToLeft ? next() : back()
             showChrome = false
         } else if x > 0.7 {
-            rightToLeft ? previous() : next()
+            rightToLeft ? back() : next()
             showChrome = false
         } else {
             showChrome.toggle()

@@ -7,6 +7,7 @@ import SwiftUI
 struct ReaderScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.coverStyle) private var coverStyle
     @State private var state: ReaderState
     @State private var scrubPage: Double = 0
     @State private var isScrubbing = false
@@ -102,6 +103,19 @@ struct ReaderScreen: View {
             let appModel = model
             let handOffPrompt = $handOff
             let coverShown = $showingCover
+            if let cover {
+                let style = coverStyle, readerState = state
+                state.makeCoverPage = { [weak readerState] in
+                    let page = UIHostingController(rootView: AnyView(
+                        CoverIntroView(intro: cover, waits: false, rightToLeft: readerState?.rightToLeft ?? false,
+                                       onForward: {}, onToggleChrome: {}, onClose: {})
+                            .environment(\.coverStyle, style)
+                    ))
+                    page.safeAreaRegions = []
+                    page.view.backgroundColor = .clear
+                    return page
+                }
+            }
             state.onOptionsChange = { [weak appModel] options in
                 appModel?.saveReaderOptions(bookId: bookId, options: options)
             }
@@ -128,6 +142,12 @@ struct ReaderScreen: View {
         }
         .onChange(of: state.closeRequested) { _, requested in
             if requested { closeBySwipe() }
+        }
+        // Back from the first page, by a tap or a swipe.
+        .onChange(of: state.coverRequested) { _, requested in
+            guard requested else { return }
+            state.coverRequested = false
+            showCover()
         }
         .task {
             // A book read before: show the cover for a moment while the pages load beneath it.

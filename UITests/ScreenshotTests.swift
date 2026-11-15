@@ -38,6 +38,12 @@ final class ScreenshotTests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         XCTAssertTrue(intro.waitForNonExistence(timeout: 5), "The cover intro did not give way to page 1")
         sleep(1)
+        // Back from page 1 returns to the cover; forward leaves it again.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
+        XCTAssertTrue(intro.waitForExistence(timeout: 5), "Going back from page 1 did not show the cover")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(intro.waitForNonExistence(timeout: 5), "The cover did not give way to page 1 again")
+        sleep(1)
         // The controls start hidden; a tap in the middle shows them.
         let menuBar = app.descendants(matching: .any)["reader-menu-bar"].firstMatch
         XCTAssertFalse(menuBar.exists, "Controls showed without a tap")

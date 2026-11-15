@@ -152,6 +152,11 @@ struct PageViewer: UIViewControllerRepresentable {
         private func neighbour(of controller: UIViewController, step: Int) -> UIViewController? {
             guard let current = controller as? SpreadViewController else { return nil }
             let target = current.spreadIndex + (state.rightToLeft ? -step : step)
+            // Back from the first page: the cover slides in, like turning back to it in a book.
+            if target == -1, let cover = state.makeCoverPage?() {
+                cover.view.accessibilityIdentifier = "reader-cover-page"
+                return CoverPageController(cover)
+            }
             guard state.spreads.indices.contains(target) else { return nil }
             return makeController(target)
         }
@@ -170,7 +175,18 @@ struct PageViewer: UIViewControllerRepresentable {
         }
 
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-            guard completed, let current = pvc.viewControllers?.first as? SpreadViewController else { return }
+            guard completed else { return }
+            if pvc.viewControllers?.first is CoverPageController {
+                // The reader's cover takes over (it looks the same, and fades in over this in
+                // 0.4 s), then the first page goes back underneath it, ready for the reader to move on.
+                state.coverRequested = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self, weak pvc] in
+                    guard let self, let pvc else { return }
+                    self.show(in: pvc, animated: false)
+                }
+                return
+            }
+            guard let current = pvc.viewControllers?.first as? SpreadViewController else { return }
             displayedSpread = current.spreadIndex
             state.show(spread: current.spreadIndex)
             // Turning the page by swiping puts the controls away.
@@ -178,6 +194,27 @@ struct PageViewer: UIViewControllerRepresentable {
             followBackground(of: current)
             becameCurrent(current)
         }
+    }
+}
+
+/// The cover as a page in the pager, before the first page, holding the reader's cover view.
+final class CoverPageController: UIViewController {
+    private let content: UIViewController
+
+    init(_ content: UIViewController) {
+        self.content = content
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        addChild(content)
+        content.view.frame = view.bounds
+        content.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(content.view)
+        content.didMove(toParent: self)
     }
 }
 
