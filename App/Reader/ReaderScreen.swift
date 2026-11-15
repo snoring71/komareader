@@ -88,6 +88,7 @@ struct ReaderScreen: View {
         .animation(.easeInOut(duration: 0.2), value: state.textStatus)
         .sheet(isPresented: $showInfo) {
             BookInfoView(bookId: state.book.id, source: state.source)
+                .toggleStyle(MonoToggleStyle())
         }
         .sheet(isPresented: $showCrop) {
             PageCropView(state: state)
@@ -204,9 +205,12 @@ struct ReaderScreen: View {
                     .font(.body.weight(.semibold))
                 Text("Jump to page \(handOff.page + 1) from \(handOff.deviceName)?")
                     .font(.subheadline.weight(.medium))
-                Button("Jump") {
+                Button {
                     self.handOff = nil
                     state.jump(toPage: handOff.page)
+                } label: {
+                    // Inverse text on the black or white accent glass (#55).
+                    Text("Jump").foregroundStyle(Color.onAccent)
                 }
                 .buttonStyle(.glassProminent)
                 .accessibilityIdentifier("handoff-jump")
@@ -270,7 +274,7 @@ struct ReaderScreen: View {
             if PageTextAnalyzer.isSupported {
                 // Lit while Select Text is on.
                 if state.selectingText {
-                    selectTextButton.buttonStyle(.glassProminent)
+                    selectTextButton.buttonStyle(.glassProminent).foregroundStyle(Color.onAccent)
                 } else {
                     selectTextButton.buttonStyle(.glass)
                 }
@@ -342,7 +346,9 @@ struct ReaderScreen: View {
                 .buttonStyle(.glass)
                 .disabled(![ReaderState.TextStatus.found, .partial, .failed].contains(state.textStatus))
                 .accessibilityIdentifier("reader-copy-text")
-                Button("Done") { state.selectingText = false }
+                Button { state.selectingText = false } label: {
+                    Text("Done").foregroundStyle(Color.onAccent)
+                }
                     .buttonStyle(.glassProminent)
                     .accessibilityIdentifier("reader-text-done")
             }

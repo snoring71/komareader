@@ -5,7 +5,7 @@ public struct LibraryInfo: Codable, Equatable, Sendable {
     public static let currentSchema = 1
     public var schema: Int
     public var libraryId: String
-    /// Name of the library folder the user picked (e.g. "Booklover"), so other devices can
+    /// Name of the library folder the user picked (e.g. "Comics"), so other devices can
     /// match their own pick of the same folder to this data.
     public var folderName: String
     public var createdAt: Date
