@@ -276,4 +276,58 @@ import Testing
         book.modified = Date(timeIntervalSince1970: 5_000)
         #expect(try index.apply(scan: [book], records: []).first?.metadataRead == false)
     }
+
+    @Test func indexShowsResetBooksAsNeverOpened() throws {
+        let index = try LibraryIndex()
+        let scanned = ScannedBook(url: URL(fileURLWithPath: "/lib/r.cbz"), relativePath: "r.cbz", format: .zip, size: 5, modified: nil, isDownloaded: true)
+        var record = BookRecord(bookId: StableID.book(path: "r.cbz"), file: .init(path: "r.cbz", size: 5, modified: nil))
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        record.progress["other"] = .init(page: 19, pageCount: 20, finished: true, updatedAt: t0)
+        let read = try #require(try index.apply(scan: [scanned], records: [record]).first)
+        #expect(read.status == .read)
+
+        // Marked unread on another device; its older entry comes back in a merge.
+        var reset = record
+        reset.resetProgress(at: t0.addingTimeInterval(5))
+        let merged = reset.merged(with: record)
+        let book = try #require(try index.apply(scan: [scanned], records: [merged]).first)
+        #expect(book.status == .unread)
+        #expect(book.progressFraction == nil)
+        #expect(book.lastReadAt == nil)
+        // And it stays that way on the next scan.
+        #expect(try index.apply(scan: [scanned], records: [merged]).first?.status == .unread)
+    }
+
+    @Test func indexStoresPageBookmarks() throws {
+        let index = try LibraryIndex()
+        let scanned = ScannedBook(url: URL(fileURLWithPath: "/lib/p.cbz"), relativePath: "p.cbz", format: .zip, size: 5, modified: nil, isDownloaded: true)
+        let first = try #require(try index.apply(scan: [scanned], records: []).first)
+        #expect(first.pageBookmarks.isEmpty)
+        #expect(!first.hasBookmarks)
+
+        try index.setPageBookmarks([4, 11], bookId: first.id)
+        let stored = try #require(try index.book(id: first.id))
+        #expect(stored.pageBookmarks == [4, 11])
+        #expect(stored.hasBookmarks)
+
+        var record = BookRecord(bookId: first.id, file: .init(path: "p.cbz", size: 5, modified: nil))
+        record.pageBookmarks = .init(pages: [2])
+        #expect(try index.apply(scan: [scanned], records: [record]).first?.pageBookmarks == [2])
+    }
+
+    /// A database that already ran every other branch's updates (v3, v4, tags) still opens
+    /// and gets the page bookmarks column.
+    @Test func pageBookmarksMigrationRunsAfterOtherBranches() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite")
+        do {
+            let first = try LibraryIndex(url: url)
+            try first.db.write { db in
+                try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'page-bookmarks-54'")
+            }
+        }
+        // Reopening runs the migration again over a table that already has the column.
+        let index = try LibraryIndex(url: url)
+        let scanned = ScannedBook(url: URL(fileURLWithPath: "/lib/m.cbz"), relativePath: "m.cbz", format: .zip, size: 5, modified: nil, isDownloaded: true)
+        #expect(try index.apply(scan: [scanned], records: []).count == 1)
+    }
 }

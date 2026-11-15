@@ -128,8 +128,12 @@ struct LibraryGridView: View {
                                         .environment(\.coverInfo, CoverInfo())
                                         // Its own id, so scrolling to a book finds it in the grid below.
                                         .id("continue-\(book.id)")
+                                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
                                 }
                             }
+                            // A book that leaves (marked unread or read) fades out, and the
+                            // others slide over into its place instead of jumping.
+                            .animation(.snappy(duration: 0.4), value: continueReading.prefix(12).map(\.id))
                             // Room under the covers for their shadows. Without titles the cover is
                             // the last thing in the cell, and the scroll view clipped its bottom.
                             .padding(.bottom, 14)
@@ -167,8 +171,13 @@ struct LibraryGridView: View {
                     // the cells it had already made, and a tap in Select mode opened the book.
                     ForEach(books) { book in
                         BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }) { toggle(book.id) }
+                            .transition(.opacity.combined(with: .scale(scale: 0.85)))
                     }
                 }
+                // In Continue Reading, a book that leaves fades out and the others slide into
+                // place. Only there: animating the whole library on every change would be slow.
+                .animation(item == .continueReading ? .snappy(duration: 0.4) : nil,
+                           value: item == .continueReading ? books.map(\.id) : [])
                 .scrollTargetLayout()
                 .padding(.horizontal)
                 .padding(.bottom)
@@ -229,7 +238,7 @@ struct LibraryGridView: View {
                 } else if case .tag(let name) = item {
                     ContentUnavailableView("No Books Tagged “\(name)”", systemImage: "tag", description: Text("Long-press a book and choose Tags… to add this tag. The tag stays until you delete it from the sidebar."))
                 } else if item == .bookmarked {
-                    ContentUnavailableView("No Bookmarked Books", systemImage: "bookmark", description: Text("Books you bookmark appear here."))
+                    ContentUnavailableView("No Bookmarked Books", systemImage: "bookmark", description: Text("Books you bookmark, and books with a bookmarked page, appear here. To bookmark a page, tap the bookmark button in the reader."))
                 } else {
                     ContentUnavailableView("No Books", systemImage: "books.vertical", description: Text("Comics you add to \(model.libraryName) appear here."))
                 }
@@ -615,10 +624,12 @@ struct BookCell: View {
             } else {
                 Button("Download", systemImage: "icloud.and.arrow.down") { Task { await model.download(book) } }
             }
-            if book.status == .read {
-                Button("Mark as Unread", systemImage: "circle") { model.setFinished(book, false) }
-            } else {
+            if book.status != .read {
                 Button("Mark as Read", systemImage: "checkmark.circle") { model.setFinished(book, true) }
+            }
+            // Also for a book in progress: it goes back to as if never opened.
+            if book.status != .unread {
+                Button("Mark as Unread", systemImage: "circle") { model.setFinished(book, false) }
             }
         }
     }
@@ -630,7 +641,7 @@ struct BookCell: View {
         // same place on every book; the percentage keeps to the right edge.
         HStack(spacing: iconSize * 0.4) {
             slot("heart.fill", .pink, book.favorite)
-            slot("bookmark.fill", .orange, book.bookmarked)
+            slot("bookmark.fill", .orange, book.hasBookmarks)
             slot("tag.fill", .teal, !book.tags.isEmpty)
             Spacer(minLength: 2)
             if book.status == .read {

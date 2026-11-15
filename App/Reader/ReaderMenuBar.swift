@@ -41,7 +41,8 @@ extension ReaderBarItem {
         [
             progress(state),
             favorite(book, model),
-            bookmark(book, model),
+            bookmark(state),
+            bookmarks(state),
             pageLayout(state),
             fit(state),
             crop(state, onCrop: onCrop),
@@ -70,13 +71,26 @@ extension ReaderBarItem {
                       announcement: { book.favorite ? "Removed from Favorites" : "Added to Favorites" })
     }
 
+    /// Bookmarks the page on screen, or removes the bookmark on it.
     @MainActor
-    static func bookmark(_ book: Book, _ model: AppModel) -> ReaderBarItem {
-        ReaderBarItem(id: "bookmark", group: .book, label: book.bookmarked ? "Bookmarked, on" : "Bookmarked, off",
-                      icon: AnyView(Image(systemName: book.bookmarked ? "bookmark.fill" : "bookmark").contentTransition(.symbolEffect(.replace))),
-                      behavior: .action { model.setBookmarked(book, !book.bookmarked) },
-                      isOn: book.bookmarked, tint: .orange,
-                      announcement: { book.bookmarked ? "Bookmark Removed" : "Bookmarked" })
+    static func bookmark(_ state: ReaderState) -> ReaderBarItem {
+        let on = state.isBookmarkedHere
+        let page = state.currentPage
+        return ReaderBarItem(id: "bookmark", group: .book, label: on ? "Page Bookmarked, on" : "Bookmark Page",
+                             icon: AnyView(Image(systemName: on ? "bookmark.fill" : "bookmark").contentTransition(.symbolEffect(.replace))),
+                             behavior: .action { state.toggleBookmark() },
+                             isOn: on, tint: .orange,
+                             announcement: { on ? "Bookmark Removed" : "Page \(page + 1) Bookmarked" })
+    }
+
+    /// The book's bookmarked pages, to jump to one.
+    @MainActor
+    static func bookmarks(_ state: ReaderState) -> ReaderBarItem {
+        let count = state.bookmarks.count
+        return ReaderBarItem(id: "bookmarks", group: .book,
+                             label: count == 0 ? "Bookmarks, none" : "Bookmarks, \(count)",
+                             icon: AnyView(Image(systemName: "list.bullet")),
+                             behavior: .panel { close in AnyView(BookmarksPanel(state: state, close: close)) })
     }
 
     @MainActor

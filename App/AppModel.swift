@@ -44,6 +44,8 @@ final class AppModel {
     @ObservationIgnored private var readingBook: Book?
     /// A reading direction changed in the reader, put into `books` when the reader closes.
     @ObservationIgnored private var directionAfterReading: (id: String, direction: String?)?
+    /// Page bookmarks changed in the reader, put into `books` when the reader closes.
+    @ObservationIgnored private var bookmarksAfterReading: (id: String, pages: [Int])?
     var selection: SidebarItem? = .all {
         didSet {
             guard selection != oldValue else { return }
@@ -161,7 +163,7 @@ final class AppModel {
             counts[.all, default: 0] += 1
             if book.isDownloaded { counts[.downloaded, default: 0] += 1 }
             if book.favorite { counts[.favorites, default: 0] += 1 }
-            if book.bookmarked { counts[.bookmarked, default: 0] += 1 }
+            if book.hasBookmarks { counts[.bookmarked, default: 0] += 1 }
             switch book.status {
             case .unread: counts[.unread, default: 0] += 1
             case .reading: counts[.reading, default: 0] += 1
@@ -191,6 +193,8 @@ final class AppModel {
         var options: ReaderOptions
         /// The book's cover, shown first if Show Cover First is on, and from the page bar.
         var intro: CoverIntro?
+        /// Bookmarked pages, from the synced record (newer than the library's copy).
+        var bookmarks: [Int]?
         var id: String { book.id }
     }
 
@@ -574,9 +578,17 @@ final class AppModel {
                 $0.lastReadAt = latest.updatedAt
             }
             current = books.first { $0.id == book.id } ?? current
+        } else if let record, record.wasReset(after: current.lastReadAt), current.lastReadAt != nil || current.finished {
+            // Reset on another device since the last scan: a first open again.
+            updateBook(book.id) {
+                $0.currentPage = nil
+                $0.finished = false
+                $0.lastReadAt = nil
+            }
+            current = books.first { $0.id == book.id } ?? current
         }
-        // Where the reader will start (see ReaderState), to compare with other devices.
-        let start = min(max(0, current.finished ? 0 : (current.currentPage ?? 0)), max(0, source.pageCount - 1))
+        // Where the reader will start, to compare with other devices.
+        let start = ReaderState.startPage(for: current, pageCount: source.pageCount)
         var handOff: HandOff?
         if let other = record?.handOff(for: deviceId, openingAt: start), other.progress.page < source.pageCount {
             handOff = HandOff(deviceName: DeviceIdentity.displayName(for: other.device), page: other.progress.page)
@@ -585,7 +597,8 @@ final class AppModel {
         var options = record?.effectiveReaderOptions ?? ReaderOptions(updatedAt: .distantPast)
         if record == nil, let direction = current.direction { options.direction = ReaderOptions.Direction(rawValue: direction) }
         let intro = await coverIntro(for: current)
-        openBook = OpenBook(book: current, source: source, handOff: handOff, options: options, intro: intro)
+        openBook = OpenBook(book: current, source: source, handOff: handOff, options: options, intro: intro,
+                            bookmarks: record?.pageBookmarks?.pages)
     }
 
     /// Average cover colours, so a book opened again gets its background at once.
@@ -627,8 +640,13 @@ final class AppModel {
             .prefix(limit))
     }
 
-    /// Marks several books as read or unread, with one change to `books`.
+    /// Marks several books as read, or resets them as unread (see `resetProgress`), with one
+    /// change to `books`.
     func setFinished(_ ids: Set<String>, _ finished: Bool) {
+        guard finished else {
+            resetProgress(ids)
+            return
+        }
         let now = Date()
         let changed = updateBooks(ids) { book in
             let pageCount = book.pageCount ?? 1
@@ -658,15 +676,55 @@ final class AppModel {
         }
     }
 
+    /// Mark as Read, or Mark as Unread (which resets the book as if it had never been opened).
     func setFinished(_ book: Book, _ finished: Bool) {
+        if finished {
+            let pageCount = book.pageCount ?? 1
+            saveProgress(bookId: book.id, page: max(0, pageCount - 1), pageCount: pageCount, finished: true, immediately: true)
+        } else {
+            resetProgress(book)
+        }
+    }
+
+    /// Reading, from Book Info: a Read book goes back to Reading on the page it was on; an
+    /// unread one counts as started on page 1.
+    func markReading(_ book: Book) {
+        guard book.status != .reading else { return }
         let pageCount = book.pageCount ?? 1
-        saveProgress(bookId: book.id, page: finished ? max(0, pageCount - 1) : 0, pageCount: pageCount, finished: finished, immediately: true)
+        let page = book.finished ? min(book.currentPage ?? 0, max(0, pageCount - 2)) : (book.currentPage ?? 0)
+        saveProgress(bookId: book.id, page: page, pageCount: pageCount, finished: false, immediately: true, keepFinished: false)
+    }
+
+    /// Mark as Unread: resets reading progress as if the book had never been opened: no
+    /// progress bar, status Unread, out of Continue Reading. This is the only way a book goes
+    /// back to unread. Every device's position goes (see
+    /// `BookRecord.progressReset`); the book's reader settings stay.
+    func resetProgress(_ book: Book) {
+        resetProgress([book.id])
+    }
+
+    /// Resets several books at once (Select mode), with one change to `books`.
+    func resetProgress(_ ids: Set<String>) {
+        for id in ids {
+            progressTasks[id]?.cancel()
+            progressTasks[id] = nil
+        }
+        if let reading = readingBook, ids.contains(reading.id) { readingBook = nil }
+        let changed = updateBooks(ids) { book in
+            book.currentPage = nil
+            book.finished = false
+            book.lastReadAt = nil
+        }
+        let now = Date()
+        updateRecords(changed) { record, _ in record.resetProgress(at: now) }
     }
 
     /// Called on every page turn. The index updates at once; the synced record is written
-    /// after a short pause so fast page flipping does not hammer iCloud.
-    func saveProgress(bookId: String, page: Int, pageCount: Int, finished: Bool? = nil, immediately: Bool = false) {
-        let isFinished = finished ?? (page >= pageCount - 1)
+    /// after a short pause so fast page flipping does not hammer iCloud. A finished book stays
+    /// finished when its pages are turned back, unless `keepFinished` is false.
+    func saveProgress(bookId: String, page: Int, pageCount: Int, finished: Bool? = nil, immediately: Bool = false, keepFinished: Bool = true) {
+        let wasFinished = keepFinished && ((readingBook?.id == bookId ? readingBook : nil) ?? books.first { $0.id == bookId })?.finished == true
+        let isFinished = (finished ?? (page >= pageCount - 1)) || wasFinished
         let now = Date()
         let change: (inout Book) -> Void = {
             $0.currentPage = page
@@ -677,6 +735,7 @@ final class AppModel {
         let whileReading = !immediately && openBook?.id == bookId
         if whileReading, var reading = readingBook ?? books.first(where: { $0.id == bookId }) {
             change(&reading)
+            if let pending = bookmarksAfterReading, pending.id == bookId { reading.pageBookmarks = pending.pages }
             readingBook = reading
         } else {
             if readingBook?.id == bookId { readingBook = nil }
@@ -745,6 +804,21 @@ final class AppModel {
     }
 
     // MARK: Favorite and Bookmarked
+
+    /// Saves a book's bookmarked pages (from the reader) to its record and the index. The
+    /// library's copy of the row catches up when the reader closes.
+    func savePageBookmarks(bookId: String, pages: [Int]) {
+        if openBook?.id == bookId {
+            bookmarksAfterReading = (bookId, pages)
+            if readingBook?.id == bookId { readingBook?.pageBookmarks = pages }
+            try? index?.setPageBookmarks(pages, bookId: bookId)
+        } else {
+            updateBook(bookId) { $0.pageBookmarks = pages }
+        }
+        guard let book = books.first(where: { $0.id == bookId }) else { return }
+        let now = Date()
+        updateRecord(book) { record in record.pageBookmarks = .init(pages: pages, updatedAt: now) }
+    }
 
     func setFavorite(_ book: Book, _ favorite: Bool) {
         setFlags(book) { $0.favorite = favorite }
@@ -1120,6 +1194,10 @@ final class AppModel {
         if let pending = directionAfterReading {
             directionAfterReading = nil
             updateBook(pending.id) { $0.direction = pending.direction }
+        }
+        if let pending = bookmarksAfterReading {
+            bookmarksAfterReading = nil
+            updateBook(pending.id) { $0.pageBookmarks = pending.pages }
         }
         guard let reading = readingBook else { return }
         readingBook = nil
