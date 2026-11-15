@@ -162,6 +162,8 @@ struct ReaderMenuBar: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .glassEffect(in: .capsule)
+            // A container of its own, so its identifier doesn't replace each button's.
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("reader-menu-bar")
 
             if let announcement {
