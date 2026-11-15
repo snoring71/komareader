@@ -30,10 +30,10 @@ let package = Package(
         .testTarget(name: "ComicCoreTests", dependencies: ["ComicCore"]),
         .testTarget(
             name: "ArchiveKitTests",
-            dependencies: ["ArchiveKit"],
+            dependencies: ["ArchiveKit", "ComicCore"],
             resources: [.copy("Fixtures")]
         ),
-        .testTarget(name: "LibraryKitTests", dependencies: ["LibraryKit"]),
+        .testTarget(name: "LibraryKitTests", dependencies: ["LibraryKit", .product(name: "GRDB", package: "GRDB.swift")]),
     ],
     swiftLanguageModes: [.v5]
 )

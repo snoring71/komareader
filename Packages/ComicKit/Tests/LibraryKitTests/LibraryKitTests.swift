@@ -2,6 +2,7 @@ import ArchiveKit
 import ComicCore
 import CoreGraphics
 import Foundation
+import GRDB
 @testable import LibraryKit
 import Testing
 
@@ -150,5 +151,112 @@ import Testing
         #expect(await waitFor { covers.existingThumbnail(bookId: "C") != nil })
         #expect(await covers.waitingForCloud == 0)
         #expect(store.existingCoverURL(bookId: "C") != nil)
+    }
+
+    @Test func scanLeavesOutEpubs() throws {
+        let root = try makeLibrary()
+        try Data([1]).write(to: root.appendingPathComponent("ARIA/Novel.epub"))
+        let plist = try PropertyListSerialization.data(fromPropertyList: ["NSURLFileSizeKey": 10], format: .binary, options: 0)
+        try plist.write(to: root.appendingPathComponent("ARIA/.Other.epub.icloud"))
+        let books = LibraryScanner.scan(root: root)
+        #expect(!books.contains { $0.format == .epub })
+        #expect(books.count == 4)
+    }
+
+    @Test func indexDropsEpubsInsteadOfMarkingThemMissing() throws {
+        let index = try LibraryIndex()
+        let comic = ScannedBook(url: URL(fileURLWithPath: "/lib/a.cbz"), relativePath: "a.cbz", format: .zip, size: 1, modified: nil, isDownloaded: true)
+        let epub = ScannedBook(url: URL(fileURLWithPath: "/lib/b.epub"), relativePath: "b.epub", format: .epub, size: 2, modified: nil, isDownloaded: true)
+        // As an older version indexed it.
+        try index.apply(scan: [comic, epub], records: [])
+        #expect(try index.allBooks().map(\.relativePath) == ["a.cbz"])
+
+        // This version's scan no longer lists it: the row goes, it is not shown as missing.
+        let books = try index.apply(scan: [comic], records: [])
+        #expect(books.map(\.relativePath) == ["a.cbz"])
+        #expect(!books.contains { $0.isMissing })
+    }
+
+    @Test func indexDropsMissingBooksRemovedOnAnyDevice() throws {
+        let index = try LibraryIndex()
+        let a = ScannedBook(url: URL(fileURLWithPath: "/lib/a.cbz"), relativePath: "a.cbz", format: .zip, size: 1, modified: nil, isDownloaded: true)
+        let b = ScannedBook(url: URL(fileURLWithPath: "/lib/b.cbz"), relativePath: "b.cbz", format: .zip, size: 2, modified: nil, isDownloaded: true)
+        let ids = try index.apply(scan: [a, b], records: []).map(\.id)
+        #expect(try index.apply(scan: [], records: []).allSatisfy(\.isMissing))
+
+        // Deleted here.
+        try index.delete(ids: [ids[0]])
+        // Deleted on another device: its record says so.
+        var record = BookRecord(bookId: ids[1], file: .init(path: "b.cbz", size: 2, modified: nil))
+        record.removed = .init()
+        #expect(try index.apply(scan: [], records: [record]).isEmpty)
+
+        // The file comes back: a fresh book.
+        let back = try index.apply(scan: [b], records: [record])
+        #expect(back.count == 1)
+        #expect(back.first?.isMissing == false)
+        #expect(back.first?.currentPage == nil)
+    }
+
+    @Test func indexOpensAfterAnyBranchsV3() throws {
+        // A device that ran another build's "v3" (tags only) still gets the metadata columns.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite")
+        do {
+            let queue = try DatabaseQueue(path: url.path)
+            var migrator = DatabaseMigrator()
+            migrator.registerMigration("v1") { db in
+                try db.create(table: "book") { t in
+                    t.primaryKey("id", .text)
+                    t.column("relativePath", .text).notNull()
+                    t.column("title", .text).notNull()
+                    t.column("folder", .text).notNull()
+                    t.column("format", .text).notNull()
+                    t.column("size", .integer)
+                    t.column("modified", .datetime)
+                    t.column("isDownloaded", .boolean).notNull()
+                    t.column("isMissing", .boolean).notNull().defaults(to: false)
+                    t.column("addedAt", .datetime).notNull()
+                    t.column("pageCount", .integer)
+                    t.column("currentPage", .integer)
+                    t.column("finished", .boolean).notNull().defaults(to: false)
+                    t.column("lastReadAt", .datetime)
+                    t.column("direction", .text)
+                }
+            }
+            migrator.registerMigration("v2") { db in
+                try db.alter(table: "book") { t in
+                    t.add(column: "favorite", .boolean).notNull().defaults(to: false)
+                    t.add(column: "bookmarked", .boolean).notNull().defaults(to: false)
+                    t.add(column: "series", .text).notNull().defaults(to: "")
+                    t.add(column: "number", .text)
+                }
+            }
+            migrator.registerMigration("v3") { db in
+                try db.alter(table: "book") { t in t.add(column: "tags", .text).notNull().defaults(to: "[]") }
+            }
+            try migrator.migrate(queue)
+        }
+        let index = try LibraryIndex(url: url)
+        let scanned = ScannedBook(url: URL(fileURLWithPath: "/lib/a.cbz"), relativePath: "a.cbz", format: .zip, size: 1, modified: nil, isDownloaded: true)
+        let id = try #require(try index.apply(scan: [scanned], records: []).first?.id)
+        try index.saveMetadata([id: FileMetadata(author: "W")])
+        #expect(try index.book(id: id)?.author == "W")
+        let columns = try index.db.read { db in try db.columns(in: "book").map(\.name) }
+        #expect(columns.contains("tags"))
+    }
+
+    @Test func indexKeepsFileMetadataUntilTheFileChanges() throws {
+        let index = try LibraryIndex()
+        var book = ScannedBook(url: URL(fileURLWithPath: "/lib/a.cbz"), relativePath: "a.cbz", format: .zip, size: 1, modified: Date(timeIntervalSince1970: 1_000.123456), isDownloaded: true)
+        let id = try #require(try index.apply(scan: [book], records: []).first?.id)
+        #expect(try index.book(id: id)?.metadataRead == false)
+
+        try index.saveMetadata([id: FileMetadata(title: "T", author: "W", publisher: "P")])
+        let saved = try #require(try index.apply(scan: [book], records: []).first)
+        #expect(saved.metadataRead)
+        #expect(saved.author == "W" && saved.publisher == "P" && saved.metadataTitle == "T")
+
+        book.modified = Date(timeIntervalSince1970: 5_000)
+        #expect(try index.apply(scan: [book], records: []).first?.metadataRead == false)
     }
 }

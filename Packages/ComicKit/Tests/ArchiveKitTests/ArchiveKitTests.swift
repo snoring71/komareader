@@ -1,4 +1,5 @@
 import ArchiveKit
+import ComicCore
 import CoreGraphics
 import Foundation
 import Testing
@@ -79,6 +80,23 @@ import Testing
         let bad = dir.appendingPathComponent("bad.cbz")
         try Data("not an archive".utf8).write(to: bad)
         #expect(throws: (any Error).self) { try ArchiveBookSource(url: bad, cacheRoot: dir) }
+    }
+
+    @Test func readsMetadataFromImageFoldersAndArchives() throws {
+        let folder = try tempDir()
+        try Data([1]).write(to: folder.appendingPathComponent("001.jpg"))
+        try Data("<ComicInfo><Writer>Kozue Amano</Writer><Publisher>Mag Garden</Publisher></ComicInfo>".utf8)
+            .write(to: folder.appendingPathComponent("ComicInfo.xml"))
+        let info = try #require(MetadataReader.read(url: folder, format: .folder))
+        #expect(info.author == "Kozue Amano")
+        #expect(info.publisher == "Mag Garden")
+
+        // An archive without ComicInfo.xml reads fine, with nothing in it.
+        #expect(MetadataReader.read(url: try fixture("sample.cbz"), format: .zip) == FileMetadata())
+
+        let bad = folder.appendingPathComponent("bad.cbz")
+        try Data("not an archive".utf8).write(to: bad)
+        #expect(MetadataReader.read(url: bad, format: .zip) == nil)
     }
 }
 
