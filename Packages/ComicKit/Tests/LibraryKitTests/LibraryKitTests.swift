@@ -56,6 +56,23 @@ import Testing
         #expect(after.first?.relativePath == "b/Saga 1.cbz")
     }
 
+    @Test func indexStoresTagsFromRecords() throws {
+        let index = try LibraryIndex()
+        let book = ScannedBook(url: URL(fileURLWithPath: "/lib/Saga 1.cbz"), relativePath: "Saga 1.cbz", format: .zip, size: 9, modified: nil, isDownloaded: true)
+        var first = try #require(try index.apply(scan: [book], records: []).first)
+        #expect(first.tags.isEmpty)
+
+        var record = BookRecord(bookId: first.id, file: .init(path: "Saga 1.cbz", size: 9, modified: nil))
+        record.tags = .init(value: ["Sci-Fi", "To Read"])
+        let tagged = try #require(try index.apply(scan: [book], records: [record]).first)
+        #expect(tagged.tags == ["Sci-Fi", "To Read"])
+        #expect(try index.book(id: first.id)?.tags == ["Sci-Fi", "To Read"])
+
+        first.tags = ["Space"]
+        try index.save(first)
+        #expect(try index.allBooks().first?.tags == ["Space"])
+    }
+
     @Test func indexAdoptsIdsAndProgressFromSyncedRecords() throws {
         let index = try LibraryIndex()
         var record = BookRecord(bookId: "FROM-IPAD", file: .init(path: "x.cbz", size: 5, modified: nil))

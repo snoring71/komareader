@@ -11,7 +11,7 @@ struct ComicReaderApp: App {
                 .environment(model)
                 .task { await model.start() }
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { model.rescanSoon() }
+                    if phase == .active { model.rescanSoon() } else { LibraryPosition.flush() }
                 }
         }
     }

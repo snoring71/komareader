@@ -20,12 +20,12 @@ struct RootView: View {
                 NavigationSplitView {
                     SidebarView()
                 } detail: {
-                    NavigationStack {
+                    NavigationStack(path: $model.libraryPath) {
                         Group {
-                            if model.selection == .series {
-                                SeriesGridView()
-                            } else {
-                                LibraryGridView(item: model.selection ?? .all)
+                            switch model.selection ?? .all {
+                            case .series: SeriesGridView()
+                            case .folders: FolderBrowserView()
+                            case let item: LibraryGridView(item: item)
                             }
                         }
                         .navigationDestination(for: SidebarItem.self) { LibraryGridView(item: $0) }
@@ -41,6 +41,9 @@ struct RootView: View {
         }
         .sheet(item: $model.bookInfo) { ref in
             BookInfoView(bookId: ref.id)
+        }
+        .sheet(item: $model.tagEditor) { ref in
+            TagEditorView(bookId: ref.id)
         }
         .fullScreenCover(item: $model.coverEditor) { request in
             CoverEditorView(book: request.book, initialEdit: request.initialEdit)

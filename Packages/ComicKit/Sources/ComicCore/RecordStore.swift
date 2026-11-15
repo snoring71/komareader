@@ -4,6 +4,7 @@ import Foundation
 ///
 ///     Libraries/<libraryId>/
 ///       library.json
+///       tags.json
 ///       books/<bookId>.json
 ///       covers/<bookId>.jpg
 ///       covers/<bookId>.custom.jpg
@@ -233,6 +234,38 @@ public final class RecordStore: @unchecked Sendable {
         let url = coverURL(bookId: bookId, custom: custom)
         guard fileManager.fileExists(atPath: url.path) else { return }
         try Self.coordinatedDelete(url)
+    }
+
+    // MARK: Tags
+
+    public var tagListURL: URL { root.appendingPathComponent("tags.json") }
+
+    /// The library's tag list, with any iCloud conflict versions folded in.
+    public func readTagList() -> TagList {
+        let decoder = RecordCoding.decoder()
+        var list = Self.coordinatedRead(tagListURL).flatMap { try? decoder.decode(TagList.self, from: $0) } ?? TagList()
+        if let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: tagListURL), !conflicts.isEmpty {
+            for version in conflicts {
+                if let data = try? Data(contentsOf: version.url), let other = try? decoder.decode(TagList.self, from: data) {
+                    list = list.merged(with: other)
+                }
+            }
+            if (try? Self.coordinatedWrite(try RecordCoding.encoder().encode(list), to: tagListURL)) != nil {
+                for version in conflicts { version.isResolved = true }
+                try? NSFileVersion.removeOtherVersionsOfItem(at: tagListURL)
+            }
+        }
+        return list
+    }
+
+    /// Reads the list, applies `change` and writes it back. Changes touch only their own tags,
+    /// each with a new date, so edits from other devices are kept.
+    @discardableResult
+    public func updateTagList(_ change: (inout TagList) -> Void) throws -> TagList {
+        var list = readTagList()
+        change(&list)
+        try Self.coordinatedWrite(try RecordCoding.encoder().encode(list), to: tagListURL)
+        return list
     }
 
     // MARK: File coordination
