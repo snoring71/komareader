@@ -61,7 +61,7 @@ struct WelcomeView: View {
         ContentUnavailableView {
             Label("Choose Your Comics Folder", systemImage: "books.vertical")
         } description: {
-            Text("Pick the iCloud Drive folder that holds your comics, such as iCloud Drive › Booklover. Books stay where they are; nothing in the folder is changed.")
+            Text("Pick the iCloud Drive folder that holds your comics, such as iCloud Drive › Comics. Books stay where they are; nothing in the folder is changed.")
         } actions: {
             Button("Choose Folder…") { showPicker = true }
                 .buttonStyle(.glassProminent)
