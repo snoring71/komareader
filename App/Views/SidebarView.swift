@@ -72,15 +72,42 @@ struct SidebarView: View {
     }
 
     private func row(_ item: SidebarItem, count: Int?) -> some View {
-        Label(item.title, systemImage: item.systemImage)
-            .badge(count ?? 0)
+        // The count is drawn in the label, not with `.badge`, so it can switch to the inverse
+        // color on the selected row's black or white highlight (#55).
+        Label {
+            SidebarTitle(title: item.title, count: count ?? 0)
+        } icon: {
+            Image(systemName: item.systemImage)
+        }
             .tag(item)
             .accessibilityIdentifier("sidebar-\(item.title)")
     }
 }
 
-/// Sidebar icons in black (light mode) or white (dark mode) instead of the accent color, and
-/// white on the selected row's highlight.
+/// A sidebar row's title with its count on the right, in the inverse color on the selected
+/// row's highlight.
+private struct SidebarTitle: View {
+    let title: String
+    let count: Int
+    @Environment(\.backgroundProminence) private var prominence
+
+    var body: some View {
+        let selected = prominence == .increased
+        HStack {
+            Text(title)
+                .foregroundStyle(selected ? Color.onAccent : Color.primary)
+            Spacer(minLength: 8)
+            if count > 0 {
+                Text(count, format: .number)
+                    .monospacedDigit()
+                    .foregroundStyle(selected ? Color.onAccent.opacity(0.75) : Color.secondary)
+            }
+        }
+    }
+}
+
+/// Sidebar icons in black (light mode) or white (dark mode) instead of the accent color. The
+/// selected row's highlight is the accent (black or white), so there they take the inverse.
 struct SidebarLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         Label {
@@ -95,7 +122,7 @@ struct SidebarLabelStyle: LabelStyle {
         @Environment(\.backgroundProminence) private var prominence
 
         var body: some View {
-            icon.foregroundStyle(prominence == .increased ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            icon.foregroundStyle(prominence == .increased ? AnyShapeStyle(Color.onAccent) : AnyShapeStyle(.primary))
         }
     }
 }

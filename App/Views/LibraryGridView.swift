@@ -335,9 +335,12 @@ struct LibraryToolbar: ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             // Tap to show or hide the info on the covers; hold to choose what it shows.
             Menu {
+                // Menus draw toggles as checkmark items; keep the app's switch style out of them.
                 Toggle("Show Info on Covers", systemImage: "info.circle", isOn: coverInfo.$isOn)
+                    .toggleStyle(.automatic)
                 Section("Show") {
                     CoverInfoFieldControls()
+                        .toggleStyle(.automatic)
                 }
             } label: {
                 Label("Cover Info", systemImage: coverInfo.isOn ? "info.circle.fill" : "info.circle")
@@ -613,10 +616,16 @@ struct BookCell: View {
 
     @ViewBuilder private var selectionMark: some View {
         if let isSelected {
+            // Selected: a primary circle with an inverse checkmark and a thin inverse outline, so
+            // it shows on any cover in light and dark mode (#55).
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 .font(.title3)
                 .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.black.opacity(0.25)))
+                .foregroundStyle(isSelected ? Color.onAccent : Color.white,
+                                 isSelected ? Color.primary : Color.black.opacity(0.25))
+                .background {
+                    if isSelected { Circle().stroke(Color.onAccent, lineWidth: 1.5).padding(1) }
+                }
                 .shadow(color: .black.opacity(0.35), radius: 2)
                 .padding(6)
                 .allowsHitTesting(false)
