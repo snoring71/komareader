@@ -21,7 +21,8 @@ final class ReaderState {
     private(set) var displayPages: [DisplayPage] = []
     var spreads: [[DisplayPage]] = []
     var currentSpread = 0
-    var showChrome = true
+    /// The controls start hidden; a tap in the middle shows them, and turning the page hides them.
+    var showChrome = false
     /// Select Text mode: Live Text finds the words on the page so they can be selected,
     /// copied, looked up or translated. Off, the page takes no touches besides paging and zoom.
     var selectingText = false {
@@ -332,8 +333,10 @@ final class ReaderState {
     func handleTap(atFraction x: CGFloat) {
         if x < 0.3 {
             rightToLeft ? next() : previous()
+            showChrome = false
         } else if x > 0.7 {
             rightToLeft ? previous() : next()
+            showChrome = false
         } else {
             showChrome.toggle()
         }
@@ -475,7 +478,7 @@ final class PageImageCache: @unchecked Sendable {
                 guard let self else { return nil }
                 let raw = await self.load(page: page, size: size, from: source)
                 var result = raw
-                if let cgImage = raw?.cgImage, let filtered = PageFilter.apply(adjustments, to: cgImage) {
+                if let cgImage = raw?.cgImage, let filtered = PageFilter.apply(adjustments, to: cgImage, seed: page) {
                     let image = UIImage(cgImage: filtered)
                     let cost = Int(image.size.width * image.size.height * 4)
                     if let existing = self.adjusted.object(forKey: key), existing.size >= size {

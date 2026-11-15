@@ -20,6 +20,8 @@ struct CoverIntro {
 
 struct CoverIntroView: View {
     let intro: CoverIntro
+    /// Waits for the reader to move on (a first open, or the cover chosen from the page bar).
+    let waits: Bool
     let rightToLeft: Bool
     /// The reader moved past the cover (swipe or tap towards the next page).
     let onForward: () -> Void
@@ -47,10 +49,10 @@ struct CoverIntroView: View {
             }
         }
         .ignoresSafeArea()
-        .allowsHitTesting(intro.waits && !leaving)
+        .allowsHitTesting(waits && !leaving)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Cover")
-        .accessibilityHint(intro.waits ? "Swipe to start reading" : "")
+        .accessibilityHint(waits ? "Swipe to start reading" : "")
         .accessibilityAction(named: "Start Reading") { onForward() }
         .accessibilityIdentifier("reader-cover-intro")
         .task { await loadFullSize() }
@@ -74,7 +76,7 @@ struct CoverIntroView: View {
     private func cover(in size: CGSize) -> some View {
         let image = fullSize ?? intro.image
         let aspect = image.size.height > 0 ? image.size.width / image.size.height : 2.0 / 3.0
-        let height = min(size.height * 0.68, size.width * 0.62 / aspect)
+        let height = min(size.height * 0.84, size.width * 0.84 / aspect)
         let radius = coverStyle.roundedCorners ? 8.0 : 0
         return Image(uiImage: image)
             .resizable()
@@ -132,7 +134,9 @@ struct CoverIntroView: View {
         let nextSide = rightToLeft ? x < 0.3 : x > 0.7
         let backSide = rightToLeft ? x > 0.7 : x < 0.3
         if nextSide {
-            leave(width: width)
+            // A tap fades the cover away (the reader does it); a swipe slides it off.
+            leaving = true
+            onForward()
         } else if !backSide {
             onToggleChrome()
         }

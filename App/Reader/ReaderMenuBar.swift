@@ -44,10 +44,11 @@ extension ReaderBarItem {
             bookmark(book, model),
             pageLayout(state),
             fit(state),
+            crop(state, onCrop: onCrop),
             direction(state),
             background(state),
             adjustments(state),
-            more(state, onCrop: onCrop),
+            more(state),
         ]
     }
 
@@ -99,6 +100,15 @@ extension ReaderBarItem {
     }
 
     @MainActor
+    static func crop(_ state: ReaderState, onCrop: @escaping () -> Void) -> ReaderBarItem {
+        let cropped = state.crop.map { !$0.isNone } ?? false
+        return ReaderBarItem(id: "crop", group: .pages, label: cropped ? "Edit Page Crop" : "Crop Pages",
+                             icon: AnyView(Image(systemName: "crop")),
+                             behavior: .action(onCrop),
+                             isOn: cropped)
+    }
+
+    @MainActor
     static func direction(_ state: ReaderState) -> ReaderBarItem {
         ReaderBarItem(id: "direction", group: .reading, label: "Reading Direction, \(state.direction.title)",
                       icon: AnyView(DirectionIcon(rightToLeft: state.rightToLeft)),
@@ -125,15 +135,10 @@ extension ReaderBarItem {
     }
 
     @MainActor
-    static func more(_ state: ReaderState, onCrop: @escaping () -> Void) -> ReaderBarItem {
+    static func more(_ state: ReaderState) -> ReaderBarItem {
         ReaderBarItem(id: "more", group: .more, label: "More Settings",
                       icon: AnyView(Image(systemName: "ellipsis")),
-                      behavior: .panel { close in
-                          AnyView(MoreSettingsPanel(state: state) {
-                              close()
-                              onCrop()
-                          })
-                      })
+                      behavior: .panel { _ in AnyView(MoreSettingsPanel(state: state)) })
     }
 }
 
@@ -147,36 +152,39 @@ struct ReaderMenuBar: View {
     @State private var announcementTask: Task<Void, Never>?
 
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 2) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    if index > 0, items[index - 1].group != item.group {
-                        Capsule()
-                            .fill(.secondary.opacity(0.45))
-                            .frame(width: 1, height: 22)
-                            .padding(.horizontal, 7)
-                    }
-                    cell(item)
+        HStack(spacing: 2) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                if index > 0, items[index - 1].group != item.group {
+                    Capsule()
+                        .fill(.secondary.opacity(0.45))
+                        .frame(width: 1, height: 22)
+                        .padding(.horizontal, 7)
                 }
+                cell(item)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .glassEffect(in: .capsule)
-            // A container of its own, so its identifier doesn't replace each button's.
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("reader-menu-bar")
-
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .glassEffect(in: .capsule)
+        // A container of its own, so its identifier doesn't replace each button's.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("reader-menu-bar")
+        // The new value, faded in just under the bar. An overlay, so nothing moves, and not
+        // glass: glass beside the bar's glass flows out of it instead of fading in.
+        .overlay(alignment: .bottom) {
             if let announcement {
                 Text(announcement)
                     .font(.subheadline.weight(.semibold))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .glassEffect(in: .capsule)
-                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
-                    .id(announcement)
+                    .background(.regularMaterial, in: Capsule())
+                    .fixedSize()
+                    .offset(y: 46)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: announcement)
+        .animation(.easeInOut(duration: 0.25), value: announcement)
         .onDisappear { announcementTask?.cancel() }
     }
 

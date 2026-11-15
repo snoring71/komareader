@@ -14,12 +14,12 @@ struct PageLook: Equatable, Sendable {
     /// A warm paper colour, 0 to 1.
     var paperTint: Double = 0
 
-    /// The part that is baked into the page image (the grain is drawn over it instead).
+    /// Everything is baked into the page image when it is decoded.
     var adjustments: PageAdjustments {
-        PageAdjustments(contrast: contrast, sharpness: sharpness, tint: paperTint)
+        PageAdjustments(contrast: contrast, sharpness: sharpness, tint: paperTint, grain: paperGrain)
     }
 
-    var isNone: Bool { adjustments.isNone && paperGrain < 0.005 }
+    var isNone: Bool { adjustments.isNone }
 }
 
 /// The filters applied to a decoded page image.
@@ -27,11 +27,12 @@ struct PageAdjustments: Hashable, Sendable {
     var contrast: Double
     var sharpness: Double
     var tint: Double
+    var grain: Double
 
-    var isNone: Bool { abs(contrast) < 0.005 && sharpness < 0.005 && tint < 0.005 }
+    var isNone: Bool { abs(contrast) < 0.005 && sharpness < 0.005 && tint < 0.005 && grain < 0.005 }
 
     /// Identifies the result in the page cache (to two decimals, as the sliders step).
-    var key: String { String(format: "%.2f|%.2f|%.2f", contrast, sharpness, tint) }
+    var key: String { String(format: "%.2f|%.2f|%.2f|%.2f", contrast, sharpness, tint, grain) }
 }
 
 /// Applies `PageAdjustments` with Core Image, on the GPU.
@@ -39,7 +40,8 @@ enum PageFilter {
     /// One context for the app: making one is expensive, and it is safe to share between threads.
     static let context = CIContext(options: [.cacheIntermediates: false])
 
-    static func apply(_ adjustments: PageAdjustments, to image: CGImage) -> CGImage? {
+    /// `seed` (the page number) gives each page its own sheet of paper.
+    static func apply(_ adjustments: PageAdjustments, to image: CGImage, seed: Int = 0) -> CGImage? {
         guard !adjustments.isNone else { return nil }
         let input = CIImage(cgImage: image)
         let extent = input.extent
@@ -72,6 +74,9 @@ enum PageFilter {
             filter.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
             if let result = filter.outputImage { output = result }
         }
+        if adjustments.grain >= 0.005 {
+            output = PaperGrain.apply(to: output, amount: adjustments.grain, seed: seed)
+        }
         return context.createCGImage(output.cropped(to: extent), from: extent)
     }
 
@@ -89,65 +94,55 @@ enum PageFilter {
     }
 }
 
-/// A tile of paper texture: fine speckle over soft blotches, as light and dark specks with
-/// transparency, so it can lie over any page. Made once, then repeated across the page.
+/// Printed paper, made fresh for each page with Core Image noise, so it never repeats:
+/// fine speckle from the paper's fibres, a softer mottle where the ink took unevenly, and a
+/// broad, faint unevenness of tone. Each layer only darkens (it multiplies the page), so
+/// white paper turns a little grey and uneven, as in a scan, and black ink stays black.
 enum PaperGrain {
-    @MainActor static let pattern: UIColor = UIColor(patternImage: makeTile())
-
-    private static func makeTile() -> UIImage {
-        let size = 192
-        var generator = SplitMix(seed: 0x5EED_C0FFEE)
-        // Soft blotches: coarse noise, smoothly enlarged.
-        let coarse = 12
-        let blotches = (0..<(coarse * coarse)).map { _ in generator.nextUnit() * 2 - 1 }
-        func blotch(_ x: Int, _ y: Int) -> Double {
-            let fx = Double(x) / Double(size) * Double(coarse), fy = Double(y) / Double(size) * Double(coarse)
-            let x0 = Int(fx) % coarse, y0 = Int(fy) % coarse
-            let x1 = (x0 + 1) % coarse, y1 = (y0 + 1) % coarse
-            let tx = fx - floor(fx), ty = fy - floor(fy)
-            let sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty)
-            let top = blotches[y0 * coarse + x0] * (1 - sx) + blotches[y0 * coarse + x1] * sx
-            let bottom = blotches[y1 * coarse + x0] * (1 - sx) + blotches[y1 * coarse + x1] * sx
-            return top * (1 - sy) + bottom * sy
+    static func apply(to page: CIImage, amount: Double, seed: Int) -> CIImage {
+        let extent = page.extent
+        // Sizes are set for a page about as tall as the screen, and scale with the image.
+        let unit = max(extent.width, extent.height) / 2400
+        // Each page starts from a different place in the noise.
+        let shift = CGAffineTransform(translationX: CGFloat((seed * 7919) % 5003) * 7, y: CGFloat((seed * 104_729) % 4001) * 5)
+        let a = CGFloat(min(max(amount, 0), 1))
+        let layers: [(scale: CGFloat, blur: Double, gain: CGFloat, strength: CGFloat)] = [
+            (1, 0.55, 1.6, 0.22),     // fibres: single-pixel speckle, slightly softened
+            (3.5, 1.6, 2.4, 0.18),    // mottle
+            (90, 60, 3.0, 0.10),      // broad unevenness of tone
+        ]
+        var output = page
+        for (index, layer) in layers.enumerated() {
+            guard let random = CIFilter.randomGenerator().outputImage else { continue }
+            let scale = max(1, layer.scale * unit)
+            let noise = random
+                .transformed(by: shift.translatedBy(x: CGFloat(index) * 1013, y: CGFloat(index) * 727))
+                .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                .applyingGaussianBlur(sigma: layer.blur * Double(unit))
+            // Grey from the red channel: v = 0.5 + gain (x − 0.5), then the multiplier
+            // m = 1 − k v, with k the layer's strength at this amount.
+            let k = layer.strength * a
+            let g = layer.gain
+            let weight = -k * g
+            let bias = 1 - k * 0.5 * (1 - g)
+            let multiplier = CIFilter.colorMatrix()
+            multiplier.inputImage = noise
+            multiplier.rVector = CIVector(x: weight, y: 0, z: 0, w: 0)
+            multiplier.gVector = CIVector(x: weight, y: 0, z: 0, w: 0)
+            multiplier.bVector = CIVector(x: weight, y: 0, z: 0, w: 0)
+            multiplier.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+            multiplier.biasVector = CIVector(x: bias, y: bias, z: bias, w: 1)
+            guard let sheet = multiplier.outputImage else { continue }
+            let clamp = CIFilter.colorClamp()
+            clamp.inputImage = sheet
+            clamp.minComponents = CIVector(x: 1 - k, y: 1 - k, z: 1 - k, w: 1)
+            clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+            guard let clamped = clamp.outputImage?.cropped(to: extent) else { continue }
+            let multiply = CIFilter.multiplyCompositing()
+            multiply.inputImage = clamped
+            multiply.backgroundImage = output
+            if let result = multiply.outputImage { output = result.cropped(to: extent) }
         }
-        var pixels = [UInt8](repeating: 0, count: size * size * 4)
-        for y in 0..<size {
-            for x in 0..<size {
-                // Fine grain, a little stronger in the darker blotches, like paper fibres.
-                let fine = (generator.nextUnit() + generator.nextUnit() + generator.nextUnit()) / 3 * 2 - 1
-                let value = fine * 0.75 + blotch(x, y) * 0.35
-                let alpha = min(1, abs(value) * 0.55)
-                let shade: UInt8 = value < 0 ? 0 : 255
-                let i = (y * size + x) * 4
-                // Premultiplied: a white speck's colour is its alpha.
-                let a = UInt8(alpha * 255)
-                let c = shade == 0 ? 0 : a
-                pixels[i] = c
-                pixels[i + 1] = c
-                pixels[i + 2] = c
-                pixels[i + 3] = a
-            }
-        }
-        let space = CGColorSpaceCreateDeviceRGB()
-        let image = pixels.withUnsafeMutableBytes { buffer -> CGImage? in
-            CGContext(data: buffer.baseAddress, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
-                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?.makeImage()
-        }
-        // One texture pixel per screen pixel, so the grain stays fine.
-        return image.map { UIImage(cgImage: $0, scale: 2, orientation: .up) } ?? UIImage()
-    }
-
-    /// A small, repeatable random generator, so the paper looks the same every launch.
-    private struct SplitMix {
-        var state: UInt64
-        init(seed: UInt64) { state = seed }
-        mutating func next() -> UInt64 {
-            state &+= 0x9E37_79B9_7F4A_7C15
-            var z = state
-            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-            return z ^ (z >> 31)
-        }
-        mutating func nextUnit() -> Double { Double(next() >> 11) / Double(1 << 53) }
+        return output
     }
 }

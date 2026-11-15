@@ -173,6 +173,8 @@ struct PageViewer: UIViewControllerRepresentable {
             guard completed, let current = pvc.viewControllers?.first as? SpreadViewController else { return }
             displayedSpread = current.spreadIndex
             state.show(spread: current.spreadIndex)
+            // Turning the page by swiping puts the controls away.
+            if state.showChrome { state.showChrome = false }
             followBackground(of: current)
             becameCurrent(current)
         }
@@ -216,7 +218,6 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
     var look = PageLook() {
         didSet {
             guard look != oldValue, isViewLoaded else { return }
-            updateGrain()
             if look.adjustments != oldValue.adjustments { refilter() }
         }
     }
@@ -229,8 +230,6 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
     private let scrollView = UIScrollView()
     private let contentView = UIView()
     private var imageViews: [UIImageView] = []
-    /// Per slot: the paper texture over the page.
-    private var grainViews: [UIView] = []
     private var lookTask: Task<Void, Never>?
     /// The look changed again while the pages were being redrawn.
     private var lookPending = false
@@ -308,12 +307,6 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
             spinner.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin, .flexibleBottomMargin]
             imageView.addSubview(spinner)
             spinners.append(spinner)
-            let grain = UIView(frame: imageView.bounds)
-            grain.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            grain.isUserInteractionEnabled = false
-            grain.isHidden = true
-            imageView.addSubview(grain)
-            grainViews.append(grain)
             if PageTextAnalyzer.isSupported {
                 // Live Text, idle until Select Text is on. Touches on the page still reach the
                 // scroll view's taps and zoom, so the image view can take them.
@@ -348,7 +341,6 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
         view.addGestureRecognizer(swipe)
         swipeToClose = swipe
         view.accessibilityIdentifier = "reader-page"
-        updateGrain()
 
         load(size: PageImageCache.screenPixelSize)
         if selectingText { updateTextSelection() }
@@ -462,17 +454,6 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
     }
 
     // MARK: Look
-
-    /// Shows the paper texture over each page at the look's strength.
-    private func updateGrain() {
-        let amount = look.paperGrain
-        for grain in grainViews {
-            grain.isHidden = amount < 0.005
-            guard !grain.isHidden else { continue }
-            if grain.backgroundColor == nil { grain.backgroundColor = PaperGrain.pattern }
-            grain.alpha = CGFloat(min(1, amount) * 0.7)
-        }
-    }
 
     /// Redraws the pages showing with the current adjustments. While a slider is dragged
     /// this is asked for faster than pages can be filtered, so one redraw runs at a time and

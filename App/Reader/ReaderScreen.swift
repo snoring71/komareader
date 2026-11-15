@@ -13,8 +13,13 @@ struct ReaderScreen: View {
     @State private var scrubThumbnail: UIImage?
     @State private var showInfo = false
     @State private var showCrop = false
-    /// The cover shown first while the book opens (see `CoverIntro`).
-    @State private var intro: CoverIntro?
+    /// The book's cover on its gradient (see `CoverIntro`), if it has one.
+    @State private var cover: CoverIntro?
+    /// The cover is showing over the pages: when the book opens, or from the page bar.
+    @State private var showingCover = false
+    /// The cover stays until the reader moves on (a first open, or chosen from the page bar);
+    /// otherwise it shows for a moment while the pages load.
+    @State private var coverWaits = false
     /// Fading out after a swipe up, before the reader goes away.
     @State private var closing = false
     /// A newer position from another device, until the reader jumps there or says no.
@@ -26,7 +31,9 @@ struct ReaderScreen: View {
          handOff: AppModel.HandOff? = nil, intro: CoverIntro? = nil) {
         _state = State(initialValue: ReaderState(book: book, source: source, options: options, defaults: defaults))
         _handOff = State(initialValue: handOff)
-        _intro = State(initialValue: intro)
+        _cover = State(initialValue: intro)
+        _showingCover = State(initialValue: intro != nil && CoverIntro.isEnabled)
+        _coverWaits = State(initialValue: intro?.waits ?? false)
     }
 
     /// The live row for this book (Favorite and Bookmarked can change while reading).
@@ -38,27 +45,33 @@ struct ReaderScreen: View {
                 Color(uiColor: state.background.uiColor ?? .black).ignoresSafeArea()
                 PageViewer(state: state)
                     .ignoresSafeArea()
-                if let intro {
+                // Each overlay has a fixed zIndex: without one, a view leaving a ZStack can drop
+                // behind the pages and vanish instead of fading out.
+                if showingCover, let cover {
                     CoverIntroView(
-                        intro: intro, rightToLeft: state.rightToLeft,
+                        intro: cover, waits: coverWaits, rightToLeft: state.rightToLeft,
                         onForward: { endIntro() },
                         onToggleChrome: { state.showChrome.toggle() },
                         onClose: { state.closeRequested = true }
                     )
-                    // A book read before: the cover grows into the page as it fades.
-                    .transition(intro.waits ? .opacity : .opacity.combined(with: .scale(scale: 1.12)))
+                    // A book read before: the cover grows gently into the page as it fades.
+                    .transition(coverWaits ? .opacity : .opacity.combined(with: .scale(scale: 1.06)))
+                    .zIndex(1)
                 }
                 if state.showChrome {
                     chrome
                         .transition(.opacity)
+                        .zIndex(2)
                 }
                 if state.selectingText && !isScrubbing {
                     textBar
                         .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(3)
                 }
                 if let handOff {
                     handOffBanner(handOff)
                         .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(4)
                 }
             }
             .onAppear { state.setLandscape(geo.size.width > geo.size.height) }
@@ -68,7 +81,7 @@ struct ReaderScreen: View {
         .scaleEffect(closing ? 0.96 : 1)
         // Clear behind the reader, so the library shows through as it fades after a swipe up.
         .presentationBackground(.clear)
-        .animation(.easeInOut(duration: 0.2), value: state.showChrome)
+        .animation(.easeInOut(duration: 0.25), value: state.showChrome)
         .animation(.easeInOut(duration: 0.25), value: handOff)
         .animation(.easeInOut(duration: 0.2), value: state.selectingText)
         .animation(.easeInOut(duration: 0.2), value: state.textStatus)
@@ -112,7 +125,7 @@ struct ReaderScreen: View {
         }
         .task {
             // A book read before: show the cover for a moment while the pages load beneath it.
-            guard let intro, !intro.waits else { return }
+            guard showingCover, !coverWaits else { return }
             try? await Task.sleep(for: .milliseconds(550))
             endIntro()
         }
@@ -126,8 +139,15 @@ struct ReaderScreen: View {
     }
 
     private func endIntro() {
-        guard intro != nil else { return }
-        withAnimation(.easeInOut(duration: 0.35)) { intro = nil }
+        guard showingCover else { return }
+        withAnimation(.easeOut(duration: 0.55)) { showingCover = false }
+    }
+
+    /// Back to the cover, from the page bar. It stays until the reader moves on.
+    private func showCover() {
+        coverWaits = true
+        state.showChrome = false
+        withAnimation(.easeInOut(duration: 0.4)) { showingCover = true }
     }
 
     /// After a swipe up: the page has flown up; fade the reader to the library and close.
@@ -176,8 +196,7 @@ struct ReaderScreen: View {
                 VStack(spacing: 22) {
                     topBar
                     ReaderMenuBar(items: ReaderBarItem.items(state: state, book: liveBook, model: model) {
-                        // Let the panel close before the crop editor opens.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showCrop = true }
+                        showCrop = true
                     })
                 }
                 Spacer()
@@ -326,6 +345,21 @@ struct ReaderScreen: View {
 
     private var bottomBar: some View {
         HStack(spacing: 14) {
+            if let cover {
+                // The cover, as when the book opened.
+                Button(action: showCover) {
+                    Image(uiImage: cover.image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 24, height: 34)
+                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(Color.primary.opacity(0.2)))
+                        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Show Cover")
+                .accessibilityIdentifier("reader-show-cover")
+            }
             Text(isScrubbing ? "\(Int(scrubPage) + 1) of \(state.pageCount)" : state.pageLabel)
                 .font(.subheadline.monospacedDigit())
                 .frame(minWidth: 90)

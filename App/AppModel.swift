@@ -89,7 +89,7 @@ final class AppModel {
         var handOff: HandOff?
         /// The book's own reader settings.
         var options: ReaderOptions
-        /// The cover to show first, if Show Cover First is on and the book has a cover.
+        /// The book's cover, shown first if Show Cover First is on, and from the page bar.
         var intro: CoverIntro?
         var id: String { book.id }
     }
@@ -363,7 +363,7 @@ final class AppModel {
 
     /// The cover intro for a book, from its library thumbnail (already on disk, so it is quick).
     private func coverIntro(for book: Book) async -> CoverIntro? {
-        guard CoverIntro.isEnabled, let thumbnailURL = thumbnails[book.id] else { return nil }
+        guard let thumbnailURL = thumbnails[book.id] else { return nil }
         let key = "\(book.id)|\(coverRevision[book.id] ?? 0)" as NSString
         let knownColor = coverColors.object(forKey: key)
         let store = store, bookId = book.id

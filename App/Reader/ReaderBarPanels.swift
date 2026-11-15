@@ -243,29 +243,56 @@ struct AdjustmentsPanel: View {
 
 struct MoreSettingsPanel: View {
     let state: ReaderState
-    let onCrop: () -> Void
+    /// Use as Defaults was tapped once and is waiting to be confirmed.
+    @State private var confirmingDefaults = false
 
     var body: some View {
         BarPanel(title: "More", width: 320) {
             VStack(spacing: 0) {
-                row(state.crop == nil ? "Crop Pages…" : "Edit Page Crop…", systemImage: "crop", action: onCrop)
-                    .accessibilityIdentifier("reader-crop")
-                Divider().padding(.leading, 40)
-                row("Use as Defaults for All Books", systemImage: "checkmark.circle") { state.useAsDefaults() }
-                    .accessibilityIdentifier("reader-use-defaults")
+                if confirmingDefaults {
+                    confirmDefaults
+                        .transition(.opacity)
+                } else {
+                    row("Use as Defaults for All Books", systemImage: "checkmark.circle") { confirmingDefaults = true }
+                        .accessibilityIdentifier("reader-use-defaults")
+                        .transition(.opacity)
+                }
                 Divider().padding(.leading, 40)
                 row("Reset to Defaults", systemImage: "arrow.uturn.backward") { state.resetToDefaults() }
                     .disabled(!state.hasOwnSettings)
                     .opacity(state.hasOwnSettings ? 1 : 0.4)
                     .accessibilityIdentifier("reader-reset-defaults")
             }
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(uiColor: .tertiarySystemFill)))
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(PanelFill.color))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(PanelFill.edge))
             Text(state.hasOwnSettings ? "This book has its own settings." : "This book follows the defaults in Settings › Book Defaults.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
+        .animation(.easeInOut(duration: 0.2), value: confirmingDefaults)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-more-panel")
+    }
+
+    /// Asks before changing every book in the library.
+    private var confirmDefaults: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Use this book's settings for every book that hasn't set its own?")
+                .font(.subheadline)
+            HStack {
+                Button("Cancel") { confirmingDefaults = false }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("reader-use-defaults-cancel")
+                Spacer()
+                Button("Use as Defaults") {
+                    state.useAsDefaults()
+                    confirmingDefaults = false
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("reader-use-defaults-confirm")
+            }
+        }
+        .padding(12)
     }
 
     private func row(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
@@ -285,6 +312,16 @@ struct MoreSettingsPanel: View {
         }
         .buttonStyle(.plain)
     }
+}
+
+/// The fill behind grouped controls in the panels, visible on the glass in light and dark.
+enum PanelFill {
+    static let color = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.14) : UIColor(white: 0, alpha: 0.07)
+    })
+    static let edge = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.12) : UIColor(white: 0, alpha: 0.05)
+    })
 }
 
 /// A binding to one setting as the reader uses it; setting it makes it this book's own.
