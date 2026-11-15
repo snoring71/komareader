@@ -72,6 +72,7 @@ struct PageLayoutPanel: View {
                 ))
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-layout-panel")
     }
 }
@@ -105,6 +106,7 @@ struct BackgroundPanel: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: state.background.choice)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-background-panel")
         // The colour picker reports every step of a drag; save the colour once it rests.
         .task(id: pickedColor.map { ReaderOptions.Background($0).code }) {
@@ -208,6 +210,7 @@ struct AdjustmentsPanel: View {
                 .accessibilityIdentifier("adjust-reset")
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-adjust-panel")
     }
 
@@ -261,6 +264,7 @@ struct MoreSettingsPanel: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-more-panel")
     }
 
