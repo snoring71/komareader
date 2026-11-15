@@ -130,7 +130,11 @@ struct LibraryGridView: View {
                                         .id("continue-\(book.id)")
                                 }
                             }
+                            // Room under the covers for their shadows. Without titles the cover is
+                            // the last thing in the cell, and the scroll view clipped its bottom.
+                            .padding(.bottom, 14)
                         }
+                        .scrollClipDisabled()
                     }
                     .padding(.horizontal)
                     .padding(.top, 8)
@@ -139,7 +143,7 @@ struct LibraryGridView: View {
                     // section in it, so the grid stays one flat run of equal cells.
                     VStack(alignment: .leading, spacing: 0) {
                         SoftDivider()
-                            .padding(.top, 26)
+                            .padding(.top, 12)
                         Text("All Books")
                             .font(.title3.bold())
                             .accessibilityAddTraits(.isHeader)
@@ -615,23 +619,30 @@ struct BookCell: View {
     /// Favorite, bookmark, tags and how far in, in a row above the cover starting at the left
     /// (#57). It keeps its height with nothing in it, so every cell is the same height.
     private var iconRow: some View {
-        ZStack(alignment: .leading) {
-            Text(verbatim: " ").hidden()
-            HStack(spacing: 5) {
-                if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
-                if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
-                if !book.tags.isEmpty { Image(systemName: "tag.fill").foregroundStyle(.teal) }
-                if book.status == .reading, let fraction = book.progressFraction {
-                    Text("\(Int(fraction * 100))%")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
+        // Each icon keeps its own slot, shown or not, so a heart, bookmark or tag sits in the
+        // same place on every book; the percentage keeps to the right edge.
+        HStack(spacing: 5) {
+            slot("heart.fill", .pink, book.favorite)
+            slot("bookmark.fill", .orange, book.bookmarked)
+            slot("tag.fill", .teal, !book.tags.isEmpty)
+            Spacer(minLength: 4)
+            if book.status == .reading, let fraction = book.progressFraction {
+                Text("\(Int(fraction * 100))%")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
             }
         }
         .font(.caption2.weight(.medium))
         .imageScale(.small)
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func slot(_ symbol: String, _ color: Color, _ shown: Bool) -> some View {
+        Image(systemName: symbol)
+            .foregroundStyle(color)
+            .opacity(shown ? 1 : 0)
+            .accessibilityHidden(!shown)
     }
 
     @ViewBuilder private var selectionMark: some View {
