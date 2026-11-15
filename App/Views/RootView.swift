@@ -39,11 +39,7 @@ struct RootView: View {
                     .id(model.selection)
                     .overlay(alignment: .bottomTrailing) { ResumeButton() }
                 } sidebar: {
-                    NavigationStack {
-                        SidebarView()
-                            .scrollContentBackground(.hidden)
-                    }
-                    .containerBackground(.clear, for: .navigation)
+                    SidebarView()
                 }
                 .environment(\.sidebarToggle, SidebarToggleAction(
                     toggle: { withAnimation(.snappy(duration: 0.28)) { sidebarShown.toggle() } },
