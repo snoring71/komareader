@@ -75,6 +75,10 @@ struct SidebarView: View {
         }
     }
 
+    private static let countPill = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark ? UIColor.white.withAlphaComponent(0.2) : UIColor.systemGray
+    })
+
     /// "Library" and the button that puts the sidebar away.
     private var header: some View {
         ZStack {
@@ -116,11 +120,12 @@ struct SidebarView: View {
                     Text(count, format: .number)
                         .font(.caption.weight(.semibold))
                         .monospacedDigit()
-                        // Full-strength text on a faint pill, so it reads in light and dark mode.
-                        .foregroundStyle(Color.primary)
+                        // White text on a grey pill: mid grey in light mode (dark enough for
+                        // white), a faint light grey in dark mode.
+                        .foregroundStyle(Color.white)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.primary.opacity(0.12)))
+                        .background(Capsule().fill(Self.countPill))
                 }
                 Spacer(minLength: 0)
             }

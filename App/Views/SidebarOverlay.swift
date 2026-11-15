@@ -66,7 +66,7 @@ struct SidebarOverlay<Library: View, Sidebar: View>: View {
         sidebar
             .frame(width: Self.width)
             .frame(maxHeight: .infinity)
-            .background(.thinMaterial, ignoresSafeAreaEdges: .all)
+            .background(.ultraThinMaterial, ignoresSafeAreaEdges: .all)
             .overlay(alignment: .trailing) {
                 Rectangle().fill(Color.primary.opacity(0.08)).frame(width: 0.5).ignoresSafeArea()
             }
