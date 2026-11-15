@@ -313,3 +313,32 @@ import Testing
         #expect(DeviceIdentity.displayName(for: "ipad-1a2b") == "iPad")
     }
 }
+
+@Suite struct TagListTests {
+    @Test func tagsMergeOneByOneAndDeletesStick() throws {
+        var a = TagList()
+        a.add("Sci-Fi", at: Date(timeIntervalSince1970: 10))
+        a.add("Old", at: Date(timeIntervalSince1970: 10))
+        var b = a
+        b.remove("old", at: Date(timeIntervalSince1970: 20))
+        a.add("Manga", at: Date(timeIntervalSince1970: 30))
+        let merged = a.merged(with: b)
+        #expect(Set(merged.names) == ["Sci-Fi", "Manga"])
+        #expect(Set(b.merged(with: a).names) == ["Sci-Fi", "Manga"])
+        // An older copy cannot bring a deleted tag back, and keep() does not either.
+        var c = merged
+        c.keep("OLD")
+        #expect(!c.contains("old"))
+        c.add("Old", at: Date(timeIntervalSince1970: 40))
+        #expect(c.contains("old"))
+    }
+
+    @Test func tagListIsSavedNextToTheRecords() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = try RecordStore(root: root, info: LibraryInfo(folderName: "Lib"))
+        #expect(store.readTagList().names.isEmpty)
+        try store.updateTagList { $0.add("Sci-Fi") }
+        try store.updateTagList { $0.add("Empty") }
+        #expect(Set(store.readTagList().names) == ["Sci-Fi", "Empty"])
+    }
+}

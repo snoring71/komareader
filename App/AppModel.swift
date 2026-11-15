@@ -56,6 +56,8 @@ final class AppModel {
     /// Counts for the sidebar and the tags in use, worked out when `books` changes rather
     /// than on every sidebar redraw.
     private(set) var summary = Summary()
+    /// The library's synced tag list (`tags.json`), which keeps tags that have no books.
+    @ObservationIgnored private var tagList = TagList()
     /// Folders pinned to the sidebar on this device.
     var pinnedFolders: [String] = UserDefaults.standard.stringArray(forKey: "pinnedFolders") ?? [] {
         didSet { UserDefaults.standard.set(pinnedFolders, forKey: "pinnedFolders") }
@@ -154,6 +156,10 @@ final class AppModel {
             }
         }
         counts[.continueReading] = counts[.reading]
+        // Tags in the list with no books left are kept, with a count of 0.
+        for name in tagList.names where tagCounts[name.lowercased()] == nil {
+            tagCounts[name.lowercased()] = (name, 0)
+        }
         let tags = tagCounts.values.map { TagCount(name: $0.name, count: $0.count) }.naturallySorted(by: \.name)
         let summary = Summary(counts: counts, tags: tags)
         if summary != self.summary { self.summary = summary }
@@ -263,9 +269,10 @@ final class AppModel {
             self.covers = covers
             // The cached book list and the covers already made, read in one go off the main
             // thread, so the library shows with its covers before the rescan finishes.
-            let (cached, thumbs) = await Task.detached(priority: .userInitiated) {
-                ((try? index.allBooks()) ?? [], covers.existingThumbnails())
+            let (cached, thumbs, tagList) = await Task.detached(priority: .userInitiated) {
+                ((try? index.allBooks()) ?? [], covers.existingThumbnails(), store.readTagList())
             }.value
+            self.tagList = tagList
             self.thumbnails = thumbs
             self.books = cached
             restorePosition()
@@ -367,7 +374,7 @@ final class AppModel {
         let covers = covers
         let known = thumbnails
         do {
-            let (updated, staleCovers, found) = try await Task.detached(priority: .userInitiated) { () throws -> ([Book], [String], [String: URL]) in
+            let (updated, staleCovers, found, tagList) = try await Task.detached(priority: .userInitiated) { () throws -> ([Book], [String], [String: URL], TagList) in
                 let scanned = LibraryScanner.scan(root: libraryURL)
                 let records = store.consolidatedRecords()
                 // Covers edited on another device since this device made its thumbnail.
@@ -384,9 +391,14 @@ final class AppModel {
                 for book in books where known[book.id] == nil {
                     if let thumb = covers?.existingThumbnail(bookId: book.id) { found[book.id] = thumb }
                 }
-                return (books, stale, found)
+                return (books, stale, found, store.readTagList())
             }.value
             // Assigning redraws everything that shows books, so only do it when something changed.
+            // Tags created, renamed or deleted on another device.
+            if tagList != self.tagList {
+                self.tagList = tagList
+                updateSummary()
+            }
             if updated != books { books = updated }
             for id in staleCovers { await covers?.invalidate(bookId: id) }
             if !found.isEmpty || !staleCovers.isEmpty {
@@ -628,8 +640,19 @@ final class AppModel {
     // MARK: Tags
 
     /// Sets a book's tags (any number, matched ignoring case, kept in the user's spelling).
+    /// Tags stay in the library's tag list after their last book loses them.
     func setTags(_ book: Book, _ tags: [String]) {
-        setTags([book.id: Self.cleaned(tags)])
+        let new = Self.cleaned(tags), old = book.tags
+        let added = new.filter { !tagList.contains($0) }
+        let kept = old.filter { tagList.tags[TagList.key($0)] == nil }
+        if !added.isEmpty || !kept.isEmpty {
+            changeTagList { list in
+                let now = Date()
+                for tag in kept { list.keep(tag, at: now) }
+                for tag in added { list.add(tag, at: now) }
+            }
+        }
+        setTags([book.id: new])
     }
 
     /// Renames a tag on every book that has it, or merges it into another tag of that name.
@@ -639,6 +662,11 @@ final class AppModel {
         var changes: [String: [String]] = [:]
         for book in books where book.tags.contains(where: { $0.caseInsensitiveCompare(old) == .orderedSame }) {
             changes[book.id] = Self.cleaned(book.tags.map { $0.caseInsensitiveCompare(old) == .orderedSame ? name : $0 })
+        }
+        changeTagList { list in
+            let now = Date()
+            list.remove(old, at: now)
+            list.add(name, at: now)
         }
         setTags(changes)
         if selection == .tag(old) { selection = .tag(name) }
@@ -650,8 +678,17 @@ final class AppModel {
         for book in books where book.tags.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
             changes[book.id] = book.tags.filter { $0.caseInsensitiveCompare(tag) != .orderedSame }
         }
+        changeTagList { $0.remove(tag) }
         setTags(changes)
         if case .tag(let name) = selection, name.caseInsensitiveCompare(tag) == .orderedSame { selection = .all }
+    }
+
+    /// Changes the tag list here at once and in the synced `tags.json` in the background.
+    private func changeTagList(_ change: @escaping @Sendable (inout TagList) -> Void) {
+        change(&tagList)
+        updateSummary()
+        guard let store else { return }
+        Task.detached(priority: .utility) { _ = try? store.updateTagList(change) }
     }
 
     /// Trims, drops empty tags and duplicates (ignoring case), keeping the first spelling.
