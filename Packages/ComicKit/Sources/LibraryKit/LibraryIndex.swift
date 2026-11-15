@@ -27,6 +27,11 @@ public struct Book: Codable, FetchableRecord, PersistableRecord, Identifiable, H
     /// From the record's metadata, else worked out from the file name (`SeriesName`).
     public var series: String
     public var number: String?
+    /// Pages bookmarked in the reader, from the synced record (`BookRecord.pageBookmarks`).
+    public var pageBookmarks: [Int] = []
+
+    /// Shown under Bookmarked: the book itself is marked, or it has a bookmarked page.
+    public var hasBookmarks: Bool { bookmarked || !pageBookmarks.isEmpty }
 
     public enum Status: String, Sendable { case unread, reading, read }
 
@@ -90,6 +95,17 @@ public final class LibraryIndex: @unchecked Sendable {
                 t.add(column: "number", .text)
             }
         }
+        // Named for what it adds (and its issue) rather than "v3": other branches add their
+        // own migrations, and a database that had already run another branch's "v3" would
+        // skip one of the same name and then fail to read any book. It also checks for the
+        // column, so a device that ran any mix of branches still opens.
+        migrator.registerMigration("page-bookmarks-54") { db in
+            guard try !db.columns(in: "book").contains(where: { $0.name.lowercased() == "pagebookmarks" }) else { return }
+            try db.alter(table: "book") { t in
+                // A JSON array of page indexes.
+                t.add(column: "pageBookmarks", .text).notNull().defaults(to: "[]")
+            }
+        }
         return migrator
     }
 
@@ -104,6 +120,15 @@ public final class LibraryIndex: @unchecked Sendable {
 
     public func save(_ book: Book) throws {
         try db.write { db in try book.save(db) }
+    }
+
+    /// Stores a book's bookmarked pages without touching the rest of its row (the reader
+    /// changes them while the library holds an older copy of the row).
+    public func setPageBookmarks(_ pages: [Int], bookId: String) throws {
+        let json = String(decoding: try JSONEncoder().encode(pages), as: UTF8.self)
+        try db.write { db in
+            _ = try Book.filter(key: bookId).updateAll(db, Column("pageBookmarks").set(to: json))
+        }
     }
 
     /// Brings the index in line with a fresh scan.
@@ -187,6 +212,11 @@ public final class LibraryIndex: @unchecked Sendable {
             book.pageCount = latest.pageCount
             book.finished = latest.finished
             book.lastReadAt = latest.updatedAt
+        } else if record.wasReset(after: book.lastReadAt) {
+            // Marked unread (or closed on its first page) on some device: as if never opened.
+            book.currentPage = nil
+            book.finished = false
+            book.lastReadAt = nil
         }
         // The book's own direction; nil follows the default for books.
         if let options = record.readerOptions {
@@ -197,6 +227,9 @@ public final class LibraryIndex: @unchecked Sendable {
         if let flags = record.flags {
             book.favorite = flags.favorite
             book.bookmarked = flags.bookmarked
+        }
+        if let bookmarks = record.pageBookmarks {
+            book.pageBookmarks = bookmarks.pages
         }
         if let series = record.metadata?.series?.trimmingCharacters(in: .whitespaces), !series.isEmpty {
             book.series = series
