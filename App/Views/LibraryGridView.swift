@@ -654,11 +654,13 @@ struct BookCell: View {
         .font(.system(size: iconSize, weight: .semibold))
         .imageScale(.medium)
         .lineLimit(1)
+        // Kept in from the ends so nothing sits over the cover's rounded corners.
+        .padding(.horizontal, max(style.cornerRadius, 3) + iconSize * 0.15)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The Read mark: inverse check on a primary tab with rounded top corners, reaching down
-    /// to touch the cover and kept clear of its rounded corner.
+    /// to touch the cover; the row's padding keeps it clear of the cover's rounded corner.
     private var readTab: some View {
         UnevenRoundedRectangle(topLeadingRadius: 6, topTrailingRadius: 6, style: .continuous)
             .fill(Color.primary)
@@ -669,7 +671,7 @@ struct BookCell: View {
                     .padding(.top, 1)
             }
             .frame(width: iconSize * 2.6, height: iconSize * 1.75)
-            .offset(x: -max(style.cornerRadius, 3), y: 5) // 5 = the gap between row and cover
+            .offset(y: 5) // 5 = the gap between row and cover
             .allowsHitTesting(false)
     }
 
