@@ -33,7 +33,7 @@ public struct Book: Codable, FetchableRecord, PersistableRecord, Identifiable, H
     public var publisher: String?
     public var metadataTitle: String?
     /// True once the file's metadata has been read (whether or not it had any).
-    public var metadataRead: Bool
+    public var metadataRead: Bool = false
 
     public enum Status: String, Sendable { case unread, reading, read }
 
