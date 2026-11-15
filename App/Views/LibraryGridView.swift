@@ -21,8 +21,14 @@ struct LibraryGridView: View {
     @Environment(\.coverInfo) private var coverInfo
     /// The first book on screen and whether the grid is scrolled down, so turning Cover Info
     /// on or off (which changes the height of every cell) keeps the same books in view.
-    @State private var firstVisible: String?
-    @State private var scrolledDown = false
+    /// Kept in a plain object, not in view state: it changes on every row scrolled past, and
+    /// redrawing the grid each time would sort the whole library again.
+    @State private var scrollSpot = ScrollSpot()
+
+    final class ScrollSpot {
+        var firstVisible: String?
+        var scrolledDown = false
+    }
 
     enum SortOrder: String, CaseIterable, Identifiable {
         case title = "Title", recentlyAdded = "Recently Added", recentlyRead = "Recently Read"
@@ -121,16 +127,16 @@ struct LibraryGridView: View {
                 .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index
             }
             .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.5) { ids in
-                firstVisible = ids.first
+                scrollSpot.firstVisible = ids.first
             }
             .onScrollGeometryChange(for: Bool.self) { geo in
                 geo.contentOffset.y + geo.contentInsets.top > 60
             } action: { _, down in
-                scrolledDown = down
+                scrollSpot.scrolledDown = down
             }
             .onChange(of: coverInfo.isOn) {
                 // At the top, Continue Reading and the first rows stay put on their own.
-                guard scrolledDown, let id = firstVisible else { return }
+                guard scrollSpot.scrolledDown, let id = scrollSpot.firstVisible else { return }
                 Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
             }
             .overlay(alignment: .trailing) {
