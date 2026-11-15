@@ -94,8 +94,9 @@ struct CoverInfoFieldControls: View {
     }
 }
 
-/// The info drawn over the bottom of a cover: dark and see-through, so white text reads on
-/// light and dark covers alike.
+/// The info drawn over a cover, on dark see-through bands so white text reads on light and
+/// dark covers alike: the details (status, pages, size, format) along the top, where they
+/// have the whole width, and the name, location and progress along the bottom.
 struct CoverInfoOverlay: View {
     @Environment(AppModel.self) private var model
     @Environment(\.coverInfo) private var info
@@ -104,49 +105,86 @@ struct CoverInfoOverlay: View {
     let status: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if let name = info.name.text(for: book) {
-                Text(name)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(2)
-            }
-            let details = detailParts
-            if !details.isEmpty || book.favorite || book.bookmarked {
-                HStack(spacing: 3) {
-                    if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
-                    if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
-                    Text(details.joined(separator: " · "))
-                }
-                .font(.caption2)
-                .imageScale(.small)
-                .lineLimit(1)
-            }
-            if info.location {
-                Text(book.folder.isEmpty ? model.libraryName : book.folder)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                    .opacity(0.85)
-            }
-            if book.status == .reading, let fraction = book.progressFraction {
-                GeometryReader { geo in
-                    Capsule().fill(.white.opacity(0.3))
-                        .overlay(alignment: .leading) {
-                            Capsule().fill(.tint).frame(width: geo.size.width * fraction)
-                        }
-                }
-                .frame(height: 3)
-                .padding(.top, 2)
-            }
+        VStack(spacing: 0) {
+            topBand
+            Spacer(minLength: 0)
+            bottomBand
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.black.opacity(0.62))
-        .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: style.cornerRadius, bottomTrailingRadius: style.cornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous))
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private var topBand: some View {
+        let details = detailParts
+        if !details.isEmpty || book.favorite || book.bookmarked || stateIcon != nil {
+            HStack(alignment: .top, spacing: 4) {
+                if book.favorite { Image(systemName: "heart.fill").foregroundStyle(.pink) }
+                if book.bookmarked { Image(systemName: "bookmark.fill").foregroundStyle(.orange) }
+                // Wraps onto a second line rather than running off the side of a narrow cover.
+                Text(details.joined(separator: " · "))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let stateIcon { stateIcon }
+            }
+            .font(.caption2.weight(.medium))
+            .imageScale(.small)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.black.opacity(0.62))
+        }
+    }
+
+    @ViewBuilder private var bottomBand: some View {
+        let name = info.name.text(for: book)
+        let reading = book.status == .reading ? book.progressFraction : nil
+        if name != nil || info.location || reading != nil {
+            VStack(alignment: .leading, spacing: 2) {
+                if let name {
+                    Text(name)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(2)
+                }
+                if info.location {
+                    Text(book.folder.isEmpty ? model.libraryName : book.folder)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .opacity(0.85)
+                }
+                if let reading {
+                    GeometryReader { geo in
+                        Capsule().fill(.white.opacity(0.3))
+                            .overlay(alignment: .leading) {
+                                Capsule().fill(.tint).frame(width: geo.size.width * reading)
+                            }
+                    }
+                    .frame(height: 3)
+                    .padding(.top, 2)
+                }
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.black.opacity(0.62))
+        }
+    }
+
+    /// In iCloud, downloading or read: shown in the band, in place of the badge in the corner.
+    private var stateIcon: AnyView? {
+        if model.downloading.contains(book.id) {
+            return AnyView(ProgressView().controlSize(.mini).tint(.white))
+        }
+        if !book.isDownloaded {
+            return AnyView(Image(systemName: model.queuedDownloads.contains(book.id) ? "icloud.and.arrow.down" : "icloud"))
+        }
+        if book.status == .read {
+            return AnyView(Image(systemName: "checkmark.circle.fill").foregroundStyle(.green))
+        }
+        return nil
     }
 
     private var detailParts: [String] {

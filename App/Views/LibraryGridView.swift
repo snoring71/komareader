@@ -18,6 +18,11 @@ struct LibraryGridView: View {
     @State private var selection: Set<String>?
     @State private var confirmDeleteAll = false
     @State private var selectionConfirm: SelectionConfirm?
+    @Environment(\.coverInfo) private var coverInfo
+    /// The first book on screen and whether the grid is scrolled down, so turning Cover Info
+    /// on or off (which changes the height of every cell) keeps the same books in view.
+    @State private var firstVisible: String?
+    @State private var scrolledDown = false
 
     enum SortOrder: String, CaseIterable, Identifiable {
         case title = "Title", recentlyAdded = "Recently Added", recentlyRead = "Recently Read"
@@ -91,6 +96,9 @@ struct LibraryGridView: View {
                             LazyHStack(alignment: .top, spacing: 16) {
                                 ForEach(continueReading.prefix(12)) { book in
                                     BookCell(book: book).frame(width: size)
+                                        // Always the plain look, so the row keeps its height and
+                                        // the page does not jump when Cover Info is turned on or off.
+                                        .environment(\.coverInfo, CoverInfo())
                                 }
                             }
                         }
@@ -106,8 +114,22 @@ struct LibraryGridView: View {
                         BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }) { toggle(book.id) }
                     }
                 }
+                .scrollTargetLayout()
                 .padding()
                 .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index
+            }
+            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.5) { ids in
+                firstVisible = ids.first
+            }
+            .onScrollGeometryChange(for: Bool.self) { geo in
+                geo.contentOffset.y + geo.contentInsets.top > 60
+            } action: { _, down in
+                scrolledDown = down
+            }
+            .onChange(of: coverInfo.isOn) {
+                // At the top, Continue Reading and the first rows stay put on their own.
+                guard scrolledDown, let id = firstVisible else { return }
+                Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
             }
             .overlay(alignment: .trailing) {
                 if let letters {
@@ -410,14 +432,13 @@ struct BookCell: View {
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 CoverImage(url: model.thumbnails[book.id], title: book.title, revision: model.coverRevision[book.id] ?? 0)
-                    .overlay(alignment: .topTrailing) { badge }
-                    .overlay(alignment: .bottom) {
+                    .overlay {
                         if info.isOn {
                             CoverInfoOverlay(book: book, status: overlayStatus)
-                        } else {
-                            progressBar
                         }
                     }
+                    .overlay(alignment: .topTrailing) { if !info.isOn { badge } }
+                    .overlay(alignment: .bottom) { if !info.isOn { progressBar } }
                     .overlay(alignment: .topLeading) { selectionMark }
                 if !info.isOn {
                     // Every cell keeps room for two title lines, so all rows are the same height and the
@@ -501,7 +522,7 @@ struct BookCell: View {
     private var overlayStatus: String? {
         if let downloadStatus { return downloadStatus }
         switch book.status {
-        case .read: return "Read"
+        case .read: return nil // the band shows a checkmark
         case .reading: return book.progressFraction.map { "\(Int($0 * 100))%" } ?? "Reading"
         case .unread: return nil
         }
