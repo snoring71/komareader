@@ -646,8 +646,8 @@ struct BookCell: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .font(.caption2.weight(.medium))
-        .imageScale(.small)
+        .font(.subheadline.weight(.medium))
+        .imageScale(.medium)
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -659,11 +659,11 @@ struct BookCell: View {
             .fill(Color.primary)
             .overlay {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 12, weight: .heavy))
+                    .font(.system(size: 15, weight: .heavy))
                     .foregroundStyle(Color.onAccent)
                     .padding(.top, 1)
             }
-            .frame(width: 30, height: 21)
+            .frame(width: 38, height: 26)
             .offset(x: -max(style.cornerRadius, 3), y: 5) // 5 = the gap between row and cover
             .allowsHitTesting(false)
     }
