@@ -100,12 +100,10 @@ struct LibraryGridView: View {
                 }
 
                 LazyVGrid(columns: columns, spacing: 22) {
-                    if let selection {
-                        ForEach(books) { book in
-                            BookCell(book: book, isSelected: selection.contains(book.id)) { toggle(book.id) }
-                        }
-                    } else {
-                        ForEach(books) { BookCell(book: $0) }
+                    // One ForEach for both modes: with an if/else here the lazy grid kept showing
+                    // the cells it had already made, and a tap in Select mode opened the book.
+                    ForEach(books) { book in
+                        BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }) { toggle(book.id) }
                     }
                 }
                 .padding()
