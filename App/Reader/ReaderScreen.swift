@@ -16,6 +16,8 @@ struct ReaderScreen: View {
     @State private var showSettings = false
     /// A newer position from another device, until the reader jumps there or says no.
     @State private var handOff: AppModel.HandOff?
+    /// Shows "Copied" on the Select Text bar for a moment after Copy All.
+    @State private var copiedText = false
 
     init(book: Book, source: BookSource, options: ReaderOptions, defaults: ReaderDefaults, handOff: AppModel.HandOff? = nil) {
         _state = State(initialValue: ReaderState(book: book, source: source, options: options, defaults: defaults))
@@ -35,6 +37,10 @@ struct ReaderScreen: View {
                     chrome
                         .transition(.opacity)
                 }
+                if state.selectingText && !isScrubbing {
+                    textBar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
                 if let handOff {
                     handOffBanner(handOff)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -45,6 +51,8 @@ struct ReaderScreen: View {
         }
         .animation(.easeInOut(duration: 0.2), value: state.showChrome)
         .animation(.easeInOut(duration: 0.25), value: handOff)
+        .animation(.easeInOut(duration: 0.2), value: state.selectingText)
+        .animation(.easeInOut(duration: 0.2), value: state.textStatus)
         .sheet(isPresented: $showInfo) {
             BookInfoView(bookId: state.book.id, source: state.source)
         }
@@ -150,6 +158,15 @@ struct ReaderScreen: View {
                 .glassEffect(in: .capsule)
             Spacer(minLength: 0)
 
+            if PageTextAnalyzer.isSupported {
+                // Lit while Select Text is on.
+                if state.selectingText {
+                    selectTextButton.buttonStyle(.glassProminent)
+                } else {
+                    selectTextButton.buttonStyle(.glass)
+                }
+            }
+
             // A popover rather than a menu: with this many settings (and submenus) the menu
             // rebuilt itself under the finger and missed taps.
             Button {
@@ -181,6 +198,74 @@ struct ReaderScreen: View {
             .accessibilityLabel("Book Info")
             .accessibilityIdentifier("reader-info")
         }
+    }
+
+    private var selectTextButton: some View {
+        Button {
+            state.selectingText.toggle()
+        } label: {
+            Image(systemName: "text.viewfinder").font(.body.weight(.semibold)).frame(width: 28, height: 28)
+        }
+        .buttonBorderShape(.circle)
+        .accessibilityLabel(state.selectingText ? "Stop Selecting Text" : "Select Text")
+        .accessibilityIdentifier("reader-select-text")
+    }
+
+    /// While Select Text is on: what Live Text found, Copy All, and Done.
+    private var textBar: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 12) {
+                Group {
+                    switch state.textStatus {
+                    case .idle, .searching:
+                        ProgressView().controlSize(.small)
+                        Text("Finding text…")
+                    case .found:
+                        Image(systemName: "text.viewfinder")
+                        Text(copiedText ? "Copied" : "Touch and hold text to select it")
+                    case .none:
+                        Image(systemName: "text.badge.xmark")
+                        Text("No text found on this page")
+                    case .partial:
+                        Image(systemName: "text.badge.xmark")
+                        Text(copiedText ? "Copied" : "No text found on one page")
+                    case .failed:
+                        Image(systemName: "exclamationmark.triangle")
+                        Text(copiedText ? "Copied" : "A page couldn’t be read")
+                    }
+                }
+                .font(.subheadline.weight(.medium))
+                if [ReaderState.TextStatus.failed, .none, .partial].contains(state.textStatus) {
+                    Button("Try Again", systemImage: "arrow.clockwise") { state.retryText() }
+                        .buttonStyle(.glass)
+                        .accessibilityIdentifier("reader-text-retry")
+                }
+                Button("Copy All", systemImage: "doc.on.doc") {
+                    let text = state.currentTranscript()
+                    guard !text.isEmpty else { return }
+                    UIPasteboard.general.string = text
+                    copiedText = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.5))
+                        copiedText = false
+                    }
+                }
+                .buttonStyle(.glass)
+                .disabled(![ReaderState.TextStatus.found, .partial, .failed].contains(state.textStatus))
+                .accessibilityIdentifier("reader-copy-text")
+                Button("Done") { state.selectingText = false }
+                    .buttonStyle(.glassProminent)
+                    .accessibilityIdentifier("reader-text-done")
+            }
+            .padding(.leading, 18)
+            .padding(.trailing, 8)
+            .padding(.vertical, 8)
+            .glassEffect(in: .capsule)
+            // Above the page bar when the controls show.
+            .padding(.bottom, state.showChrome ? 88 : 24)
+        }
+        .animation(.easeInOut(duration: 0.2), value: state.showChrome)
     }
 
     /// The page under the scrubber, shown while dragging it.

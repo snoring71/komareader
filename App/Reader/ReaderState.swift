@@ -22,6 +22,26 @@ final class ReaderState {
     var spreads: [[DisplayPage]] = []
     var currentSpread = 0
     var showChrome = true
+    /// Select Text mode: Live Text finds the words on the page so they can be selected,
+    /// copied, looked up or translated. Off, the page takes no touches besides paging and zoom.
+    var selectingText = false {
+        didSet { if !selectingText { textStatus = .idle } }
+    }
+    /// What Live Text found on the screen showing now.
+    var textStatus: TextStatus = .idle
+    /// Bumped by Try Again, so the page view reads the pages that failed once more.
+    private(set) var textRetry = 0
+
+    func retryText() {
+        textStatus = .searching
+        textRetry += 1
+    }
+
+    enum TextStatus: Equatable {
+        case idle, searching, found, none, failed
+        /// Text on one page of the spread, nothing found on the other.
+        case partial
+    }
     /// Bumped whenever `spreads` is rebuilt or a setting changes, so the page view reloads.
     private(set) var layoutVersion = 0
 
@@ -37,6 +57,9 @@ final class ReaderState {
     /// Edge colours for Match Page backgrounds, so a page shown again gets its colour at once.
     @ObservationIgnored let edgeColors = NSCache<NSString, UIColor>()
     @ObservationIgnored private let thumbnails = NSCache<NSNumber, UIImage>()
+    @ObservationIgnored let textAnalyzer: PageTextAnalyzer
+    /// All the text found on the screen showing now, in reading order (set by the page view).
+    @ObservationIgnored var currentTranscript: () -> String = { "" }
     @ObservationIgnored var onPageChange: ((_ page: Int, _ finished: Bool) -> Void)?
     /// Called with the book's own settings whenever they change, to save them.
     @ObservationIgnored var onOptionsChange: ((ReaderOptions) -> Void)?
@@ -47,6 +70,7 @@ final class ReaderState {
         self.pageCount = source.pageCount
         self.options = options
         self.defaults = defaults
+        self.textAnalyzer = PageTextAnalyzer()
         let start = min(max(0, book.finished ? 0 : (book.currentPage ?? 0)), max(0, source.pageCount - 1))
         rebuild(keeping: start)
         loadPageSizes()
