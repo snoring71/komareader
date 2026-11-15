@@ -539,6 +539,7 @@ struct BookCell: View {
     @Environment(AppModel.self) private var model
     @Environment(\.coverInfo) private var info
     @Environment(\.showTitles) private var showTitles
+    @Environment(\.coverStyle) private var style
     let book: Book
     /// Set in Select mode: whether the book is picked. A tap then picks or unpicks it.
     var isSelected: Bool?
@@ -631,19 +632,12 @@ struct BookCell: View {
             slot("tag.fill", .teal, !book.tags.isEmpty)
             Spacer(minLength: 4)
             if book.status == .read {
-                // Finished: a black-and-white check where the percentage would be, as wide as
-                // "72%". Drawn as an overlay so it never makes the row taller than other books'.
+                // Finished: a solid tab standing on the cover's top edge, where the percentage
+                // would be. An overlay, so the row keeps the same height as every other book's.
                 Text(verbatim: "72%")
                     .monospacedDigit()
                     .hidden()
-                    .overlay {
-                        Image(systemName: "checkmark")
-                            .resizable()
-                            .scaledToFit()
-                            .fontWeight(.bold)
-                            .foregroundStyle(.primary)
-                            .padding(.vertical, -2)
-                    }
+                    .overlay(alignment: .bottomTrailing) { readTab }
                     .accessibilityElement()
                     .accessibilityLabel("Read")
             } else if book.status == .reading, let fraction = book.progressFraction {
@@ -656,6 +650,22 @@ struct BookCell: View {
         .imageScale(.small)
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The Read mark: inverse check on a primary tab with rounded top corners, reaching down
+    /// to touch the cover and kept clear of its rounded corner.
+    private var readTab: some View {
+        UnevenRoundedRectangle(topLeadingRadius: 6, topTrailingRadius: 6, style: .continuous)
+            .fill(Color.primary)
+            .overlay {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 12, weight: .heavy))
+                    .foregroundStyle(Color.onAccent)
+                    .padding(.top, 1)
+            }
+            .frame(width: 30, height: 21)
+            .offset(x: -max(style.cornerRadius, 3), y: 5) // 5 = the gap between row and cover
+            .allowsHitTesting(false)
     }
 
     private func slot(_ symbol: String, _ color: Color, _ shown: Bool) -> some View {
