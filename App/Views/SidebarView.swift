@@ -78,7 +78,7 @@ struct SidebarView: View {
     /// "Library" and the button that puts the sidebar away.
     private var header: some View {
         ZStack {
-            Text("Library").font(.headline)
+            Text("Library").font(.title3.weight(.semibold))
             HStack {
                 Spacer()
                 Button {
@@ -96,6 +96,8 @@ struct SidebarView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 56)
+        // A little space before the first row's highlight.
+        .padding(.bottom, 8)
     }
 
     /// A row: icon, title and a pill with the count right after it, on a soft grey band when
@@ -114,10 +116,11 @@ struct SidebarView: View {
                     Text(count, format: .number)
                         .font(.caption.weight(.semibold))
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        // Full-strength text on a faint pill, so it reads in light and dark mode.
+                        .foregroundStyle(Color.primary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.primary.opacity(0.1)))
+                        .background(Capsule().fill(Color.primary.opacity(0.12)))
                 }
                 Spacer(minLength: 0)
             }
@@ -147,12 +150,14 @@ private struct SidebarSection<Content: View>: View {
 
     var body: some View {
         if let title {
+            // A bit larger than the rows under it, left-aligned.
             Text(title)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.headline)
+                .foregroundStyle(Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 18)
-                .padding(.top, 18)
-                .padding(.bottom, 4)
+                .padding(.top, 22)
+                .padding(.bottom, 6)
                 .accessibilityAddTraits(.isHeader)
         }
         content
