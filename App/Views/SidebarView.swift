@@ -54,6 +54,7 @@ struct SidebarView: View {
                 }
             }
         }
+        .listStyle(.sidebar)
         .labelStyle(SidebarLabelStyle())
         .navigationTitle(model.libraryName)
         .refreshable { await model.rescan() }

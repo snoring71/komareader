@@ -259,7 +259,7 @@ struct LibraryGridView: View {
         } message: { kind in
             Text(kind.message)
         }
-        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
 
     private var selectionTitle: String? {
@@ -461,7 +461,7 @@ struct SeriesGridView: View {
         .navigationTitle("Series")
         .searchable(text: $search, prompt: "Search series")
         .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: false) }
-        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
 }
 

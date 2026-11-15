@@ -221,6 +221,8 @@ struct ReaderMenuBar: View {
                 set: { if !$0, openPanel == item.id { openPanel = nil } }
             ), arrowEdge: .top) {
                 content { openPanel = nil }
+                    // Popovers don't pick up the app root's switch style (#55).
+                    .toggleStyle(MonoToggleStyle())
                     .presentationCompactAdaptation(.popover)
             }
         }

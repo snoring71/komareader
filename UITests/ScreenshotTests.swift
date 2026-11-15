@@ -92,6 +92,15 @@ final class ScreenshotTests: XCTestCase {
         save(app, "07-library-continue-reading")
     }
 
+    /// The sidebar floats over the library and starts hidden: open it with its toolbar button.
+    private func openSidebar(_ app: XCUIApplication) {
+        let toggle = app.buttons["sidebar-toggle"].firstMatch
+        if toggle.waitForExistence(timeout: 5) {
+            toggle.tap()
+            sleep(1)
+        }
+    }
+
     /// Book Info, the cover editor, the Series view and the hand-off prompt. Runs after
     /// testLibraryAndReader (tests run in name order).
     func testMoreScreens() throws {
@@ -141,6 +150,8 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(editCover.waitForNonExistence(timeout: 10), "Book Info did not close")
 
         // The Series view.
+        openSidebar(app)
+        save(app, "11c-sidebar")
         let seriesRow = app.descendants(matching: .any)["sidebar-Series"].firstMatch
         if seriesRow.waitForExistence(timeout: 5) {
             // The row's label, not its icon, is the reliable tap target.
@@ -157,6 +168,7 @@ final class ScreenshotTests: XCTestCase {
         }
 
         // The folder browser, and one folder.
+        openSidebar(app)
         let foldersRow = app.descendants(matching: .any)["sidebar-Folders"].firstMatch
         if foldersRow.waitForExistence(timeout: 5) {
             let label = app.staticTexts["Folders"].firstMatch
@@ -172,6 +184,7 @@ final class ScreenshotTests: XCTestCase {
         }
 
         // Another device read further: the reader offers to jump there.
+        openSidebar(app)
         let allBooks = app.descendants(matching: .any)["sidebar-All Books"].firstMatch
         if allBooks.waitForExistence(timeout: 5) {
             // The row's label, not its icon, is the reliable tap target (the page title here is "Starfall").

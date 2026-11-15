@@ -88,6 +88,7 @@ struct ReaderScreen: View {
         .animation(.easeInOut(duration: 0.2), value: state.textStatus)
         .sheet(isPresented: $showInfo) {
             BookInfoView(bookId: state.book.id, source: state.source)
+                .toggleStyle(MonoToggleStyle())
         }
         .sheet(isPresented: $showCrop) {
             PageCropView(state: state)

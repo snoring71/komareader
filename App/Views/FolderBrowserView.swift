@@ -84,7 +84,7 @@ struct FolderBrowserView: View {
         .navigationTitle("Folders")
         .searchable(text: $search, prompt: "Search folders")
         .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings) }
-        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
 
     private struct LetterAnchor {
