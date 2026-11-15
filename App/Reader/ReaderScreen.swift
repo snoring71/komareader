@@ -143,11 +143,19 @@ struct ReaderScreen: View {
         .onChange(of: state.closeRequested) { _, requested in
             if requested { closeBySwipe() }
         }
-        // Back from the first page, by a tap or a swipe.
+        // Back from the first page, by a tap or a swipe: the pager has turned to its copy of
+        // the cover, and the reader's cover replaces it at once. Fading it in over an
+        // identical copy doubled the shadows and darkened the cover for a moment.
         .onChange(of: state.coverRequested) { _, requested in
             guard requested else { return }
             state.coverRequested = false
-            showCover()
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                coverWaits = true
+                state.showChrome = false
+                showingCover = true
+            }
         }
         .task {
             // A book read before: show the cover for a moment while the pages load beneath it.

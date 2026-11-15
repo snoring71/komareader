@@ -38,6 +38,11 @@ struct PageViewer: UIViewControllerRepresentable {
             coordinator.textRetry = textRetry
             (controller.viewControllers?.first as? SpreadViewController)?.retryText()
         }
+        let turnToCover = state.turnToCover
+        if turnToCover != coordinator.turnToCover {
+            coordinator.turnToCover = turnToCover
+            coordinator.showCoverPage(in: controller)
+        }
         let look = state.look
         if look != coordinator.look {
             coordinator.look = look
@@ -60,6 +65,7 @@ struct PageViewer: UIViewControllerRepresentable {
         var selectingText = false
         var textRetry = 0
         var look = PageLook()
+        var turnToCover = 0
         private weak var pageController: UIPageViewController?
         /// Every spread made and still alive (on screen, or kept ready beside it), so a new
         /// look reaches the neighbours too.
@@ -68,6 +74,28 @@ struct PageViewer: UIViewControllerRepresentable {
         init(state: ReaderState) {
             self.state = state
             self.look = state.look
+        }
+
+        /// A tap back from the first page: the cover turns in like a page, as a swipe does.
+        func showCoverPage(in controller: UIPageViewController) {
+            guard let cover = state.makeCoverPage?() else { return }
+            cover.view.accessibilityIdentifier = "reader-cover-page"
+            // Back comes from the left in left-to-right books, from the right in manga.
+            let direction: UIPageViewController.NavigationDirection = state.rightToLeft ? .forward : .reverse
+            controller.setViewControllers([CoverPageController(cover)], direction: direction, animated: true) { [weak self, weak controller] finished in
+                guard let self, let controller, finished else { return }
+                self.coverPageShown(in: controller)
+            }
+        }
+
+        /// The cover page is on screen: the reader's cover takes over (it looks the same, and
+        /// appears at once), then the first page goes back underneath it.
+        private func coverPageShown(in controller: UIPageViewController) {
+            state.coverRequested = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak controller] in
+                guard let self, let controller else { return }
+                self.show(in: controller, animated: false)
+            }
         }
 
         /// Redraws the pages already made with the current look.
@@ -177,13 +205,7 @@ struct PageViewer: UIViewControllerRepresentable {
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
             guard completed else { return }
             if pvc.viewControllers?.first is CoverPageController {
-                // The reader's cover takes over (it looks the same, and fades in over this in
-                // 0.4 s), then the first page goes back underneath it, ready for the reader to move on.
-                state.coverRequested = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self, weak pvc] in
-                    guard let self, let pvc else { return }
-                    self.show(in: pvc, animated: false)
-                }
+                coverPageShown(in: pvc)
                 return
             }
             guard let current = pvc.viewControllers?.first as? SpreadViewController else { return }

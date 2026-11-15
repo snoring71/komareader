@@ -116,8 +116,11 @@ final class ReaderState {
 
     /// Set by a swipe up on the page: the reader closes.
     var closeRequested = false
-    /// Set by going back from the first page (a tap or a swipe): the cover shows.
+    /// Set when the pager has turned back from the first page to the cover: the reader's
+    /// cover takes over.
     var coverRequested = false
+    /// Bumped by a tap on the back side of the first page: the pager turns back to the cover.
+    private(set) var turnToCover = 0
     /// Makes the page the pager slides in before the first one: the cover, as the reader
     /// shows it. Nil when the book has no cover.
     @ObservationIgnored var makeCoverPage: (() -> UIViewController)?
@@ -332,7 +335,7 @@ final class ReaderState {
     /// The previous page, or the cover from the first one.
     private func back() {
         if currentSpread == 0, makeCoverPage != nil {
-            coverRequested = true
+            turnToCover += 1
         } else {
             previous()
         }

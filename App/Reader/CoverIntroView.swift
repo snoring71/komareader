@@ -33,6 +33,9 @@ struct CoverIntroView: View {
 
     @Environment(\.coverStyle) private var coverStyle
     @State private var fullSize: UIImage?
+    /// Full-size covers already read, so a cover shown again (or the same cover shown in two
+    /// places) starts sharp instead of switching from the thumbnail a moment later.
+    private static let fullSizes = NSCache<NSURL, UIImage>()
     @State private var offset: CGSize = .zero
     @State private var leaving = false
 
@@ -76,7 +79,7 @@ struct CoverIntroView: View {
     }
 
     private func cover(in size: CGSize) -> some View {
-        let image = fullSize ?? intro.image
+        let image = fullSize ?? intro.fullSizeURL.flatMap { Self.fullSizes.object(forKey: $0 as NSURL) } ?? intro.image
         let aspect = image.size.height > 0 ? image.size.width / image.size.height : 2.0 / 3.0
         let height = min(size.height * 0.84, size.width * 0.84 / aspect)
         let radius = coverStyle.roundedCorners ? 8.0 : 0
@@ -158,13 +161,14 @@ struct CoverIntroView: View {
     }
 
     private func loadFullSize() async {
-        guard let url = intro.fullSizeURL else { return }
+        guard let url = intro.fullSizeURL, Self.fullSizes.object(forKey: url as NSURL) == nil else { return }
         let image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
             guard let data = try? Data(contentsOf: url), let image = UIImage(data: data) else { return nil }
             return image.preparingForDisplay() ?? image
         }.value
-        guard let image, !Task.isCancelled else { return }
-        fullSize = image
+        guard let image else { return }
+        Self.fullSizes.setObject(image, forKey: url as NSURL)
+        if !Task.isCancelled { fullSize = image }
     }
 }
 
