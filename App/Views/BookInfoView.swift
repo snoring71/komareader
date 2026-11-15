@@ -101,6 +101,16 @@ struct BookInfoView: View {
                 Toggle(isOn: Binding(get: { book.bookmarked }, set: { model.setBookmarked(book, $0) })) {
                     Label("Bookmarked", systemImage: "bookmark")
                 }
+                NavigationLink {
+                    TagEditorView(bookId: book.id, inSheet: false)
+                } label: {
+                    LabeledContent {
+                        Text(book.tags.isEmpty ? "None" : book.tags.joined(separator: ", ")).lineLimit(1)
+                    } label: {
+                        Label("Tags", systemImage: "tag")
+                    }
+                }
+                .accessibilityIdentifier("info-tags")
             }
 
             Section("Reader") {

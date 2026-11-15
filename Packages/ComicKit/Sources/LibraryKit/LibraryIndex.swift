@@ -27,6 +27,8 @@ public struct Book: Codable, FetchableRecord, PersistableRecord, Identifiable, H
     /// From the record's metadata, else worked out from the file name (`SeriesName`).
     public var series: String
     public var number: String?
+    /// The user's own tags, from the synced record, in the user's spelling.
+    public var tags: [String] = []
 
     public enum Status: String, Sendable { case unread, reading, read }
 
@@ -90,6 +92,12 @@ public final class LibraryIndex: @unchecked Sendable {
                 t.add(column: "number", .text)
             }
         }
+        migrator.registerMigration("v3") { db in
+            try db.alter(table: "book") { t in
+                // A JSON array of strings.
+                t.add(column: "tags", .text).notNull().defaults(to: "[]")
+            }
+        }
         return migrator
     }
 
@@ -104,6 +112,13 @@ public final class LibraryIndex: @unchecked Sendable {
 
     public func save(_ book: Book) throws {
         try db.write { db in try book.save(db) }
+    }
+
+    /// Saves many rows in one transaction.
+    public func save(_ books: [Book]) throws {
+        try db.write { db in
+            for book in books { try book.save(db) }
+        }
     }
 
     /// Brings the index in line with a fresh scan.
@@ -197,6 +212,9 @@ public final class LibraryIndex: @unchecked Sendable {
         if let flags = record.flags {
             book.favorite = flags.favorite
             book.bookmarked = flags.bookmarked
+        }
+        if let tags = record.tags {
+            book.tags = tags.value
         }
         if let series = record.metadata?.series?.trimmingCharacters(in: .whitespaces), !series.isEmpty {
             book.series = series

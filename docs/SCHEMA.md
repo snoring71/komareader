@@ -61,6 +61,10 @@ picks a folder with the same name uses the same `libraryId`.
   `covers/<bookId>.custom.jpg` holds the result. A `cover` of page 0, uncropped and not rotated
   means the user went back to the default cover; there is then no `.custom.jpg`.
 - `flags` holds the user's Favorite and Bookmarked marks.
+- `tags` holds the user's own tags for the book, in the user's spelling. Tags are matched
+  ignoring case, and a book lists each tag once. There is no separate list of tags: the
+  library's tags are all the tags its books have. Renaming or deleting a tag rewrites `tags`
+  on every book that has it.
 - `readerSettings` holds the reading direction as version 0.1 wrote it: `direction` is `ltr` or
   `rtl`; `layout` is `auto`, `single` or `double`. Once a record has `readerOptions`, use that
   instead, but keep `readerSettings.direction` up to date for older versions.

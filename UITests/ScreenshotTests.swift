@@ -119,6 +119,21 @@ final class ScreenshotTests: XCTestCase {
             }
         }
 
+        // The folder browser, and one folder.
+        let foldersRow = app.descendants(matching: .any)["sidebar-Folders"].firstMatch
+        if foldersRow.waitForExistence(timeout: 5) {
+            let label = app.staticTexts["Folders"].firstMatch
+            (label.isHittable ? label : foldersRow).tap()
+            sleep(2)
+            save(app, "13b-folders")
+            let folder = app.buttons["folder-Night Market"]
+            if folder.waitForExistence(timeout: 5) {
+                folder.tap()
+                sleep(2)
+                save(app, "13c-folder-night-market")
+            }
+        }
+
         // Another device read further: the reader offers to jump there.
         let allBooks = app.descendants(matching: .any)["sidebar-All Books"].firstMatch
         if allBooks.waitForExistence(timeout: 5) {

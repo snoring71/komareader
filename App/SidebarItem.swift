@@ -3,15 +3,44 @@ import LibraryKit
 import SwiftUI
 
 enum SidebarItem: Hashable {
-    case all, continueReading, series, downloaded, unread, reading, read, favorites, bookmarked, missing
+    case all, continueReading, series, folders, downloaded, unread, reading, read, favorites, bookmarked, missing
+    /// The books directly in a folder (subfolders are shown above them).
     case folder(String)
     case seriesNamed(String)
+    case tag(String)
+
+    /// A string for saving the item between launches.
+    var storageKey: String {
+        switch self {
+        case .folder(let path): return "folder:" + path
+        case .seriesNamed(let name): return "series:" + name
+        case .tag(let name): return "tag:" + name
+        default: return "\(self)"
+        }
+    }
+
+    init?(storageKey key: String) {
+        if key.hasPrefix("folder:") {
+            self = .folder(String(key.dropFirst("folder:".count)))
+        } else if key.hasPrefix("series:") {
+            self = .seriesNamed(String(key.dropFirst("series:".count)))
+        } else if key.hasPrefix("tag:") {
+            self = .tag(String(key.dropFirst("tag:".count)))
+        } else if let item = Self.plain.first(where: { "\($0)" == key }) {
+            self = item
+        } else {
+            return nil
+        }
+    }
+
+    private static let plain: [SidebarItem] = [.all, .continueReading, .series, .folders, .downloaded, .unread, .reading, .read, .favorites, .bookmarked, .missing]
 
     var title: String {
         switch self {
         case .all: return "All Books"
         case .continueReading: return "Continue Reading"
         case .series: return "Series"
+        case .folders: return "Folders"
         case .downloaded: return "Downloaded"
         case .favorites: return "Favorites"
         case .bookmarked: return "Bookmarked"
@@ -21,6 +50,7 @@ enum SidebarItem: Hashable {
         case .read: return "Read"
         case .missing: return "Missing Files"
         case .folder(let path): return (path as NSString).lastPathComponent
+        case .tag(let name): return name
         }
     }
 
@@ -29,6 +59,7 @@ enum SidebarItem: Hashable {
         case .all: return "books.vertical"
         case .continueReading: return "book"
         case .series: return "square.stack"
+        case .folders: return "folder"
         case .downloaded: return "arrow.down.circle"
         case .favorites: return "heart"
         case .bookmarked: return "bookmark"
@@ -38,6 +69,7 @@ enum SidebarItem: Hashable {
         case .read: return "checkmark.circle"
         case .missing: return "questionmark.folder"
         case .folder: return "folder"
+        case .tag: return "tag"
         }
     }
 
@@ -45,7 +77,7 @@ enum SidebarItem: Hashable {
         switch self {
         case .all: return !book.isMissing
         case .continueReading: return !book.isMissing && book.status == .reading
-        case .series: return !book.isMissing
+        case .series, .folders: return !book.isMissing
         case .downloaded: return !book.isMissing && book.isDownloaded
         case .favorites: return !book.isMissing && book.favorite
         case .bookmarked: return !book.isMissing && book.bookmarked
@@ -54,36 +86,53 @@ enum SidebarItem: Hashable {
         case .reading: return !book.isMissing && book.status == .reading
         case .read: return !book.isMissing && book.status == .read
         case .missing: return book.isMissing
-        case .folder(let path): return !book.isMissing && (book.folder == path || book.folder.hasPrefix(path + "/"))
+        case .folder(let path): return !book.isMissing && book.folder == path
+        case .tag(let name): return !book.isMissing && book.tags.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
         }
     }
 }
 
-/// Folder tree for the sidebar, built from the books' folder paths.
-struct FolderNode: Identifiable, Hashable {
-    let id: String
+/// A folder that holds books, for the folder browser.
+struct FolderInfo: Hashable, Identifiable {
+    let path: String
     let name: String
-    var count: Int
-    var children: [FolderNode]?
+    /// Books in the folder and its subfolders.
+    var count = 0
+    /// Books directly in the folder.
+    var directCount = 0
+    /// Subfolder paths, in natural order.
+    var children: [String] = []
+    /// The first book by title in the folder or below, whose cover stands for the folder.
+    var coverBookId: String?
+    fileprivate var coverRank = Int.max
+    var id: String { path }
 
-    static func tree(from books: [Book]) -> [FolderNode] {
-        var counts: [String: Int] = [:]
+    /// All folders in one pass over the books (a big library has hundreds of folders).
+    static func tree(from books: [Book], titleRank: [String: Int]) -> [String: FolderInfo] {
+        var folders: [String: FolderInfo] = ["": FolderInfo(path: "", name: "")]
         for book in books where !book.isMissing && !book.folder.isEmpty {
-            var path = ""
-            for part in book.folder.split(separator: "/") {
-                path = path.isEmpty ? String(part) : "\(path)/\(part)"
-                counts[path, default: 0] += 1
+            let rank = titleRank[book.id] ?? .max
+            let parts = book.folder.split(separator: "/")
+            var parent = ""
+            for (i, part) in parts.enumerated() {
+                let path = parent.isEmpty ? String(part) : parent + "/" + part
+                if folders[path] == nil {
+                    folders[path] = FolderInfo(path: path, name: String(part))
+                    folders[parent]?.children.append(path)
+                }
+                folders[path]!.count += 1
+                if i == parts.count - 1 { folders[path]!.directCount += 1 }
+                if rank < folders[path]!.coverRank {
+                    folders[path]!.coverRank = rank
+                    folders[path]!.coverBookId = book.id
+                }
+                parent = path
             }
         }
-        func children(of parent: String) -> [FolderNode]? {
-            let prefix = parent.isEmpty ? "" : parent + "/"
-            let direct = counts.keys.filter { $0.hasPrefix(prefix) && !$0.dropFirst(prefix.count).contains("/") && $0 != parent }
-            guard !direct.isEmpty else { return nil }
-            return direct.naturallySorted().map { path in
-                FolderNode(id: path, name: (path as NSString).lastPathComponent, count: counts[path] ?? 0, children: children(of: path))
-            }
+        for key in Array(folders.keys) where folders[key]!.children.count > 1 {
+            folders[key]!.children = folders[key]!.children.naturallySorted()
         }
-        return children(of: "") ?? []
+        return folders
     }
 }
 
