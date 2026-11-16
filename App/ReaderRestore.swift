@@ -9,12 +9,14 @@ import UIKit
 /// the app itself, and discards it when the user swipes the window away in the app switcher: the
 /// next launch then gets a new session id (so the saved book does not match), and iOS reports the
 /// discarded session to `application(_:didDiscardSceneSessions:)`, which clears it too. A first
-/// version used `@SceneStorage`, which on Zach's iPad survived a swipe-away.
+/// version used `@SceneStorage`. On Zach's iPad a swipe-away seemed to keep it; more likely the
+/// app was not ended at all, only its window closed, and the reader was still open in memory
+/// (see `AppModel.watchWindowsClosing`).
 @MainActor
 enum ReaderRestore {
     private static let bookKey = "reader.restore.book"
     private static let sessionKey = "reader.restore.session"
-    static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "ComicReader", category: "ReaderRestore")
+    nonisolated static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "ComicReader", category: "ReaderRestore")
 
     static var isEnabled: Bool { LibraryPosition.isEnabled }
 
@@ -25,8 +27,10 @@ enum ReaderRestore {
         if let bookId {
             defaults.set(bookId, forKey: bookKey)
             defaults.set(session, forKey: sessionKey)
-            log.info("Reader open: \(bookId, privacy: .public) in session \(session, privacy: .public)")
-        } else if defaults.string(forKey: sessionKey) == session {
+            log.notice("Reader open: \(bookId, privacy: .public) in session \(session, privacy: .public)")
+        } else if UIApplication.shared.applicationState != .background, defaults.string(forKey: sessionKey) == session {
+            // Only a close the user made in the app. The reader closing because its window
+            // went away in the background keeps the marker.
             clear()
         }
     }
@@ -35,14 +39,14 @@ enum ReaderRestore {
     static func book(for session: String) -> String? {
         guard isEnabled, let saved = UserDefaults.standard.string(forKey: sessionKey) else { return nil }
         let book = UserDefaults.standard.string(forKey: bookKey)
-        log.info("Launch in session \(session, privacy: .public); saved session \(saved, privacy: .public), book \(book ?? "none", privacy: .public)")
+        log.notice("Launch in session \(session, privacy: .public); saved session \(saved, privacy: .public), book \(book ?? "none", privacy: .public)")
         guard saved == session else { clear(); return nil }
         return book
     }
 
     /// Sessions the user closed (swiped away): their book is not reopened.
     static func discard(sessions: Set<String>) {
-        log.info("Discarded sessions: \(sessions.joined(separator: ", "), privacy: .public)")
+        log.notice("Discarded sessions: \(sessions.joined(separator: ", "), privacy: .public)")
         if let saved = UserDefaults.standard.string(forKey: sessionKey), sessions.contains(saved) { clear() }
     }
 
@@ -54,6 +58,11 @@ enum ReaderRestore {
 
 /// Hears about scene sessions the user closed in the app switcher.
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        ReaderRestore.log.notice("App launched (new process)")
+        return true
+    }
+
     func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
         let ids = Set(sceneSessions.map(\.persistentIdentifier))
         MainActor.assumeIsolated { ReaderRestore.discard(sessions: ids) }

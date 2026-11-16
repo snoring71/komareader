@@ -4,6 +4,7 @@ import Foundation
 import LibraryKit
 import Observation
 import SwiftUI
+import UIKit
 
 /// App-wide state: the library folder, the indexed books, covers and the open book.
 @MainActor
@@ -246,6 +247,7 @@ final class AppModel {
     // MARK: Startup
 
     func start() async {
+        watchWindowsClosing()
         guard phase == .starting else { return }
         if Self.isDemo {
             let extra = UserDefaults.standard.integer(forKey: "demoCount")
@@ -564,6 +566,26 @@ final class AppModel {
         } catch {
             if !quiet { errorMessage = "Could not open \(book.title): \(error.localizedDescription)" }
             return nil
+        }
+    }
+
+    @ObservationIgnored private var sceneObserver: NSObjectProtocol?
+
+    /// Swiping the app away on iPadOS can close its last window without ending the app, which
+    /// left the reader open in memory and showed it again in the next window (#66). So when the
+    /// last window goes, the reader closes too. The saved restore marker stays: if iOS only let
+    /// go of the window to save memory, the same session comes back and reopens the book;
+    /// a window the user closed is discarded and does not.
+    private func watchWindowsClosing() {
+        guard sceneObserver == nil else { return }
+        sceneObserver = NotificationCenter.default.addObserver(forName: UIScene.didDisconnectNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                let left = UIApplication.shared.connectedScenes.count
+                ReaderRestore.log.notice("Window disconnected; \(left) left; reader open: \(self?.openBook != nil)")
+                guard let self, left == 0, self.openBook != nil else { return }
+                self.flushProgress()
+                self.openBook = nil
+            }
         }
     }
 
