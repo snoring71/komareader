@@ -13,7 +13,13 @@ struct ComicReaderApp: App {
                 .toggleStyle(MonoToggleStyle())
                 .task { await model.start() }
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { model.rescanSoon() } else { LibraryPosition.flush() }
+                    if phase == .active {
+                        model.rescanSoon()
+                    } else {
+                        LibraryPosition.flush()
+                        // The page on disk before iOS can end the app (#66).
+                        model.flushProgress()
+                    }
                 }
         }
     }

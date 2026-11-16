@@ -10,6 +10,8 @@ struct RootView: View {
     /// Whether the sidebar is out over the library. The toolbar's sidebar button and the
     /// swipes both change it.
     @State private var sidebarShown = false
+    /// The reader restore (#66) is tried once, when the library is first ready.
+    @State private var restoreTried = false
 
     var body: some View {
         @Bindable var model = model
@@ -55,6 +57,18 @@ struct RootView: View {
                     }
                 }
             }
+        }
+        .onChange(of: model.openBook?.id) { _, id in
+            ReaderRestore.note(bookId: id)
+        }
+        // Once the library is showing (and its position restored underneath), back into the
+        // book that was open when the app last ended.
+        .task(id: model.phase) {
+            guard model.phase == .ready, !restoreTried else { return }
+            restoreTried = true
+            guard let id = ReaderRestore.savedBook else { return }
+            await model.restoreReader(bookId: id)
+            if model.openBook == nil { ReaderRestore.clear() }
         }
         .fullScreenCover(item: $model.openBook) { open in
             ReaderScreen(book: open.book, source: open.source, options: open.options, defaults: model.readerDefaults, handOff: open.handOff, intro: open.intro, bookmarks: open.bookmarks)
