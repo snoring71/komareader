@@ -72,8 +72,9 @@ final class AppModel {
     }
     /// The book whose Book Info sheet is showing in the library.
     var bookInfo: BookRef?
-    /// The book whose tags are being edited from the library.
-    var tagEditor: BookRef?
+    /// The books whose tags are being edited from the library: one from its long-press menu, or
+    /// the selection in Select mode (#64).
+    var tagEditor: TagEditorRequest?
     /// The book whose cover editor is showing, opened from the library's long-press menu.
     var coverEditor: CoverEditorRequest?
     /// True while the library shows something read from the files themselves (author,
@@ -198,6 +199,21 @@ final class AppModel {
     }
 
     struct BookRef: Identifiable, Hashable { let id: String }
+
+    struct TagEditorRequest: Identifiable {
+        let ids: Set<String>
+        let id = UUID()
+    }
+
+    /// One change from the tag editor, applied to every book it is editing.
+    enum TagEdit {
+        /// Adds the tag to every book that lacks it.
+        case add(String)
+        /// Takes the tag off every book.
+        case remove(String)
+        /// Takes every tag off the books ("No Tags"). The tags stay in the library's tag list.
+        case clear
+    }
 
     struct CoverEditorRequest: Identifiable {
         let book: Book
@@ -891,20 +907,49 @@ final class AppModel {
 
     // MARK: Tags
 
-    /// Sets a book's tags (any number, matched ignoring case, kept in the user's spelling).
-    /// Tags stay in the library's tag list after their last book loses them.
-    func setTags(_ book: Book, _ tags: [String]) {
-        let new = Self.cleaned(tags), old = book.tags
-        let added = new.filter { !tagList.contains($0) }
-        let kept = old.filter { tagList.tags[TagList.key($0)] == nil }
-        if !added.isEmpty || !kept.isEmpty {
-            changeTagList { list in
-                let now = Date()
-                for tag in kept { list.keep(tag, at: now) }
-                for tag in added { list.add(tag, at: now) }
+    /// Applies one tag editor change to many books in one batched update (one `books` change and
+    /// one background record pass), never one `setTags` call per book. Tags a book loses stay in
+    /// the library's tag list, as they do from the single-book editor.
+    func editTags(_ ids: Set<String>, _ edit: TagEdit) {
+        func same(_ a: String, _ b: String) -> Bool { a.caseInsensitiveCompare(b) == .orderedSame }
+        var changes: [String: [String]] = [:]
+        var added: String?
+        var lost: [String: String] = [:] // lowercased -> spelling, tags some book loses
+        switch edit {
+        case .add(let typed):
+            let tag = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !tag.isEmpty else { return }
+            // An existing tag typed in another case is used as it is spelled already.
+            let name = summary.tags.first { same($0.name, tag) }?.name
+                ?? tagList.names.first { same($0, tag) } ?? tag
+            added = name
+            for id in ids {
+                guard let book = book(id: id), !book.tags.contains(where: { same($0, name) }) else { continue }
+                changes[id] = Self.cleaned(book.tags + [name])
+            }
+        case .remove(let tag):
+            for id in ids {
+                guard let book = book(id: id), let old = book.tags.first(where: { same($0, tag) }) else { continue }
+                lost[old.lowercased()] = old
+                changes[id] = book.tags.filter { !same($0, tag) }
+            }
+        case .clear:
+            for id in ids {
+                guard let book = book(id: id), !book.tags.isEmpty else { continue }
+                for tag in book.tags { lost[tag.lowercased()] = tag }
+                changes[id] = []
             }
         }
-        setTags([book.id: new])
+        let addToList = added.flatMap { tagList.contains($0) ? nil : $0 }
+        let keep = lost.values.filter { tagList.tags[TagList.key($0)] == nil }
+        if addToList != nil || !keep.isEmpty {
+            changeTagList { list in
+                let now = Date()
+                for tag in keep { list.keep(tag, at: now) }
+                if let addToList { list.add(addToList, at: now) }
+            }
+        }
+        setTags(changes)
     }
 
     /// Renames a tag on every book that has it, or merges it into another tag of that name.
