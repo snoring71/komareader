@@ -16,7 +16,10 @@ public final class ArchiveBookSource: BookSource, @unchecked Sendable {
     private let lock = NSLock()
     private var extracted: [Int: URL] = [:]
     private var waiters: [Int: [CheckedContinuation<URL, Error>]] = [:]
-    private var failure: Error?
+    /// Pages that could not be read. One bad page no longer takes the rest of the book with it.
+    private var failures: [Int: Error] = [:]
+    /// Set once extraction has ended; pages still missing then fail with this.
+    private var finalFailure: Error?
     private var extractionTask: Task<Void, Never>?
 
     public init(url: URL, cacheRoot: URL) throws {
@@ -61,7 +64,7 @@ public final class ArchiveBookSource: BookSource, @unchecked Sendable {
             if let url = extracted[index] {
                 lock.unlock()
                 continuation.resume(returning: url)
-            } else if let failure {
+            } else if let failure = failures[index] ?? finalFailure {
                 lock.unlock()
                 continuation.resume(throwing: failure)
             } else {
@@ -78,27 +81,58 @@ public final class ArchiveBookSource: BookSource, @unchecked Sendable {
 
     private func extractAll() {
         let indexByPath = Dictionary(pagePaths.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
-        do {
-            try LibArchive.forEachEntry(in: url) { path, reader in
-                if Task.isCancelled { return .stop }
-                guard let index = indexByPath[path] else { return .next }
-                let alreadyDone: Bool = { lock.lock(); defer { lock.unlock() }; return extracted[index] != nil }()
-                if alreadyDone { return .next }
-                let data = try reader.readAll()
-                let file = pageFile(index)
-                try data.write(to: file, options: .atomic)
-                deliver(index: index, url: file)
-                return .next
+        // libarchive can fail on a single entry (its RAR5 reader trips on some valid archives)
+        // and may not carry on reliably after that. So when a page fails, keep what was read of
+        // it, then start a fresh pass from the top that skips the pages already settled. Each
+        // pass settles at least one more page or ends the loop.
+        var lastError: Error?
+        while !Task.isCancelled {
+            var hitBadPage = false
+            var progressed = false
+            do {
+                try LibArchive.forEachEntry(in: url) { path, reader in
+                    if Task.isCancelled { return .stop }
+                    guard let index = indexByPath[path], !isSettled(index) else { return .next }
+                    let (data, error) = reader.readAvailable()
+                    progressed = true
+                    if let error {
+                        hitBadPage = true
+                        lastError = error
+                        // A page cut short near the end still shows nearly all of it.
+                        if !data.isEmpty, ImageDecoder.canDecode(data: data), (try? write(data, index: index)) != nil {
+                            return .stop
+                        }
+                        markFailed(index: index, error: error)
+                        return .stop
+                    }
+                    try write(data, index: index)
+                    return .next
+                }
+            } catch {
+                // The archive itself could not be read any further.
+                lastError = error
+                break
             }
-            let missing: Bool = { lock.lock(); defer { lock.unlock() }; return extracted.count < pagePaths.count }()
-            if missing, !Task.isCancelled {
-                // Duplicate names or unreadable entries: fail the remaining waiters cleanly.
-                fail(with: ArchiveError(message: "Some pages could not be read"))
-            }
-            touch()
-        } catch {
-            fail(with: error)
+            if !hitBadPage || !progressed { break }
         }
+        if Task.isCancelled { return }
+        let missing: Bool = { lock.lock(); defer { lock.unlock() }; return extracted.count + failures.count < pagePaths.count }()
+        if missing {
+            // Duplicate names or entries past an unreadable spot: fail the remaining waiters cleanly.
+            finish(with: lastError ?? ArchiveError(message: "Some pages could not be read"))
+        }
+        touch()
+    }
+
+    private func isSettled(_ index: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return extracted[index] != nil || failures[index] != nil
+    }
+
+    private func write(_ data: Data, index: Int) throws {
+        let file = pageFile(index)
+        try data.write(to: file, options: .atomic)
+        deliver(index: index, url: file)
     }
 
     private func deliver(index: Int, url: URL) {
@@ -109,9 +143,17 @@ public final class ArchiveBookSource: BookSource, @unchecked Sendable {
         pending.forEach { $0.resume(returning: url) }
     }
 
-    private func fail(with error: Error) {
+    private func markFailed(index: Int, error: Error) {
         lock.lock()
-        failure = error
+        failures[index] = error
+        let pending = waiters.removeValue(forKey: index) ?? []
+        lock.unlock()
+        pending.forEach { $0.resume(throwing: error) }
+    }
+
+    private func finish(with error: Error) {
+        lock.lock()
+        finalFailure = error
         let pending = waiters.values.flatMap { $0 }
         waiters.removeAll()
         lock.unlock()

@@ -50,6 +50,24 @@ import Testing
         #expect(source.pageURLs.map(\.lastPathComponent) == ["1.png", "2.png", "10.png"])
     }
 
+    /// damaged.cbz: page1.png's compressed data is corrupt near its end; page2 and page3 are fine.
+    /// One unreadable page must not blank the whole book or leave it without a cover.
+    @Test func damagedPageDoesNotBreakTheRest() async throws {
+        let source = try ArchiveBookSource(url: try fixture("damaged.cbz"), cacheRoot: try tempDir())
+        #expect(source.pageCount == 3)
+        // Page 1 either fails on its own or shows what could be read of it (libarchive versions differ).
+        _ = try? await source.image(at: 0, maxPixelSize: 150)
+        let second = try await source.image(at: 1, maxPixelSize: 150)
+        #expect(second.height == 150)
+        let third = try await source.image(at: 2, maxPixelSize: 150)
+        #expect(third.height == 150)
+    }
+
+    @Test func coverFallsBackToNextReadablePage() async throws {
+        let image = try await BookSourceFactory.firstPageImage(url: try fixture("damaged.cbz"), format: .zip, maxPixelSize: 60)
+        #expect(image.height == 60)
+    }
+
     @Test func badArchiveThrows() throws {
         let dir = try tempDir()
         let bad = dir.appendingPathComponent("bad.cbz")

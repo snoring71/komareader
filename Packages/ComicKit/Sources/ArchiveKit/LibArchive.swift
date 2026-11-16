@@ -55,6 +55,15 @@ enum LibArchive {
 
         /// Reads the current entry's bytes.
         func readAll() throws -> Data {
+            let (data, error) = readAvailable()
+            if let error { throw error }
+            return data
+        }
+
+        /// Reads as much of the current entry as libarchive can decode. When it fails partway
+        /// (a decoder bug or a damaged archive) this returns the bytes read so far and the error,
+        /// so a page that is only cut short at the end can still be shown.
+        func readAvailable() -> (data: Data, error: ArchiveError?) {
             consumed = true
             var data = Data()
             let bufferSize = 1 << 16
@@ -63,10 +72,10 @@ enum LibArchive {
             while true {
                 let count = archive_read_data(archive, buffer, bufferSize)
                 if count == 0 { break }
-                if count < 0 { throw LibArchive.error(archive, "Could not extract page") }
+                if count < 0 { return (data, LibArchive.error(archive, "Could not extract page")) }
                 data.append(buffer.assumingMemoryBound(to: UInt8.self), count: Int(count))
             }
-            return data
+            return (data, nil)
         }
     }
 
