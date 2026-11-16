@@ -644,7 +644,7 @@ struct BookCell: View {
             // The file is gone: all that is left to do is to delete what the app kept of it.
             Button("Delete from Library", systemImage: "trash", role: .destructive) { confirmDelete = true }
         } else {
-            Button("Tags…", systemImage: "tag") { model.tagEditor = .init(id: book.id) }
+            Button("Tags…", systemImage: "tag") { model.tagEditor = .init(ids: [book.id]) }
             Button("Edit Cover…", systemImage: "crop") { Task { await model.editCover(book) } }
             Button("Regenerate Cover", systemImage: "arrow.triangle.2.circlepath") { Task { await model.regenerateCover(book) } }
             Section {
@@ -856,6 +856,11 @@ struct SelectionToolbar: ToolbarContent {
                         Button("Mark as Unread", systemImage: "circle") { finish { model.setFinished(ids, false) } }
                     }
                 }
+            }
+            Section {
+                // Keeps the selection when the sheet closes, so another action can follow (#64).
+                Button("Tags…", systemImage: "tag") { model.tagEditor = .init(ids: ids) }
+                    .accessibilityIdentifier("selection-tags")
             }
             Menu("Reading Direction", systemImage: "arrow.left.arrow.right") {
                 Button("Left to Right") { finish { model.setDirection(ids, .leftToRight) } }
