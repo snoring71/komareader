@@ -571,17 +571,13 @@ final class AppModel {
 
     @ObservationIgnored private var sceneObserver: NSObjectProtocol?
 
-    /// Swiping the app away on iPadOS can close its last window without ending the app, which
-    /// left the reader open in memory and showed it again in the next window (#66). So when the
-    /// last window goes, the reader closes too. The saved restore marker stays: if iOS only let
-    /// go of the window to save memory, the same session comes back and reopens the book;
-    /// a window the user closed is discarded and does not.
+    /// When the app's last window closes but the app keeps running, the reader closes (its
+    /// page already saved) and the next window reopens it from `ReaderRestore`, like a relaunch.
     private func watchWindowsClosing() {
         guard sceneObserver == nil else { return }
         sceneObserver = NotificationCenter.default.addObserver(forName: UIScene.didDisconnectNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 let left = UIApplication.shared.connectedScenes.count
-                ReaderRestore.log.notice("Window disconnected; \(left) left; reader open: \(self?.openBook != nil)")
                 guard let self, left == 0, self.openBook != nil else { return }
                 self.flushProgress()
                 self.openBook = nil

@@ -10,11 +10,8 @@ struct RootView: View {
     /// Whether the sidebar is out over the library. The toolbar's sidebar button and the
     /// swipes both change it.
     @State private var sidebarShown = false
-    /// This window's scene session, which `ReaderRestore` ties the open book to (#66).
-    @State private var sceneSession: String?
-    /// The restore is tried once per launch.
+    /// The reader restore (#66) is tried once, when the library is first ready.
     @State private var restoreTried = false
-    private struct RestoreKey: Equatable { let ready: Bool; let session: String? }
 
     var body: some View {
         @Bindable var model = model
@@ -61,17 +58,15 @@ struct RootView: View {
                 }
             }
         }
-        .background { SceneSessionReader { sceneSession = $0 } }
         .onChange(of: model.openBook?.id) { _, id in
-            guard let sceneSession else { return }
-            ReaderRestore.note(bookId: id, session: sceneSession)
+            ReaderRestore.note(bookId: id)
         }
         // Once the library is showing (and its position restored underneath), back into the
-        // book that was open when iOS ended the app. Waits for both the library and the session.
-        .task(id: RestoreKey(ready: model.phase == .ready, session: sceneSession)) {
-            guard model.phase == .ready, let sceneSession, !restoreTried else { return }
+        // book that was open when the app last ended.
+        .task(id: model.phase) {
+            guard model.phase == .ready, !restoreTried else { return }
             restoreTried = true
-            guard let id = ReaderRestore.book(for: sceneSession) else { return }
+            guard let id = ReaderRestore.savedBook else { return }
             await model.restoreReader(bookId: id)
             if model.openBook == nil { ReaderRestore.clear() }
         }
