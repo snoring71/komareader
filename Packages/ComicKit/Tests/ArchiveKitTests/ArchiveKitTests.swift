@@ -1,4 +1,6 @@
 import ArchiveKit
+import ComicCore
+import CoreGraphics
 import Foundation
 import Testing
 
@@ -25,6 +27,29 @@ import Testing
 
         let wide = try await source.pageSize(at: 2)
         #expect(wide == CGSize(width: 400, height: 300))
+    }
+
+    /// A white page of 200 × 300 with a dark block covering x 20..<180, y 30..<270.
+    func pageWithMargins() throws -> CGImage {
+        let context = try #require(CGContext(data: nil, width: 200, height: 300, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 200, height: 300))
+        context.setFillColor(CGColor(red: 0.1, green: 0.2, blue: 0.3, alpha: 1))
+        // Core Graphics counts y from the bottom: 30 from the top is 30 from the bottom here too.
+        context.fill(CGRect(x: 20, y: 30, width: 160, height: 240))
+        return try #require(context.makeImage())
+    }
+
+    @Test func findsMarginsAndEdgeColour() throws {
+        let page = try pageWithMargins()
+        let bounds = ImageAnalysis.contentBounds(of: page)
+        #expect(abs(bounds[0] - 0.1) < 0.02)
+        #expect(abs(bounds[1] - 0.1) < 0.02)
+        #expect(abs(bounds[2] - 0.8) < 0.03)
+        #expect(abs(bounds[3] - 0.8) < 0.03)
+        let edge = try #require(ImageAnalysis.edgeColor(of: page))
+        #expect(edge.red > 0.95 && edge.green > 0.95 && edge.blue > 0.95)
     }
 
     @Test func reusesUnpackedPages() async throws {
@@ -73,5 +98,114 @@ import Testing
         let bad = dir.appendingPathComponent("bad.cbz")
         try Data("not an archive".utf8).write(to: bad)
         #expect(throws: (any Error).self) { try ArchiveBookSource(url: bad, cacheRoot: dir) }
+    }
+
+    @Test func readsMetadataFromImageFoldersAndArchives() throws {
+        let folder = try tempDir()
+        try Data([1]).write(to: folder.appendingPathComponent("001.jpg"))
+        try Data("<ComicInfo><Writer>Kozue Amano</Writer><Publisher>Mag Garden</Publisher></ComicInfo>".utf8)
+            .write(to: folder.appendingPathComponent("ComicInfo.xml"))
+        let info = try #require(MetadataReader.read(url: folder, format: .folder))
+        #expect(info.author == "Kozue Amano")
+        #expect(info.publisher == "Mag Garden")
+
+        // An archive without ComicInfo.xml reads fine, with nothing in it.
+        #expect(MetadataReader.read(url: try fixture("sample.cbz"), format: .zip) == FileMetadata())
+
+        let bad = folder.appendingPathComponent("bad.cbz")
+        try Data("not an archive".utf8).write(to: bad)
+        #expect(MetadataReader.read(url: bad, format: .zip) == nil)
+    }
+}
+
+@Suite struct CoverRendererTests {
+    /// A 4×2 image: left half red, right half blue.
+    func halves() throws -> CGImage {
+        let context = try #require(CGContext(data: nil, width: 4, height: 2, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        context.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 2, y: 0, width: 2, height: 2))
+        return try #require(context.makeImage())
+    }
+
+    /// Red and blue of the pixel at (x, y), counted from the top left.
+    func color(_ image: CGImage, _ x: Int, _ y: Int) throws -> (red: UInt8, blue: UInt8) {
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let context = try #require(CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: -x, y: y - (image.height - 1), width: image.width, height: image.height))
+        return (pixel[0], pixel[2])
+    }
+
+    @Test func rotatesClockwiseThenCrops() throws {
+        let image = try halves()
+        let turned = try #require(CoverRenderer.rotate(image, degrees: 90))
+        #expect(turned.width == 2 && turned.height == 4)
+        // Clockwise: the left (red) half ends up on top.
+        #expect(try color(turned, 0, 0).red > 200)
+        #expect(try color(turned, 0, 3).blue > 200)
+        let upsideDown = try #require(CoverRenderer.rotate(image, degrees: 180))
+        #expect(try color(upsideDown, 0, 0).blue > 200)
+        let anticlockwise = try #require(CoverRenderer.rotate(image, degrees: 270))
+        #expect(try color(anticlockwise, 0, 0).blue > 200)
+
+        let top = try #require(CoverRenderer.render(image, crop: [0, 0, 1, 0.5], rotation: 90))
+        #expect(top.width == 2 && top.height == 2)
+        #expect(try color(top, 1, 1).red > 200)
+        let right = try #require(CoverRenderer.render(image, crop: [0.5, 0, 0.5, 1], rotation: 0))
+        #expect(right.width == 2 && right.height == 2)
+        #expect(try color(right, 0, 0).blue > 200)
+    }
+
+}
+
+/// Sharing a page (#60).
+@Suite struct PageExportTests {
+    func fixture(_ name: String) throws -> URL {
+        try #require(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Fixtures"))
+    }
+
+    func tempDir() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    @Test func exportsTheOriginalArchivePageUnderTheBookTitle() async throws {
+        let source = try ArchiveBookSource(url: try fixture("sample.cbz"), cacheRoot: try tempDir())
+        let file = try await PageExport.export(source, page: 2, title: "Night: Market / 2", to: try tempDir())
+        #expect(file.lastPathComponent == "Night- Market - 2 - p3.png")
+        let original = try await source.pageURL(at: 2)
+        #expect(try Data(contentsOf: file) == Data(contentsOf: original))
+    }
+
+    @Test func exportsAPDFPageAtTheScannedImageSize() async throws {
+        // A one-page PDF, 200 × 300 points, holding one 400 × 600 image.
+        let url = try tempDir().appendingPathComponent("scan.pdf")
+        var box = CGRect(x: 0, y: 0, width: 200, height: 300)
+        let pdf = try #require(CGContext(url as CFURL, mediaBox: &box, nil as CFDictionary?))
+        let bitmap = try #require(CGContext(data: nil, width: 400, height: 600, bitsPerComponent: 8, bytesPerRow: 0,
+                                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        bitmap.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1))
+        bitmap.fill(CGRect(x: 0, y: 0, width: 400, height: 600))
+        let image = try #require(bitmap.makeImage())
+        pdf.beginPDFPage(nil)
+        pdf.draw(image, in: box)
+        pdf.endPDFPage()
+        pdf.closePDF()
+
+        let source = try PDFBookSource(url: url)
+        let file = try await PageExport.export(source, page: 0, title: "Scan", to: try tempDir())
+        #expect(file.lastPathComponent == "Scan - p1.jpg")
+        let size = try #require(ImageDecoder.pixelSize(url: file))
+        #expect(size == CGSize(width: 400, height: 600))
+    }
+
+    @Test func shareFileNames() {
+        #expect(PageExport.fileName(title: "Saga 001", page: 11, ext: "jpg") == "Saga 001 - p12.jpg")
+        #expect(PageExport.fileName(title: "  ", page: 0, ext: "png") == "Page - p1.png")
+        #expect(PageExport.fileName(title: ".hidden", page: 0, ext: "png") == "hidden - p1.png")
     }
 }

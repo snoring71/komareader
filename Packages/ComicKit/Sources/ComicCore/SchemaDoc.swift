@@ -14,6 +14,7 @@ Comic Reader/
   SCHEMA.md                         this file
   Libraries/<libraryId>/
     library.json                    which library folder this data belongs to
+    tags.json                       the library's tags, kept even with no books
     books/<bookId>.json             one record per book
     covers/<bookId>.jpg             default cover (first page, about 1200 px tall)
     covers/<bookId>.custom.jpg      cover edited by the user, if any
@@ -22,11 +23,25 @@ Comic Reader/
 ## library.json
 
 ```json
-{ "schema": 1, "libraryId": "UUID", "folderName": "Booklover", "createdAt": "2026-11-08T02:00:00.000Z" }
+{ "schema": 1, "libraryId": "UUID", "folderName": "Comics", "createdAt": "2026-11-08T02:00:00.000Z" }
 ```
 
 `folderName` is the name of the folder the user chose as their library. A device that
 picks a folder with the same name uses the same `libraryId`.
+
+## tags.json
+
+```json
+{ "schema": 1, "tags": {
+  "sci-fi": { "name": "Sci-Fi", "deleted": false, "updatedAt": "2026-11-15T04:00:00.000Z" },
+  "old": { "name": "Old", "deleted": true, "updatedAt": "2026-11-15T04:10:00.000Z" } } }
+```
+
+The library's tags, keyed by the lower-cased name, so a tag with no books is kept until the
+user deletes it. The library's tags are the entries not marked `deleted`, plus any tag a
+book's record has. A deleted tag keeps its entry so an older copy cannot bring it back.
+Renaming writes a deleted entry for the old name and a new entry for the new one. Merge two
+copies tag by tag, keeping whichever entry has the later `updatedAt`.
 
 ## books/<bookId>.json
 
@@ -38,17 +53,71 @@ picks a folder with the same name uses the same `libraryId`.
   "metadata": { "series": "Saga", "number": "1", "title": null, "writers": [], "year": 2012, "updatedAt": "..." },
   "tags": { "value": ["sci-fi"], "updatedAt": "..." },
   "cover": { "page": 0, "crop": [0.02, 0.0, 0.96, 1.0], "rotation": 0, "updatedAt": "..." },
+  "flags": { "favorite": true, "bookmarked": false, "updatedAt": "..." },
   "readerSettings": { "direction": "rtl", "layout": "auto", "updatedAt": "..." },
+  "readerOptions": {
+    "direction": "rtl", "landscapeLayout": "double", "fit": "width", "background": "#202020",
+    "bindingShadow": 0.6, "splitDoublePages": true, "contrast": 0.3, "sharpness": 0.5,
+    "paperGrain": 0.4, "paperTint": 0.2,
+    "crop": { "left": [0.06, 0.02, 0.9, 0.96], "right": [0.04, 0.02, 0.9, 0.96], "link": "mirrored" },
+    "updatedAt": "..."
+  },
   "progress": {
     "apple-7a2c91d0": { "page": 14, "pageCount": 24, "finished": false, "updatedAt": "..." }
-  }
+  },
+  "progressReset": { "updatedAt": "..." },
+  "pageBookmarks": { "pages": [3, 17], "updatedAt": "..." }
 }
 ```
 
 - `file.path` is relative to the library folder and uses `/`.
 - `page` values are zero-based.
-- `crop` is `[x, y, width, height]` as fractions of the page; `rotation` is degrees clockwise.
-- `direction` is `ltr` or `rtl`; `layout` is `auto`, `single` or `double`.
+- Pages are numbered in this order, so that a page number means the same page in every app:
+  entry paths are compared one folder name at a time; within a name, runs of ASCII digits
+  compare as numbers ("2" before "10"); otherwise punctuation and spaces come before digits,
+  and digits before letters ("_01.jpg" before "01.jpg" before "a.jpg"); case, full-width forms
+  and accents are ignored, and katakana sorts with hiragana. This is the order Windows Explorer and Finder show.
+- `crop` is `[x, y, width, height]` as fractions of the page after `rotation` (degrees
+  clockwise: 0, 90, 180 or 270) is applied. To re-render a cover: rotate the page, then crop.
+  `covers/<bookId>.custom.jpg` holds the result. A `cover` of page 0, uncropped and not rotated
+  means the user went back to the default cover; there is then no `.custom.jpg`.
+- `flags` holds the user's Favorite and Bookmarked marks.
+- `tags` holds the user's own tags for the book, in the user's spelling. Tags are matched
+  ignoring case, and a book lists each tag once. Renaming or deleting a tag rewrites `tags`
+  on every book that has it, and updates `tags.json`.
+- `removed` (`{ "updatedAt": "..." }`) means the user deleted the book from the library after
+  its file went missing. It counts only while its `updatedAt` is later than every other group's
+  and every `progress` entry's. An app that lists the book as missing should then drop it. If a
+  file turns up at `file.path` again, show it as a new book. The app that deletes a book
+  replaces the record with one holding only `file` and `removed`, and deletes its covers.
+- `progressReset` is set when the user resets a book's reading progress (marks it unread).
+  Every `progress` entry with an `updatedAt` at or before it is
+  ignored, on every device: the book shows as never opened until someone reads it again. An
+  app that resets progress also removes the old entries from the file it writes.
+- `pageBookmarks.pages` lists the pages the user bookmarked in the reader (zero-based, sorted,
+  no duplicates). In a two-page spread a bookmark goes on the first page in reading order. The
+  list is one group: the copy with the newest `updatedAt` wins. It is separate from
+  `flags.bookmarked`, which marks the whole book.
+- `readerSettings` holds the reading direction as version 0.1 wrote it: `direction` is `ltr` or
+  `rtl`; `layout` is `auto`, `single` or `double`. Once a record has `readerOptions`, use that
+  instead, but keep `readerSettings.direction` up to date for older versions.
+- `readerOptions` holds the book's own reader settings. Every key except `updatedAt` is optional,
+  and a key that is left out means "use the app's default for books":
+  `direction` (`ltr` or `rtl`); `portraitLayout` and `landscapeLayout` (`single` or `double`);
+  `fit` (`screen`, `width` or `height`); `background` (`black`, `gray`, `white`, `dynamic` for
+  the colour at the page's edges, or a colour as `#RRGGBB`); `bindingShadow` (0 for none to 1);
+  `splitDoublePages` (show an image that holds two pages as two pages); `contrast` (-1 to 1,
+  0 unchanged); `sharpness`, `paperGrain` (a printed-paper texture) and `paperTint` (a warm
+  paper colour), each 0 for none to 1; and `crop`.
+- `crop` trims the margins of every page. `left` and `right` are `[x, y, width, height]` as
+  fractions of a page, for left pages and right pages as they sit in a two-page spread: the
+  cover sits on the right (on the left in `rtl` books); after it, pages pair up with the first
+  of each pair on the left (right in `rtl`), an image wider than it is tall (more than 1.1
+  times) holds both sides and stands alone, and so does a page followed by such an image.
+  An image holding both sides takes `left` on its left half and `right` on its right half;
+  shown whole, it is cut from its left half's left edge to its right half's right edge, top
+  and bottom keeping whatever either side keeps. Splitting it into two pages comes after the
+  crop. `link` is `mirrored`, `same` or `separate`: how the two crops were tied while editing.
 - Dates are ISO 8601 in UTC; writers should include milliseconds.
 - Groups that have never been set are left out.
 
@@ -65,7 +134,7 @@ The id is SHA-256 of the UTF-8 text `komareader:library:<folderName>` or
 `komareader:book:<path>`, with the name in Unicode NFC. Take the first 16 bytes, set the high
 nibble of byte 6 to `8` and the top two bits of byte 8 to `10` (an RFC 9562 version 8 UUID),
 and write it as an upper-case UUID string. Ids made earlier at random stay valid.
-For example, the folder `Booklover` gives `352A9655-843C-82E4-BDCC-9A7C0DA6E14A` and the path
+For example, the folder `Comics` gives `20E7415A-EB37-81FE-87FB-C83F1AF87C00` and the path
 `Saga/Saga 001.cbz` gives `D0E63AF5-7548-8B27-8544-DCCDDEB4C6FA`.
 
 If two `library.json` files name the same folder, use the one whose `libraryId` is the
@@ -79,11 +148,12 @@ record whose `bookId` is the worked-out id, else the lowest `bookId`, merge the 
 Two devices may change the same record at the same time. When two copies differ
 (for example an iCloud conflict copy), merge them like this:
 
-1. For `metadata`, `tags`, `cover` and `readerSettings`, keep whichever copy has the later `updatedAt`.
-2. For `progress`, keep every device key; for a key in both copies, keep the later `updatedAt`.
+1. For `metadata`, `tags`, `cover`, `flags`, `readerSettings`, `readerOptions`, `removed`, `progressReset` and `pageBookmarks`, keep whichever copy has the later `updatedAt`.
+2. For `progress`, keep every device key; for a key in both copies, keep the later `updatedAt`. Then drop entries no newer than `progressReset`.
 3. Write files atomically (write a temporary file, then rename over the original).
 
-When opening a book, resume from the `progress` entry with the latest `updatedAt`.
+When opening a book, resume from the `progress` entry with the latest `updatedAt` (leaving out
+entries no newer than `progressReset`). A finished book opens on its last page.
 
 ## Versioning
 

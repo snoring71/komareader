@@ -10,4 +10,16 @@ public enum DeviceIdentity {
         defaults.set(id, forKey: key)
         return id
     }
+
+    /// A friendly name for a device id, from its platform prefix ("ipad-1a2b3c4d" gives "iPad").
+    public static func displayName(for deviceId: String) -> String {
+        let prefix = deviceId.split(separator: "-").first.map { $0.lowercased() } ?? ""
+        switch prefix {
+        case "ipad": return "iPad"
+        case "iphone": return "iPhone"
+        case "mac": return "Mac"
+        case "win", "windows": return "Windows"
+        default: return "another device"
+        }
+    }
 }

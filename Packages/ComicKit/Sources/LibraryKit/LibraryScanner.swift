@@ -36,7 +36,7 @@ public enum LibraryScanner {
         let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
         var books: [ScannedBook] = []
         walk(directory: root, rootPath: rootPath, into: &books)
-        return books.sorted { $0.relativePath.naturalLess(than: $1.relativePath) }
+        return books.naturallySorted(by: \.relativePath)
     }
 
     private static func walk(directory: URL, rootPath: String, into books: inout [ScannedBook]) {
@@ -62,11 +62,13 @@ public enum LibraryScanner {
             if name.hasPrefix("."), name.hasSuffix(".icloud") {
                 let realName = String(name.dropFirst().dropLast(".icloud".count))
                 let realURL = directory.appendingPathComponent(realName)
-                if let format = BookFormat.from(pathExtension: (realName as NSString).pathExtension) {
+                if let format = BookFormat.enabled(pathExtension: (realName as NSString).pathExtension) {
                     books.append(ScannedBook(
                         url: realURL, relativePath: join(directoryRelative, realName), format: format,
                         size: placeholderSize(item), modified: values?.contentModificationDate, isDownloaded: false
                     ))
+                } else if BookFormat.from(pathExtension: (realName as NSString).pathExtension) != nil {
+                    // A format that is switched off: leave it out.
                 } else if PageFilter.isPage(path: realName) {
                     imageCount += 1
                     hasCloudOnlyImages = true
@@ -74,6 +76,8 @@ public enum LibraryScanner {
                 continue
             }
             if name.hasPrefix(".") { continue }
+            // Formats switched off (ePub for now) are left out, as if the file were not there.
+            if let format = BookFormat.from(pathExtension: item.pathExtension), !format.isEnabled { continue }
 
             if let format = BookFormat.from(pathExtension: item.pathExtension) {
                 books.append(ScannedBook(

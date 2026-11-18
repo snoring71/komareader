@@ -8,6 +8,29 @@ import Testing
         #expect(names.naturallySorted() == ["ARIA 第01巻", "ARIA 第02巻", "ARIA 第10巻", "page1.jpg", "Page2.jpg", "page10.jpg"])
     }
 
+    /// Punctuation before digits before letters, as in Explorer, Finder and other readers.
+    @Test func naturalSortPutsPunctuationFirst() {
+        let pages = ["01.jpg", "a.jpg", "_02.jpg", "10.jpg", "_01.jpg", "2.jpg", "-cover.jpg", "０3.jpg"]
+        #expect(pages.naturallySorted() == ["-cover.jpg", "_01.jpg", "_02.jpg", "01.jpg", "2.jpg", "０3.jpg", "10.jpg", "a.jpg"])
+        #expect("_01.jpg".naturalLess(than: "01.jpg"))
+        #expect(!"01.jpg".naturalLess(than: "_01.jpg"))
+        #expect("Page 9".naturalLess(than: "page 10"))
+        #expect("file99999999999999999999998".naturalLess(than: "file99999999999999999999999"))
+        // Names that differ only in case or leading zeros still have one fixed order.
+        #expect(["b", "001", "B", "1", "01"].naturallySorted() == ["001", "01", "1", "B", "b"])
+    }
+
+    /// Katakana and hiragana titles share one kana order, so each index letter is one run.
+    @Test func naturalSortMixesKatakanaWithHiragana() {
+        let titles = ["カードキャプター", "あずまんが", "かぐや様", "アキラ", "さくら", "ｱﾘｱ", "Zoo"]
+        #expect(titles.naturallySorted() == ["Zoo", "アキラ", "あずまんが", "ｱﾘｱ", "かぐや様", "カードキャプター", "さくら"])
+    }
+
+    @Test func pageOrderGoesFolderByFolder() {
+        let paths = ["a b/1.jpg", "a/2.jpg", "a/_1.jpg", "cover.jpg", "a/10.jpg", "ch10/1.jpg", "ch2/1.jpg"]
+        #expect(PageOrder.sorted(paths) == ["a/_1.jpg", "a/2.jpg", "a/10.jpg", "a b/1.jpg", "ch2/1.jpg", "ch10/1.jpg", "cover.jpg"])
+    }
+
     @Test func pageFilter() {
         #expect(PageFilter.isPage(path: "Vol 1/001.JPG"))
         #expect(PageFilter.isPage(path: "a.webp"))
@@ -64,9 +87,73 @@ import Testing
         #expect(SpreadLayout.spreadIndex(containing: 7, in: layout) == 4)
     }
 
+    @Test func splitPagesReadInOrder() {
+        let wide: Set<Int> = [3]
+        let ltr = SpreadLayout.displayPages(pageCount: 5, rightToLeft: false) { wide.contains($0) }
+        #expect(ltr.map(\.description) == ["0", "1", "2", "3L", "3R", "4"])
+        let rtl = SpreadLayout.displayPages(pageCount: 5, rightToLeft: true) { wide.contains($0) }
+        #expect(rtl.map(\.description) == ["0", "1", "2", "3R", "3L", "4"])
+
+        // One page per screen: every half is its own screen.
+        #expect(SpreadLayout.spreads(ltr, twoPage: false) { wide.contains($0) }.count == 6)
+        // Two pages: the halves of a split image stay together; page 2 stands alone before them.
+        let two = SpreadLayout.spreads(ltr, twoPage: true) { wide.contains($0) }
+        #expect(two.map { $0.map(\.description) } == [["0"], ["1", "2"], ["3L", "3R"], ["4"]])
+        let shifted = SpreadLayout.spreads(SpreadLayout.displayPages(pageCount: 6, rightToLeft: false) { $0 == 2 }, twoPage: true) { $0 == 2 }
+        #expect(shifted.map { $0.map(\.description) } == [["0"], ["1"], ["2L", "2R"], ["3", "4"], ["5"]])
+        #expect(SpreadLayout.spreadIndex(containing: 3, in: two) == 2)
+        #expect(SpreadLayout.spreadIndex(containing: 4, in: two) == 3)
+    }
+
+    @Test func pageSidesFollowTheTwoPageLayout() {
+        // Pairs [1,2] [3,4], wide 5 alone, then [6,7]; the cover is a right page.
+        let ltr = SpreadLayout.pageSides(pageCount: 8, rightToLeft: false) { $0 == 5 }
+        #expect(ltr == [.right, .left, .right, .left, .right, .both, .left, .right])
+        let rtl = SpreadLayout.pageSides(pageCount: 3, rightToLeft: true) { _ in false }
+        #expect(rtl == [.left, .right, .left])
+    }
+
+    @Test func readerOptionsRoundTripAndFallBack() throws {
+        var record = BookRecord(bookId: "R", file: .init(path: "r.cbz", size: 1, modified: nil))
+        record.readerSettings = .init(direction: .rightToLeft, updatedAt: Date(timeIntervalSince1970: 40))
+        #expect(record.effectiveReaderOptions.direction == .rightToLeft)
+        #expect(record.effectiveReaderOptions.fit == nil)
+
+        var options = BookRecord.ReaderOptions(updatedAt: Date(timeIntervalSince1970: 50))
+        options.fit = .width
+        options.background = .fromRGB(red: 1, green: 0.5, blue: 0)
+        options.crop = .init(left: [0.06, 0.02, 0.9, 0.96], right: BookRecord.ReaderOptions.PageCrop.mirror([0.06, 0.02, 0.9, 0.96]), link: .mirrored)
+        options.contrast = 0.25
+        record.readerOptions = options
+        // Once the book has its own options, they win (here: direction back to the default).
+        #expect(record.effectiveReaderOptions.direction == nil)
+
+        let data = try RecordCoding.encoder().encode(record)
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(json.contains("\"background\" : \"#FF8000\""))
+        #expect(!json.contains("portraitLayout"))
+        #expect(json.contains("\"contrast\" : 0.25"))
+        #expect(!json.contains("paperGrain"))
+        let decoded = try RecordCoding.decoder().decode(BookRecord.self, from: data)
+        #expect(decoded == record)
+        let crop = try #require(decoded.readerOptions?.crop)
+        #expect(crop.rect(for: .left) == [0.06, 0.02, 0.9, 0.96])
+        #expect(abs(crop.rect(for: .right)[0] - 0.04) < 1e-9)
+        // A whole spread keeps the outer margins trimmed and the middle intact.
+        let spread = crop.rect(for: .both)
+        #expect(abs(spread[0] - 0.03) < 1e-9 && abs(spread[0] + spread[2] - 0.97) < 1e-9)
+        #expect(BookRecord.ReaderOptions.Background(code: "dynamic") == .dynamic)
+        #expect(BookRecord.ReaderOptions.Background(code: "plaid") == .black)
+
+        var newer = record
+        newer.readerOptions?.fit = .height
+        newer.readerOptions?.updatedAt = Date(timeIntervalSince1970: 60)
+        #expect(record.merged(with: newer).readerOptions?.fit == .height)
+    }
+
     @Test func recordStoreMergesWithDisk() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let store = try RecordStore.open(dataRoot: root, folderName: "Booklover")
+        let store = try RecordStore.open(dataRoot: root, folderName: "Comics")
         var first = BookRecord(bookId: "B", file: .init(path: "b.cbz", size: 1, modified: nil))
         first.progress["ipad"] = .init(page: 1, pageCount: 5, finished: false, updatedAt: Date(timeIntervalSince1970: 10))
         try store.write(first)
@@ -78,13 +165,13 @@ import Testing
         #expect(Set(read.progress.keys) == ["ipad", "win"])
 
         // Same folder name finds the same library.
-        let reopened = try RecordStore.open(dataRoot: root, folderName: "Booklover")
+        let reopened = try RecordStore.open(dataRoot: root, folderName: "Comics")
         #expect(reopened.info.libraryId == store.info.libraryId)
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("SCHEMA.md").path))
     }
 
     @Test func stableIdsMatchTheDocumentedRecipe() {
-        #expect(StableID.library(folderName: "Booklover") == "352A9655-843C-82E4-BDCC-9A7C0DA6E14A")
+        #expect(StableID.library(folderName: "Comics") == "20E7415A-EB37-81FE-87FB-C83F1AF87C00")
         #expect(StableID.book(path: "Saga/Saga 001.cbz") == "D0E63AF5-7548-8B27-8544-DCCDDEB4C6FA")
         // Decomposed and precomposed spellings of the same name give the same id.
         #expect(StableID.book(path: "Cafe\u{301}.cbz") == StableID.book(path: "Caf\u{E9}.cbz"))
@@ -96,16 +183,16 @@ import Testing
     }
 
     @Test func devicesThatPickTheSameFolderShareALibraryId() throws {
-        let a = try RecordStore.open(dataRoot: tempRoot(), folderName: "Booklover")
-        let b = try RecordStore.open(dataRoot: tempRoot(), folderName: "Booklover")
+        let a = try RecordStore.open(dataRoot: tempRoot(), folderName: "Comics")
+        let b = try RecordStore.open(dataRoot: tempRoot(), folderName: "Comics")
         #expect(a.info.libraryId == b.info.libraryId)
-        #expect(a.info.libraryId == StableID.library(folderName: "Booklover"))
+        #expect(a.info.libraryId == StableID.library(folderName: "Comics"))
     }
 
     @Test func duplicateLibrariesAreFoldedTogether() throws {
         let root = tempRoot()
         // An older library made with a random id, as builds before stable ids did.
-        let oldInfo = LibraryInfo(libraryId: "0-OLD", folderName: "Booklover")
+        let oldInfo = LibraryInfo(libraryId: "0-OLD", folderName: "Comics")
         let old = try RecordStore(root: root.appendingPathComponent("Libraries/0-OLD"), info: oldInfo)
         try RecordStore.coordinatedWrite(try RecordCoding.encoder().encode(oldInfo), to: old.root.appendingPathComponent("library.json"))
         var record = BookRecord(bookId: "B", file: .init(path: "b.cbz", size: 1, modified: nil))
@@ -114,18 +201,18 @@ import Testing
         try old.writeCover(Data([1]), bookId: "B")
 
         // A second library for the same folder, made by another device.
-        let newInfo = LibraryInfo(libraryId: StableID.library(folderName: "Booklover"), folderName: "Booklover")
+        let newInfo = LibraryInfo(libraryId: StableID.library(folderName: "Comics"), folderName: "Comics")
         let other = try RecordStore(root: root.appendingPathComponent("Libraries/\(newInfo.libraryId)"), info: newInfo)
         try RecordStore.coordinatedWrite(try RecordCoding.encoder().encode(newInfo), to: other.root.appendingPathComponent("library.json"))
 
-        let store = try RecordStore.open(dataRoot: root, folderName: "Booklover")
+        let store = try RecordStore.open(dataRoot: root, folderName: "Comics")
         #expect(store.info.libraryId == newInfo.libraryId)
         #expect(store.read(bookId: "B")?.progress["ipad"]?.page == 3)
         #expect(store.existingCoverURL(bookId: "B") != nil)
     }
 
     @Test func recordsForTheSameFileAreFoldedTogether() throws {
-        let store = try RecordStore.open(dataRoot: tempRoot(), folderName: "Booklover")
+        let store = try RecordStore.open(dataRoot: tempRoot(), folderName: "Comics")
         let path = "Saga/Saga 001.cbz"
         var mine = BookRecord(bookId: "ZZZ", file: .init(path: path, size: 10, modified: nil))
         mine.progress["ipad"] = .init(page: 4, pageCount: 20, finished: false)
@@ -163,5 +250,221 @@ import Testing
         try RecordStore.importLibraries(from: local, into: cloud)
         let merged = try #require(cloudStore.read(bookId: "B"))
         #expect(Set(merged.progress.keys) == ["ipad", "win"])
+    }
+
+    @Test func epubIsSwitchedOff() {
+        #expect(BookFormat.from(pathExtension: "epub") == .epub)
+        #expect(BookFormat.enabled(pathExtension: "epub") == nil)
+        #expect(BookFormat.enabled(pathExtension: "cbz") == .zip)
+        #expect(!BookFormat.epub.isEnabled)
+    }
+
+    @Test func readsComicInfo() throws {
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <ComicInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+          <Title>The Long Way</Title>
+          <Series>Saga</Series>
+          <Writer>Brian K. Vaughan</Writer>
+          <Penciller>Fiona Staples</Penciller>
+          <Publisher> Image Comics </Publisher>
+          <Pages><Page Image="0" Type="FrontCover"/></Pages>
+        </ComicInfo>
+        """
+        let info = try #require(FileMetadata.comicInfo(Data(xml.utf8)))
+        #expect(info.title == "The Long Way")
+        #expect(info.author == "Brian K. Vaughan")
+        #expect(info.publisher == "Image Comics")
+
+        // No writer: the penciller is the author. Empty fields count as missing.
+        let art = try #require(FileMetadata.comicInfo(Data("<ComicInfo><Writer></Writer><Penciller>Kozue Amano</Penciller></ComicInfo>".utf8)))
+        #expect(art.author == "Kozue Amano")
+        #expect(art.title == nil && art.publisher == nil)
+
+        #expect(FileMetadata.comicInfo(Data("<html><Title>x</Title></html>".utf8)) == nil)
+        #expect(FileMetadata.comicInfo(Data("not xml".utf8)) == nil)
+        #expect(FileMetadata.isComicInfo(path: "Vol 1/comicinfo.XML"))
+        #expect(!FileMetadata.isComicInfo(path: "__MACOSX/Vol 1/ComicInfo.xml"))
+    }
+
+    @Test func removedRecordsStayRemovedUntilUsedAgain() throws {
+        var record = BookRecord(bookId: "R", file: .init(path: "r.cbz", size: 1, modified: nil))
+        #expect(!record.isRemoved)
+        record.removed = .init(updatedAt: Date(timeIntervalSince1970: 100))
+        #expect(record.isRemoved)
+
+        // An older copy with progress merged in (an iCloud conflict) does not bring it back.
+        var old = BookRecord(bookId: "R", file: record.file)
+        old.progress["ipad"] = .init(page: 3, pageCount: 10, finished: false, updatedAt: Date(timeIntervalSince1970: 50))
+        old.flags = .init(favorite: true, updatedAt: Date(timeIntervalSince1970: 60))
+        let merged = record.merged(with: old)
+        #expect(merged.isRemoved)
+        #expect(old.merged(with: record).isRemoved)
+
+        // Reading it later does.
+        var later = merged
+        later.progress["win"] = .init(page: 1, pageCount: 10, finished: false, updatedAt: Date(timeIntervalSince1970: 200))
+        #expect(!later.isRemoved)
+
+        let decoded = try RecordCoding.decoder().decode(BookRecord.self, from: RecordCoding.encoder().encode(record))
+        #expect(decoded == record)
+    }
+
+    @Test func markRemovedReplacesTheRecordAndDeletesCovers() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = try RecordStore.open(dataRoot: root, folderName: "Booklover")
+        var record = BookRecord(bookId: "M", file: .init(path: "m.cbz", size: 1, modified: nil))
+        record.progress["ipad"] = .init(page: 2, pageCount: 9, finished: false, updatedAt: Date())
+        try store.write(record)
+        try store.writeCover(Data([1, 2, 3]), bookId: "M")
+        try store.writeCover(Data([1, 2, 3]), bookId: "M", custom: true)
+
+        try store.markRemoved(bookId: "M", file: record.file)
+        let read = try #require(store.read(bookId: "M"))
+        #expect(read.isRemoved)
+        #expect(read.progress.isEmpty)
+        #expect(read.file.path == "m.cbz")
+        #expect(store.existingCoverURL(bookId: "M") == nil)
+    }
+}
+
+@Suite struct SeriesNameTests {
+    @Test(arguments: [
+        ("ARIA 第02巻", "ARIA", "2"),
+        ("ARIA 第10巻", "ARIA", "10"),
+        ("よつばと! 15巻", "よつばと!", "15"),
+        ("Starfall 3", "Starfall", "3"),
+        ("Saga 001 (2012) (Digital) [Empire]", "Saga", "1"),
+        ("Saga - 054", "Saga", "54"),
+        ("Berserk Vol. 41", "Berserk", "41"),
+        ("Berserk v02", "Berserk", "2"),
+        ("One_Piece_Volume_100", "One Piece", "100"),
+        ("Batman #12", "Batman", "12"),
+        ("20th Century Boys 03", "20th Century Boys", "3"),
+        ("Chainsaw Man ch. 97.5", "Chainsaw Man", "97.5"),
+        ("ＡＲＩＡ 第０２巻", "ARIA", "2"),
+    ])
+    func parsesSeriesAndNumber(title: String, series: String, number: String) {
+        #expect(SeriesName.parse(title) == .init(series: series, number: number))
+    }
+
+    @Test func titlesWithoutANumberAreTheirOwnSeries() {
+        #expect(SeriesName.parse("Maus") == .init(series: "Maus", number: nil))
+        #expect(SeriesName.parse("1984") == .init(series: "1984", number: nil))
+        #expect(SeriesName.parse("Akira (Colour) [Kodansha]") == .init(series: "Akira", number: nil))
+    }
+}
+
+@Suite struct FlagsAndHandOffTests {
+    @Test func flagsMergeByDateAndRoundTrip() throws {
+        var a = BookRecord(bookId: "A", file: .init(path: "x.cbz", size: 1, modified: nil))
+        var b = a
+        a.flags = .init(favorite: true, bookmarked: false, updatedAt: Date(timeIntervalSince1970: 10))
+        b.flags = .init(favorite: false, bookmarked: true, updatedAt: Date(timeIntervalSince1970: 20))
+        #expect(a.merged(with: b).flags == b.flags)
+        #expect(b.merged(with: a).flags == b.flags)
+        let data = try RecordCoding.encoder().encode(a)
+        #expect(String(decoding: data, as: UTF8.self).contains("\"favorite\" : true"))
+        #expect(try RecordCoding.decoder().decode(BookRecord.self, from: data) == a)
+    }
+
+    @Test func handOffOffersTheFurthestPositionFromAnotherDevice() {
+        var record = BookRecord(bookId: "A", file: .init(path: "x.cbz", size: 1, modified: nil))
+        record.progress["ipad-1"] = .init(page: 13, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 10))
+        // Only this device: nothing to offer.
+        #expect(record.handOff(for: "ipad-1", openingAt: 3) == nil)
+
+        record.progress["mac-2"] = .init(page: 9, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 5))
+        record.progress["iphone-3"] = .init(page: 3, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 30))
+        // Opening at the newest position (the iPhone's page 3), the Mac is further ahead.
+        #expect(record.handOff(for: "ipad-1", openingAt: 3)?.device == "mac-2")
+        #expect(record.handOff(for: "ipad-1", openingAt: 3)?.progress.page == 9)
+        // Already at or past every other device: nothing to offer.
+        #expect(record.handOff(for: "ipad-1", openingAt: 9) == nil)
+        // Finished elsewhere does not count as ahead.
+        record.progress["mac-2"]?.finished = true
+        #expect(record.handOff(for: "ipad-1", openingAt: 3) == nil)
+        #expect(DeviceIdentity.displayName(for: "mac-2") == "Mac")
+        #expect(DeviceIdentity.displayName(for: "ipad-1a2b") == "iPad")
+    }
+}
+
+@Suite struct TagListTests {
+    @Test func tagsMergeOneByOneAndDeletesStick() throws {
+        var a = TagList()
+        a.add("Sci-Fi", at: Date(timeIntervalSince1970: 10))
+        a.add("Old", at: Date(timeIntervalSince1970: 10))
+        var b = a
+        b.remove("old", at: Date(timeIntervalSince1970: 20))
+        a.add("Manga", at: Date(timeIntervalSince1970: 30))
+        let merged = a.merged(with: b)
+        #expect(Set(merged.names) == ["Sci-Fi", "Manga"])
+        #expect(Set(b.merged(with: a).names) == ["Sci-Fi", "Manga"])
+        // An older copy cannot bring a deleted tag back, and keep() does not either.
+        var c = merged
+        c.keep("OLD")
+        #expect(!c.contains("old"))
+        c.add("Old", at: Date(timeIntervalSince1970: 40))
+        #expect(c.contains("old"))
+    }
+
+    @Test func tagListIsSavedNextToTheRecords() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = try RecordStore(root: root, info: LibraryInfo(folderName: "Lib"))
+        #expect(store.readTagList().names.isEmpty)
+        try store.updateTagList { $0.add("Sci-Fi") }
+        try store.updateTagList { $0.add("Empty") }
+        #expect(Set(store.readTagList().names) == ["Sci-Fi", "Empty"])
+    }
+
+    // MARK: Progress reset (#52) and page bookmarks (#54)
+
+    @Test func resetHidesOlderProgressFromEveryDevice() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        var record = BookRecord(bookId: "b", file: .init(path: "b.cbz", size: 1, modified: nil))
+        record.progress["ipad"] = .init(page: 5, pageCount: 20, finished: false, updatedAt: t0)
+        record.progress["mac"] = .init(page: 9, pageCount: 20, finished: false, updatedAt: t0.addingTimeInterval(10))
+        let older = record
+
+        var reset = record
+        reset.resetProgress(at: t0.addingTimeInterval(20))
+        #expect(reset.progress.isEmpty)
+        #expect(reset.latestProgress == nil)
+        #expect(reset.wasReset(after: t0.addingTimeInterval(10)))
+        #expect(!reset.wasReset(after: t0.addingTimeInterval(30)))
+
+        // Another device's older copy still holds the old positions: they stay ignored.
+        for merged in [reset.merged(with: older), older.merged(with: reset)] {
+            #expect(merged.progressReset?.updatedAt == t0.addingTimeInterval(20))
+            #expect(merged.latestProgress == nil)
+            #expect(merged.progress.isEmpty)
+            #expect(merged.handOff(for: "ipad", openingAt: 0) == nil)
+        }
+
+        // Reading again after the reset counts.
+        var readAgain = reset
+        readAgain.progress["mac"] = .init(page: 2, pageCount: 20, finished: false, updatedAt: t0.addingTimeInterval(30))
+        let merged = readAgain.merged(with: older)
+        #expect(merged.latestProgress?.progress.page == 2)
+        #expect(!merged.wasReset(after: nil))
+    }
+
+    @Test func pageBookmarksSortAndMergeNewestWins() throws {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        #expect(BookRecord.PageBookmarks(pages: [9, 2, 9, -1, 4], updatedAt: t0).pages == [2, 4, 9])
+        var a = BookRecord(bookId: "b", file: .init(path: "b.cbz", size: 1, modified: nil))
+        a.pageBookmarks = .init(pages: [1, 3], updatedAt: t0)
+        var b = a
+        b.pageBookmarks = .init(pages: [7], updatedAt: t0.addingTimeInterval(5))
+        #expect(a.merged(with: b).pageBookmarks?.pages == [7])
+        #expect(b.merged(with: a).pageBookmarks?.pages == [7])
+
+        // Round trip through the file format; the whole-book mark is untouched.
+        a.flags = .init(favorite: false, bookmarked: true, updatedAt: t0)
+        a.resetProgress(at: t0)
+        let data = try RecordCoding.encoder().encode(a)
+        let decoded = try RecordCoding.decoder().decode(BookRecord.self, from: data)
+        #expect(decoded == a)
+        #expect(decoded.flags?.bookmarked == true)
     }
 }

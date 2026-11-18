@@ -22,6 +22,21 @@ public enum BookFormat: String, Codable, Sendable, CaseIterable {
         }
     }
 
+    /// ePub support is switched off for now (issue #38): ePubs are left out of the library,
+    /// and ones already indexed are dropped on the next scan. Their synced records are kept.
+    /// Set to true to bring them back.
+    public static let epubEnabled = false
+
+    /// Whether books in this format are listed in the library and can be opened.
+    public var isEnabled: Bool {
+        self != .epub || Self.epubEnabled
+    }
+
+    /// The format for a file extension, if it is one the library lists.
+    public static func enabled(pathExtension ext: String) -> BookFormat? {
+        from(pathExtension: ext).flatMap { $0.isEnabled ? $0 : nil }
+    }
+
     public var displayName: String {
         switch self {
         case .zip: return "CBZ"

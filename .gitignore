@@ -2,6 +2,7 @@
 *.xcodeproj
 App/Info.plist
 App/ComicReader.entitlements
+ThumbnailExtension/Info.plist
 # Build output
 build/
 DerivedData/

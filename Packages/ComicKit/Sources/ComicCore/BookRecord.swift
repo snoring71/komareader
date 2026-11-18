@@ -11,9 +11,22 @@ public struct BookRecord: Codable, Equatable, Sendable {
     public var metadata: Metadata?
     public var tags: Tags?
     public var cover: CoverEdit?
+    public var flags: Flags?
+    /// Reading direction only, as written by version 0.1. Kept up to date for older versions;
+    /// `readerOptions` takes over once it is present.
     public var readerSettings: ReaderSettings?
+    /// The book's own reader settings (direction, layout, fit, background, crop and so on).
+    public var readerOptions: ReaderOptions?
     /// Reading position per device id. Newest entry wins when opening a book.
     public var progress: [String: Progress]
+    /// Set when the book was marked unread. Progress entries from before it are ignored on
+    /// every device.
+    public var progressReset: ProgressReset?
+    /// The pages the user bookmarked in the reader.
+    public var pageBookmarks: PageBookmarks?
+    /// Set when the user deletes the book from the library after its file went missing.
+    /// See `isRemoved`.
+    public var removed: Removed?
 
     public init(bookId: String, file: FileInfo) {
         self.schema = Self.currentSchema
@@ -56,6 +69,24 @@ public struct BookRecord: Codable, Equatable, Sendable {
         }
     }
 
+    /// The book was deleted from the library (only offered once its file is missing).
+    public struct Removed: Codable, Equatable, Sendable {
+        public var updatedAt: Date
+        public init(updatedAt: Date = Date()) { self.updatedAt = updatedAt }
+    }
+
+    /// True while the deletion is the newest thing that happened to the book. Anything set
+    /// later (reading it, a Favorite) means the book came back, so it counts as not removed.
+    public var isRemoved: Bool {
+        guard let removed else { return false }
+        let others: [Date?] = [
+            metadata?.updatedAt, tags?.updatedAt, cover?.updatedAt, flags?.updatedAt,
+            readerSettings?.updatedAt, readerOptions?.updatedAt, latestProgress?.progress.updatedAt,
+            progressReset?.updatedAt, pageBookmarks?.updatedAt,
+        ]
+        return others.allSatisfy { ($0 ?? .distantPast) <= removed.updatedAt }
+    }
+
     public struct Tags: Codable, Equatable, Sendable {
         public var value: [String]
         public var updatedAt: Date
@@ -76,6 +107,38 @@ public struct BookRecord: Codable, Equatable, Sendable {
             self.page = page
             self.crop = crop
             self.rotation = rotation
+            self.updatedAt = updatedAt
+        }
+
+        /// The first page, uncropped and upright: the same as having no edit.
+        public var isDefault: Bool { page == 0 && rotation % 360 == 0 && crop == [0, 0, 1, 1] }
+    }
+
+    /// The user's own marks on a book: Favorite and Bookmarked.
+    public struct Flags: Codable, Equatable, Sendable {
+        public var favorite: Bool
+        public var bookmarked: Bool
+        public var updatedAt: Date
+        public init(favorite: Bool = false, bookmarked: Bool = false, updatedAt: Date = Date()) {
+            self.favorite = favorite
+            self.bookmarked = bookmarked
+            self.updatedAt = updatedAt
+        }
+    }
+
+    /// The moment reading progress was reset: see `progressReset`.
+    public struct ProgressReset: Codable, Equatable, Sendable {
+        public var updatedAt: Date
+        public init(updatedAt: Date = Date()) { self.updatedAt = updatedAt }
+    }
+
+    /// Bookmarked pages: zero-based page indexes, sorted, no duplicates. The whole list is
+    /// one group, so the newest list wins.
+    public struct PageBookmarks: Codable, Equatable, Sendable {
+        public var pages: [Int]
+        public var updatedAt: Date
+        public init(pages: [Int], updatedAt: Date = Date()) {
+            self.pages = Array(Set(pages.filter { $0 >= 0 })).sorted()
             self.updatedAt = updatedAt
         }
     }
@@ -107,9 +170,42 @@ public struct BookRecord: Codable, Equatable, Sendable {
         }
     }
 
-    /// The most recently updated reading position across all devices.
+    /// Progress entries that count: those saved after the last reset, if there was one.
+    public var currentProgress: [String: Progress] {
+        guard let reset = progressReset?.updatedAt else { return progress }
+        return progress.filter { $0.value.updatedAt > reset }
+    }
+
+    /// The most recently updated reading position across all devices (since the last reset).
     public var latestProgress: (device: String, progress: Progress)? {
-        progress.max { $0.value.updatedAt < $1.value.updatedAt }.map { ($0.key, $0.value) }
+        currentProgress.max { $0.value.updatedAt < $1.value.updatedAt }.map { ($0.key, $0.value) }
+    }
+
+    /// True when the last thing that happened to the book's progress was a reset, newer than
+    /// `date` (the time this device last saw the book read). The book should then show as
+    /// never opened.
+    public func wasReset(after date: Date?) -> Bool {
+        guard let reset = progressReset?.updatedAt, latestProgress == nil else { return false }
+        return reset > (date ?? .distantPast)
+    }
+
+    /// Resets reading progress on every device: entries are dropped from this copy, and the
+    /// reset date makes copies of them that come back in a merge count for nothing.
+    public mutating func resetProgress(at date: Date = Date()) {
+        progressReset = ProgressReset(updatedAt: date)
+        progress = [:]
+    }
+
+    /// Another device's position worth offering when this device opens the book at `page`:
+    /// the furthest unfinished position any other device has reached beyond `page`. The book
+    /// opens at the newest position (`latestProgress`); this catches the case where you read
+    /// further on one device and later glanced at an earlier page on another.
+    public func handOff(for deviceId: String, openingAt page: Int) -> (device: String, progress: Progress)? {
+        let ahead = currentProgress.filter { $0.key != deviceId && !$0.value.finished && $0.value.page > page }
+        guard let best = ahead.max(by: { a, b in
+            a.value.page != b.value.page ? a.value.page < b.value.page : a.value.updatedAt < b.value.updatedAt
+        }) else { return nil }
+        return (best.key, best.value)
     }
 }
 
@@ -125,11 +221,20 @@ public extension BookRecord {
         result.metadata = Self.newer(metadata, other.metadata) { $0.updatedAt }
         result.tags = Self.newer(tags, other.tags) { $0.updatedAt }
         result.cover = Self.newer(cover, other.cover) { $0.updatedAt }
+        result.flags = Self.newer(flags, other.flags) { $0.updatedAt }
         result.readerSettings = Self.newer(readerSettings, other.readerSettings) { $0.updatedAt }
+        result.readerOptions = Self.newer(readerOptions, other.readerOptions) { $0.updatedAt }
+        result.progressReset = Self.newer(progressReset, other.progressReset) { $0.updatedAt }
+        result.pageBookmarks = Self.newer(pageBookmarks, other.pageBookmarks) { $0.updatedAt }
+        result.removed = Self.newer(removed, other.removed) { $0.updatedAt }
         if result.file.fingerprint == nil { result.file.fingerprint = other.file.fingerprint }
         for (device, theirs) in other.progress {
             if let mine = result.progress[device], mine.updatedAt >= theirs.updatedAt { continue }
             result.progress[device] = theirs
+        }
+        // Entries from before the reset are dead weight once it is known.
+        if let reset = result.progressReset?.updatedAt {
+            result.progress = result.progress.filter { $0.value.updatedAt > reset }
         }
         return result
     }
