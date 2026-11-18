@@ -33,6 +33,12 @@ public enum ImageDecoder {
         return image
     }
 
+    /// True if the bytes decode to a picture. A page cut short at the end usually still does
+    /// (ImageIO fills the missing rows), so this decides whether a partly read page is worth keeping.
+    public static func canDecode(data: Data) -> Bool {
+        (try? downsample(data: data, maxPixelSize: 64)) != nil
+    }
+
     /// Pixel size after EXIF orientation, read from the header without decoding.
     public static func pixelSize(url: URL) -> CGSize? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),

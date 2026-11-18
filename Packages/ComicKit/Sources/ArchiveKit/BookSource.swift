@@ -39,16 +39,30 @@ public enum BookSourceFactory {
                 guard let first = source.pageURLs.first else { throw ArchiveError(message: "No pages") }
                 return try ImageDecoder.downsample(url: first, maxPixelSize: maxPixelSize)
             case .zip, .rar, .sevenZip, .tar, .epub:
-                // Find the first page by natural order, then read just that entry.
-                guard let firstPath = try LibArchive.pagePaths(in: url).first else { throw ArchiveError(message: "No pages") }
-                var data: Data?
-                try LibArchive.forEachEntry(in: url) { path, reader in
-                    guard path == firstPath else { return .next }
-                    data = try reader.readAll()
-                    return .stop
+                // Find the first page by natural order, then read just that entry. If it cannot be
+                // read at all, the next readable page makes the cover rather than leaving none.
+                let paths = try LibArchive.pagePaths(in: url)
+                guard !paths.isEmpty else { throw ArchiveError(message: "No pages") }
+                var lastError: Error = ArchiveError(message: "No pages")
+                for wanted in paths.prefix(3) {
+                    var data: Data?
+                    do {
+                        try LibArchive.forEachEntry(in: url) { path, reader in
+                            guard path == wanted else { return .next }
+                            let read = reader.readAvailable()
+                            // A page cut short near the end still makes a fine cover.
+                            if read.error == nil || !read.data.isEmpty { data = read.data }
+                            if let error = read.error { lastError = error }
+                            return .stop
+                        }
+                    } catch {
+                        lastError = error
+                    }
+                    if let data, let image = try? ImageDecoder.downsample(data: data, maxPixelSize: maxPixelSize) {
+                        return image
+                    }
                 }
-                guard let data else { throw ArchiveError(message: "No pages") }
-                return try ImageDecoder.downsample(data: data, maxPixelSize: maxPixelSize)
+                throw lastError
             }
         }.value
     }
