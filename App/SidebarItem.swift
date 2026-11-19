@@ -33,6 +33,14 @@ enum SidebarItem: Hashable {
         }
     }
 
+    /// Folders and series can be pinned to the sidebar (#72).
+    var isPinnable: Bool {
+        switch self {
+        case .folder, .seriesNamed: return true
+        default: return false
+        }
+    }
+
     private static let plain: [SidebarItem] = [.all, .continueReading, .series, .folders, .downloaded, .unread, .reading, .read, .favorites, .bookmarked, .missing]
 
     var title: String {

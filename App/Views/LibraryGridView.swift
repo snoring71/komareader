@@ -122,7 +122,7 @@ struct LibraryGridView: View {
                             LazyHStack(alignment: .top, spacing: 16) {
                                 ForEach(continueReading.prefix(12)) { book in
                                     // Selectable here too, so Select mode leaves the page where it is.
-                                    BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }) { toggle(book.id) }
+                                    BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }, place: "continue") { toggle(book.id) }
                                         .frame(width: size)
                                         // Always the plain look, so the row keeps its height and
                                         // the page does not jump when Cover Info is turned on or off.
@@ -190,6 +190,8 @@ struct LibraryGridView: View {
                 .padding(.top, continueReading.isEmpty ? 16 : 10)
                 .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index
               }
+              // Long-press menus for every tile on the page, Continue Reading included (#71).
+              .liftMenuHost()
             }
             .environment(\.showTitles, showTitles)
             .environment(\.libraryIconSize, LibraryIconSize.forCover(width: size))
@@ -520,20 +522,30 @@ struct SeriesGridView: View {
     @AppStorage("sortOrder") private var sort: LibraryGridView.SortOrder = .title
     @AppStorage("coverSize") private var coverSize: Double = 150
     @AppStorage(TitleGrid.series.key) private var showTitles = true
+    @Environment(\.coverStyle) private var style
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        // Read here: the menus use it later, after the grid has been drawn.
+        let model = model
         let groups = model.catalog.series.filter { search.isEmpty || $0.name.localizedStandardContains(search) }
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: coverSize, maximum: coverSize * 1.35), spacing: 20, alignment: .top)], spacing: 24) {
                 ForEach(groups) { group in
-                    NavigationLink(value: SidebarItem.seriesNamed(group.name)) {
-                        SeriesCell(group: group)
+                    let item = SidebarItem.seriesNamed(group.name)
+                    let liftID = "series:\(group.name)"
+                    NavigationLink(value: item) {
+                        SeriesCell(group: group, liftID: liftID)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("series-\(group.name)")
+                    // Pin to Sidebar, as for folders (#72), with the same lift as books (#71).
+                    .liftMenu(id: liftID, menu: { LiftMenuItems.pin(item, model: model) },
+                              preview: seriesPreview(group))
                 }
             }
             .padding()
+            .liftMenuHost()
         }
         .environment(\.showTitles, showTitles)
         .overlay {
@@ -550,24 +562,36 @@ struct SeriesGridView: View {
         .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: false, showTitles: $showTitles) }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
+
+    /// Draws a series' stack for the lifted preview, with the grid's settings.
+    private func seriesPreview(_ group: SeriesGroup) -> @MainActor () -> AnyView {
+        let model = model
+        var style = style
+        style.shadowStrength = 0
+        let colorScheme = colorScheme
+        return {
+            AnyView(
+                SeriesStack(group: group, liftID: nil)
+                    .environment(model)
+                    .environment(\.coverStyle, style)
+                    .environment(\.colorScheme, colorScheme)
+                    .environment(\.liftRendering, true)
+            )
+        }
+    }
 }
 
 struct SeriesCell: View {
     @Environment(AppModel.self) private var model
     @Environment(\.showTitles) private var showTitles
     let group: SeriesGroup
+    var liftID: String?
 
     var body: some View {
-        let cover = group.books.first
         VStack(alignment: .leading, spacing: 6) {
-            CoverImage(url: cover.flatMap { model.thumbnails[$0.id] }, title: group.name,
-                       revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0)
-                // The volumes behind the first one, peeking out above it.
-                .background { StackCards(count: min(group.books.count - 1, 2)) }
-                // Every tile keeps room for the stack, one book or many, so all the covers in a
-                // row share a bottom edge and their names line up.
-                .padding(.top, StackCards.peek)
-                .onAppear { if let cover { model.requestCover(for: cover, urgent: true) } }
+            // The stack lifts on a long press; the name stays (#71).
+            SeriesStack(group: group, liftID: liftID)
+                .modifier(LiftPart(liftID: liftID))
             if showTitles {
                 Text(group.name)
                     .font(.footnote.weight(.medium))
@@ -581,19 +605,46 @@ struct SeriesCell: View {
     }
 }
 
+/// A series' first cover with the volumes behind it peeking out above: the part of its tile
+/// that lifts on a long press, drawn both in the grid and into the lifted preview.
+struct SeriesStack: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.coverStyle) private var style
+    let group: SeriesGroup
+    var liftID: String?
+
+    var body: some View {
+        let cover = group.books.first
+        let cards = min(group.books.count - 1, 2)
+        CoverImage(url: cover.flatMap { model.thumbnails[$0.id] }, title: group.name,
+                   revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0)
+            .modifier(CoverPart(liftID: liftID, cornerRadius: style.cornerRadius, stackCards: cards))
+            // The volumes behind the first one, peeking out above it.
+            .background { StackCards(count: cards) }
+            // Every tile keeps room for the stack, one book or many, so all the covers in a
+            // row share a bottom edge and their names line up.
+            .padding(.top, StackCards.peek)
+            .onAppear { if let cover { model.requestCover(for: cover, urgent: true) } }
+    }
+}
+
 struct BookCell: View {
     @Environment(AppModel.self) private var model
     @Environment(\.coverInfo) private var info
     @Environment(\.showTitles) private var showTitles
     @Environment(\.coverStyle) private var style
     @Environment(\.libraryIconSize) private var iconSize
+    @Environment(\.colorScheme) private var colorScheme
     let book: Book
     /// Set in Select mode: whether the book is picked. A tap then picks or unpicks it.
     var isSelected: Bool?
+    /// Tells this cell apart from the same book's cell elsewhere on the page (Continue Reading).
+    var place = "grid"
     var onSelect: (() -> Void)?
     @State private var confirmDelete = false
 
     var body: some View {
+        let liftID = "\(place):\(book.id)"
         Button {
             if isSelected != nil {
                 onSelect?()
@@ -602,15 +653,9 @@ struct BookCell: View {
             }
         } label: {
             VStack(alignment: .leading, spacing: 5) {
-                iconRow
-                CoverImage(url: model.thumbnails[book.id], title: book.title, revision: model.coverRevision[book.id] ?? 0)
-                    .overlay {
-                        if info.isOn {
-                            CoverInfoOverlay(book: book)
-                        }
-                    }
-                    .overlay(alignment: .topTrailing) { if !info.isOn { badge } }
-                    .overlay(alignment: .topLeading) { selectionMark }
+                // The icon row and cover lift together on a long press; the title stays (#71).
+                BookCoverStack(book: book, isSelected: isSelected, liftID: liftID)
+                    .liftMenuPart(.lift, id: liftID)
                 if showTitles && !info.isOn {
                     // Every cell keeps room for two title lines, so all rows are the same height and the
                     // scroll bar does not jump as rows of different heights come into view.
@@ -628,9 +673,7 @@ struct BookCell: View {
         .accessibilityIdentifier("book-\(book.title)")
         .accessibilityAddTraits(isSelected == true ? .isSelected : [])
         .onAppear { model.requestCover(for: book, urgent: true) }
-        .contextMenu {
-            if isSelected == nil { menu }
-        }
+        .liftMenu(id: liftID, menu: menuMaker(), preview: previewMaker())
         .confirmationDialog("Delete this book from the library?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete from Library", role: .destructive) { model.deleteFromLibrary([book.id]) }
         } message: {
@@ -638,35 +681,113 @@ struct BookCell: View {
         }
     }
 
-    @ViewBuilder private var menu: some View {
-        Button("Book Info", systemImage: "info.circle") { model.bookInfo = .init(id: book.id) }
+    /// The long-press menu, made when the press happens from the book as it is then. None in
+    /// Select mode. Everything it uses is read here, while the cell is being drawn.
+    private func menuMaker() -> @MainActor () -> UIMenu? {
+        let model = model
+        let id = book.id
+        let fallback = book
+        let selecting = isSelected != nil
+        let confirmDelete = $confirmDelete
+        return {
+            guard !selecting else { return nil }
+            return BookMenu.make(model.book(id: id) ?? fallback, model: model) { confirmDelete.wrappedValue = true }
+        }
+    }
+
+    /// Draws the icon row and cover for the lifted preview, with this cell's settings.
+    private func previewMaker() -> @MainActor () -> AnyView {
+        let model = model
+        let book = book
+        // The lifted copy gets the system's own shadow, shaped like the cover, instead.
+        var style = style
+        style.shadowStrength = 0
+        let info = info
+        let iconSize = iconSize
+        let colorScheme = colorScheme
+        return {
+            AnyView(
+                BookCoverStack(book: model.book(id: book.id) ?? book, isSelected: nil, liftID: nil)
+                    .environment(model)
+                    .environment(\.coverStyle, style)
+                    .environment(\.coverInfo, info)
+                    .environment(\.libraryIconSize, iconSize)
+                    .environment(\.colorScheme, colorScheme)
+                    .environment(\.liftRendering, true)
+            )
+        }
+    }
+}
+
+/// A book's long-press menu, as a UIKit menu so the lifted cover can look right (#71).
+@MainActor
+enum BookMenu {
+    static func make(_ book: Book, model: AppModel, confirmDelete: @escaping () -> Void) -> UIMenu {
+        typealias Item = LiftMenuItems
+        let info = Item.action("Book Info", "info.circle") { model.bookInfo = .init(id: book.id) }
         if book.isMissing {
             // The file is gone: all that is left to do is to delete what the app kept of it.
-            Button("Delete from Library", systemImage: "trash", role: .destructive) { confirmDelete = true }
+            return UIMenu(title: "", children: [
+                info,
+                Item.action("Delete from Library", "trash", destructive: true, confirmDelete),
+            ])
+        }
+        let edit: [UIMenuElement] = [
+            info,
+            Item.action("Tags…", "tag") { model.tagEditor = .init(ids: [book.id]) },
+            Item.action("Edit Cover…", "crop") { Task { await model.editCover(book) } },
+            Item.action("Regenerate Cover", "arrow.triangle.2.circlepath") { Task { await model.regenerateCover(book) } },
+        ]
+        let marks: [UIMenuElement] = [
+            Item.action(book.favorite ? "Remove from Favorites" : "Favorite", book.favorite ? "heart.slash" : "heart") {
+                model.setFavorite(book, !book.favorite)
+            },
+            Item.action(book.bookmarked ? "Remove Bookmark" : "Bookmark", book.bookmarked ? "bookmark.slash" : "bookmark") {
+                model.setBookmarked(book, !book.bookmarked)
+            },
+        ]
+        var rest: [UIMenuElement] = []
+        if book.isDownloaded {
+            rest.append(Item.action("Remove from iPad", "icloud.and.arrow.up") { model.removeDownload(book) })
         } else {
-            Button("Tags…", systemImage: "tag") { model.tagEditor = .init(ids: [book.id]) }
-            Button("Edit Cover…", systemImage: "crop") { Task { await model.editCover(book) } }
-            Button("Regenerate Cover", systemImage: "arrow.triangle.2.circlepath") { Task { await model.regenerateCover(book) } }
-            Section {
-                Button(book.favorite ? "Remove from Favorites" : "Favorite", systemImage: book.favorite ? "heart.slash" : "heart") {
-                    model.setFavorite(book, !book.favorite)
+            rest.append(Item.action("Download", "icloud.and.arrow.down") { Task { await model.download(book) } })
+        }
+        if book.status != .read {
+            rest.append(Item.action("Mark as Read", "checkmark.circle") { model.setFinished(book, true) })
+        }
+        // Also for a book in progress: it goes back to as if never opened.
+        if book.status != .unread {
+            rest.append(Item.action("Mark as Unread", "circle") { model.setFinished(book, false) })
+        }
+        return UIMenu(title: "", children: [Item.section(edit), Item.section(marks), Item.section(rest)])
+    }
+}
+
+/// A book's icon row and cover: the part of its cell that lifts on a long press, drawn both in
+/// the grid and into the lifted preview.
+struct BookCoverStack: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.coverInfo) private var info
+    @Environment(\.coverStyle) private var style
+    @Environment(\.libraryIconSize) private var iconSize
+    @Environment(\.liftRendering) private var rendering
+    let book: Book
+    var isSelected: Bool?
+    /// The cell's long-press menu id, so the cover can report where it is. Nil in the preview.
+    var liftID: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            iconRow
+            CoverImage(url: model.thumbnails[book.id], title: book.title, revision: model.coverRevision[book.id] ?? 0)
+                .overlay {
+                    if info.isOn {
+                        CoverInfoOverlay(book: book)
+                    }
                 }
-                Button(book.bookmarked ? "Remove Bookmark" : "Bookmark", systemImage: book.bookmarked ? "bookmark.slash" : "bookmark") {
-                    model.setBookmarked(book, !book.bookmarked)
-                }
-            }
-            if book.isDownloaded {
-                Button("Remove from iPad", systemImage: "icloud.and.arrow.up") { model.removeDownload(book) }
-            } else {
-                Button("Download", systemImage: "icloud.and.arrow.down") { Task { await model.download(book) } }
-            }
-            if book.status != .read {
-                Button("Mark as Read", systemImage: "checkmark.circle") { model.setFinished(book, true) }
-            }
-            // Also for a book in progress: it goes back to as if never opened.
-            if book.status != .unread {
-                Button("Mark as Unread", systemImage: "circle") { model.setFinished(book, false) }
-            }
+                .overlay(alignment: .topTrailing) { if !info.isOn { badge } }
+                .overlay(alignment: .topLeading) { selectionMark }
+                .modifier(CoverPart(liftID: liftID, cornerRadius: style.cornerRadius))
         }
     }
 
@@ -749,15 +870,55 @@ struct BookCell: View {
 
     @ViewBuilder private var badge: some View {
         if model.downloading.contains(book.id) {
-            ProgressView().padding(6).glassEffect(in: .circle).padding(6)
+            ProgressView().padding(6).badgeBackground(plain: rendering).padding(6)
         } else if !book.isDownloaded {
             Image(systemName: model.queuedDownloads.contains(book.id) ? "icloud.and.arrow.down" : "icloud")
                 .font(.caption.weight(.semibold))
                 .padding(6)
-                .glassEffect(in: .circle)
+                .badgeBackground(plain: rendering)
                 .padding(6)
         }
         // A read book's check is in the row above the cover.
+    }
+}
+
+/// Marks the part of a tile that lifts. Nothing in a lifted preview.
+struct LiftPart: ViewModifier {
+    let liftID: String?
+
+    func body(content: Content) -> some View {
+        if let liftID {
+            content.liftMenuPart(.lift, id: liftID)
+        } else {
+            content
+        }
+    }
+}
+
+/// Reports where a tile's cover is, for the lifted shadow. Nothing in a lifted preview.
+struct CoverPart: ViewModifier {
+    let liftID: String?
+    let cornerRadius: CGFloat
+    var stackCards = 0
+
+    func body(content: Content) -> some View {
+        if let liftID {
+            content.liftMenuPart(.cover, id: liftID, cornerRadius: cornerRadius, stackCards: stackCards)
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    /// The round glass behind a badge on a cover. Glass needs the screen behind it, so the
+    /// lifted preview, drawn into an image, gets a plain fill instead.
+    @ViewBuilder func badgeBackground(plain: Bool) -> some View {
+        if plain {
+            background(Circle().fill(Color(.secondarySystemBackground).opacity(0.9)))
+        } else {
+            glassEffect(in: .circle)
+        }
     }
 }
 
