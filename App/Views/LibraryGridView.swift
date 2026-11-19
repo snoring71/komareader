@@ -735,6 +735,7 @@ enum BookMenu {
         let edit: [UIMenuElement] = [
             info,
             Item.action("Tags…", "tag") { model.tagEditor = .init(ids: [book.id]) },
+        ] + pinMenu(book, model: model) + [
             Item.action("Edit Cover…", "crop") { Task { await model.editCover(book) } },
             Item.action("Regenerate Cover", "arrow.triangle.2.circlepath") { Task { await model.regenerateCover(book) } },
         ]
@@ -760,6 +761,31 @@ enum BookMenu {
             rest.append(Item.action("Mark as Unread", "circle") { model.setFinished(book, false) })
         }
         return UIMenu(title: "", children: [Item.section(edit), Item.section(marks), Item.section(rest)])
+    }
+
+    /// Pin… with Pin Series and Pin Folder for the book's series and folder (#72). Each one
+    /// says Unpin when it is already pinned. None for a book with neither.
+    private static func pinMenu(_ book: Book, model: AppModel) -> [UIMenuElement] {
+        var items: [UIMenuElement] = []
+        let series = book.series.trimmingCharacters(in: .whitespaces)
+        if !series.isEmpty {
+            // The series' name as the Series view has it, so a pin made here or there is the same.
+            let name = model.catalog.series.first { $0.name.caseInsensitiveCompare(series) == .orderedSame }?.name ?? series
+            items.append(pinAction(.seriesNamed(name), noun: "Series", model: model))
+        }
+        // Books at the top of the library are in no folder that can be pinned.
+        if !book.folder.isEmpty, model.catalog.folders[book.folder] != nil {
+            items.append(pinAction(.folder(book.folder), noun: "Folder", model: model))
+        }
+        guard !items.isEmpty else { return [] }
+        return [UIMenu(title: "Pin…", image: UIImage(systemName: "pin"), children: items)]
+    }
+
+    private static func pinAction(_ item: SidebarItem, noun: String, model: AppModel) -> UIAction {
+        let pinned = model.isPinned(item)
+        return LiftMenuItems.action(pinned ? "Unpin \(noun)" : "Pin \(noun)", pinned ? "pin.slash" : "pin") {
+            model.setPinned(item, !pinned)
+        }
     }
 }
 

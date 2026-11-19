@@ -37,6 +37,8 @@ final class LiftMenuRegistry {
     @ObservationIgnored private(set) var entries: [String: Entry] = [:]
     /// The tile whose menu is open: it hides while its preview is lifted.
     var lifted: String?
+    /// Whether a menu is open (its tile stays hidden for as long).
+    @ObservationIgnored var isMenuShowing = false
 
     func update(_ id: String, _ change: (inout Entry) -> Void) {
         change(&entries[id, default: Entry()])
@@ -215,26 +217,38 @@ private struct LiftMenuHostView: UIViewRepresentable {
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     configuration: UIContextMenuConfiguration,
                                     highlightPreviewForItemWithIdentifier identifier: NSCopying) -> UITargetedPreview? {
-            preview(for: identifier)
+            // The lifted copy starts exactly over the tile, so the tile hides now, before the
+            // zoom starts: otherwise both show while it grows, a double image.
+            let preview = preview(for: identifier)
+            if preview != nil { registry?.lifted = identifier as? String }
+            return preview
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     configuration: UIContextMenuConfiguration,
                                     dismissalPreviewForItemWithIdentifier identifier: NSCopying) -> UITargetedPreview? {
             // Back to where the tile is now (an action may have moved it); none if it left.
-            preview(for: identifier)
+            // The tile shows again when the menu has ended (`willEndFor`); this is a backstop
+            // in case a press let go early ends without that call.
+            let id = identifier as? String
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                if let registry = self?.registry, registry.lifted == id, !registry.isMenuShowing { registry.lifted = nil }
+            }
+            return preview(for: identifier)
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     willDisplayMenuFor configuration: UIContextMenuConfiguration,
                                     animator: UIContextMenuInteractionAnimating?) {
             registry?.lifted = configuration.identifier as? String
+            registry?.isMenuShowing = true
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     willEndFor configuration: UIContextMenuConfiguration,
                                     animator: UIContextMenuInteractionAnimating?) {
             let id = configuration.identifier as? String
+            registry?.isMenuShowing = false
             let show = { [weak self] in
                 if self?.registry?.lifted == id { self?.registry?.lifted = nil }
             }
