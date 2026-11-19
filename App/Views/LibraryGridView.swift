@@ -541,7 +541,8 @@ struct SeriesGridView: View {
                     .accessibilityIdentifier("series-\(group.name)")
                     // Pin to Sidebar, as for folders (#72), with the same lift as books (#71).
                     .liftMenu(id: liftID, menu: { LiftMenuItems.pin(item, model: model) },
-                              preview: seriesPreview(group))
+                              preview: seriesPreview(group),
+                              cover: { group.books.first.flatMap { model.coverNow(for: $0.id) } })
                 }
             }
             .padding()
@@ -571,7 +572,7 @@ struct SeriesGridView: View {
         let colorScheme = colorScheme
         return {
             AnyView(
-                SeriesStack(group: group, liftID: nil)
+                SeriesStack(group: group, liftID: nil, preloaded: group.books.first.flatMap { model.coverNow(for: $0.id) })
                     .environment(model)
                     .environment(\.coverStyle, style)
                     .environment(\.colorScheme, colorScheme)
@@ -612,12 +613,13 @@ struct SeriesStack: View {
     @Environment(\.coverStyle) private var style
     let group: SeriesGroup
     var liftID: String?
+    var preloaded: UIImage?
 
     var body: some View {
         let cover = group.books.first
         let cards = min(group.books.count - 1, 2)
         CoverImage(url: cover.flatMap { model.thumbnails[$0.id] }, title: group.name,
-                   revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0)
+                   revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0, preloaded: preloaded)
             .modifier(CoverPart(liftID: liftID, cornerRadius: style.cornerRadius, stackCards: cards))
             // The volumes behind the first one, peeking out above it.
             .background { StackCards(count: cards) }
@@ -673,7 +675,7 @@ struct BookCell: View {
         .accessibilityIdentifier("book-\(book.title)")
         .accessibilityAddTraits(isSelected == true ? .isSelected : [])
         .onAppear { model.requestCover(for: book, urgent: true) }
-        .liftMenu(id: liftID, menu: menuMaker(), preview: previewMaker())
+        .liftMenu(id: liftID, menu: menuMaker(), preview: previewMaker(), cover: { [model, id = book.id] in model.coverNow(for: id) })
         .confirmationDialog("Delete this book from the library?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete from Library", role: .destructive) { model.deleteFromLibrary([book.id]) }
         } message: {
@@ -707,7 +709,8 @@ struct BookCell: View {
         let colorScheme = colorScheme
         return {
             AnyView(
-                BookCoverStack(book: model.book(id: book.id) ?? book, isSelected: nil, liftID: nil)
+                BookCoverStack(book: model.book(id: book.id) ?? book, isSelected: nil, liftID: nil,
+                               preloaded: model.coverNow(for: book.id))
                     .environment(model)
                     .environment(\.coverStyle, style)
                     .environment(\.coverInfo, info)
@@ -801,11 +804,13 @@ struct BookCoverStack: View {
     var isSelected: Bool?
     /// The cell's long-press menu id, so the cover can report where it is. Nil in the preview.
     var liftID: String?
+    var preloaded: UIImage?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             iconRow
-            CoverImage(url: model.thumbnails[book.id], title: book.title, revision: model.coverRevision[book.id] ?? 0)
+            CoverImage(url: model.thumbnails[book.id], title: book.title, revision: model.coverRevision[book.id] ?? 0,
+                       preloaded: preloaded)
                 .overlay {
                     if info.isOn {
                         CoverInfoOverlay(book: book)
@@ -1074,6 +1079,9 @@ struct CoverImage: View {
     let title: String
     /// Changes when the cover file is replaced at the same URL (after a cover edit).
     var revision: Int = 0
+    /// The image to show at once, for a copy drawn into an image (the long-press preview),
+    /// which gets no chance to load it.
+    var preloaded: UIImage?
     @Environment(\.coverStyle) private var style
     @State private var loaded: UIImage?
 
@@ -1081,7 +1089,7 @@ struct CoverImage: View {
 
     var body: some View {
         // A cover seen before is shown at once from memory, with no placeholder in between.
-        let image = loaded ?? url.flatMap { CoverMemoryCache.shared.image(for: $0, revision: revision) }
+        let image = preloaded ?? loaded ?? url.flatMap { CoverMemoryCache.shared.image(for: $0, revision: revision) }
         // Opaque, so the shadow behind it does not show through the placeholder.
         Color(.systemGray5)
             .aspectRatio(style.shape.aspect, contentMode: .fit)
@@ -1132,6 +1140,15 @@ final class CoverMemoryCache: @unchecked Sendable {
 
     func image(for url: URL, revision: Int) -> UIImage? {
         cache.object(forKey: key(url, revision))
+    }
+
+    /// The cover now: from memory, or read and decoded here if it has been let go. For the
+    /// long-press preview, which is drawn at once and cannot wait for a load (#71).
+    @MainActor func imageNow(for url: URL, revision: Int) -> UIImage? {
+        if let image = image(for: url, revision: revision) { return image }
+        guard let data = try? Data(contentsOf: url), let image = UIImage(data: data)?.preparingForDisplay() else { return nil }
+        insert(image, for: url, revision: revision)
+        return image
     }
 
     func insert(_ image: UIImage, for url: URL, revision: Int) {

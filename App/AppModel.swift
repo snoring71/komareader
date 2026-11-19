@@ -370,6 +370,12 @@ final class AppModel {
 
     // MARK: Folders
 
+    /// A book's cover image right now, read from disk if it is not in memory (long-press preview).
+    func coverNow(for id: String) -> UIImage? {
+        guard let url = thumbnails[id] else { return nil }
+        return CoverMemoryCache.shared.imageNow(for: url, revision: coverRevision[id] ?? 0)
+    }
+
     func isPinned(_ item: SidebarItem) -> Bool { pinned.contains(item) }
 
     func setPinned(_ item: SidebarItem, _ isPinned: Bool) {

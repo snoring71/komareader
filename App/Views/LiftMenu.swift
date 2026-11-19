@@ -13,7 +13,8 @@ import UIKit
 // - Each tile reports where it is, which part lifts (the icon row and cover, not the title),
 //   where its cover is, and its menu (`liftMenu(...)`, `liftMenuPart(...)`).
 // - On a long press the interaction finds the tile under the finger, draws the lifting part
-//   into an image, and lifts that, while the tile itself hides until the menu closes.
+//   into an image, and lifts that, while the tile itself hides until it drops back.
+// - As the menu opens, the lifted tile grows into a large view of the cover beside it.
 
 /// The tiles of one grid that have a long-press menu: where each one is, and what it lifts.
 @MainActor @Observable
@@ -30,6 +31,8 @@ final class LiftMenuRegistry {
         var cornerRadius: CGFloat = 0
         var menu: (@MainActor () -> UIMenu?)?
         var preview: (@MainActor () -> AnyView)?
+        /// The full cover, shown large once the menu is open.
+        var coverImage: (@MainActor () -> UIImage?)?
     }
 
     /// Names the grid's coordinate space, so tiles report frames in the host view's coordinates.
@@ -74,8 +77,10 @@ extension View {
     /// menu. `menu` is asked when the press happens and may return nil for no menu.
     /// `preview` draws the part that lifts; it is drawn with the environment it is given, so
     /// pass in what it needs.
-    func liftMenu(id: String, menu: @escaping @MainActor () -> UIMenu?, preview: @escaping @MainActor () -> AnyView) -> some View {
-        modifier(LiftMenuItemModifier(id: id, menu: menu, preview: preview))
+    /// `cover` gives the cover image, which grows to a large view of it as the menu opens.
+    func liftMenu(id: String, menu: @escaping @MainActor () -> UIMenu?, preview: @escaping @MainActor () -> AnyView,
+                  cover: @escaping @MainActor () -> UIImage?) -> some View {
+        modifier(LiftMenuItemModifier(id: id, menu: menu, preview: preview, cover: cover))
     }
 
     /// Marks the part of a tile that lifts, or its cover (see `LiftMenuPart`).
@@ -107,6 +112,7 @@ private struct LiftMenuItemModifier: ViewModifier {
     let id: String
     let menu: @MainActor () -> UIMenu?
     let preview: @MainActor () -> AnyView
+    let cover: @MainActor () -> UIImage?
 
     func body(content: Content) -> some View {
         if let registry {
@@ -115,6 +121,7 @@ private struct LiftMenuItemModifier: ViewModifier {
             let _ = registry.update(id) {
                 $0.menu = menu
                 $0.preview = preview
+                $0.coverImage = cover
             }
             content
                 .onGeometryChange(for: CGRect.self) { [space = registry.space] in $0.frame(in: .named(space)) } action: { frame in
@@ -208,8 +215,14 @@ private struct LiftMenuHostView: UIViewRepresentable {
                                     configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
             guard let registry else { return nil }
             let point = interaction.location(in: self)
-            guard let id = registry.id(at: point), let menu = registry.entries[id]?.menu?() else { return nil }
-            return UIContextMenuConfiguration(identifier: id as NSString, previewProvider: nil) { _ in menu }
+            guard let id = registry.id(at: point), let entry = registry.entries[id], let menu = entry.menu?() else { return nil }
+            // The lifted tile grows into a large view of its cover beside the menu.
+            var large: UIContextMenuContentPreviewProvider?
+            if let image = entry.coverImage?() {
+                let screen = window?.bounds ?? self.bounds
+                large = { LargeCoverController(image: image, bounds: screen) }
+            }
+            return UIContextMenuConfiguration(identifier: id as NSString, previewProvider: large) { _ in menu }
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
@@ -312,5 +325,33 @@ enum LiftMenuItems {
                 model.setPinned(item, !pinned)
             },
         ])
+    }
+}
+
+/// A cover shown large while a tile's long-press menu is open (#71): as big as fits in about
+/// half the screen's height, and up to half its width, with nothing around it.
+private final class LargeCoverController: UIViewController {
+    private let image: UIImage
+
+    init(image: UIImage, bounds: CGRect) {
+        self.image = image
+        super.init(nibName: nil, bundle: nil)
+        let maxSize = CGSize(width: bounds.width * 0.5, height: bounds.height * 0.55)
+        let aspect = image.size.height > 0 ? image.size.width / image.size.height : 2.0 / 3.0
+        var size = CGSize(width: maxSize.height * aspect, height: maxSize.height)
+        if size.width > maxSize.width { size = CGSize(width: maxSize.width, height: maxSize.width / aspect) }
+        preferredContentSize = CGSize(width: size.width.rounded(), height: size.height.rounded())
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        let view = UIImageView(image: image)
+        view.contentMode = .scaleAspectFill
+        view.clipsToBounds = true
+        view.backgroundColor = .clear
+        view.accessibilityIgnoresInvertColors = true
+        self.view = view
     }
 }

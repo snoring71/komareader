@@ -124,7 +124,8 @@ struct FolderLink: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier("folder-\(folder.name)")
         // The cover lifts without the system's grey box around it (#71).
-        .liftMenu(id: liftID, menu: { LiftMenuItems.pin(item, model: model) }, preview: preview())
+        .liftMenu(id: liftID, menu: { LiftMenuItems.pin(item, model: model) }, preview: preview(),
+                  cover: { [folder] in folder.coverBookId.flatMap { model.coverNow(for: $0) } })
     }
 
     /// Draws the folder's cover for the lifted preview, with this tile's settings.
@@ -136,7 +137,7 @@ struct FolderLink: View {
         let colorScheme = colorScheme
         return {
             AnyView(
-                FolderCover(folder: folder, liftID: nil)
+                FolderCover(folder: folder, liftID: nil, preloaded: folder.coverBookId.flatMap { model.coverNow(for: $0) })
                     .environment(model)
                     .environment(\.coverStyle, style)
                     .environment(\.colorScheme, colorScheme)
@@ -195,11 +196,12 @@ struct FolderCover: View {
     @Environment(\.liftRendering) private var rendering
     let folder: FolderInfo
     var liftID: String?
+    var preloaded: UIImage?
 
     var body: some View {
         let cover = folder.coverBookId.flatMap { model.book(id: $0) }
         CoverImage(url: cover.flatMap { model.thumbnails[$0.id] }, title: folder.name,
-                   revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0)
+                   revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0, preloaded: preloaded)
             .overlay(alignment: .topLeading) {
                 Image(systemName: "folder.fill")
                     .font(.caption.weight(.semibold))
