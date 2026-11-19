@@ -40,6 +40,16 @@ final class LiftMenuRegistry {
     @ObservationIgnored private(set) var entries: [String: Entry] = [:]
     /// The tile whose menu is open: it hides while its preview is lifted.
     var lifted: String?
+    /// Taps on a tile are ignored from the moment its menu starts until just after it ends,
+    /// so letting go of a long press does not also open the book or folder.
+    @ObservationIgnored private var menuTile: (id: String, until: Date)?
+
+    func menuStarted(_ id: String) { menuTile = (id, .distantFuture) }
+    func menuEnded(_ id: String) { if menuTile?.id == id { menuTile = (id, Date().addingTimeInterval(0.5)) } }
+    func ignoresTap(on id: String) -> Bool {
+        guard let menuTile, menuTile.id == id else { return false }
+        return Date() < menuTile.until
+    }
     /// The tile whose large cover is shrinking back into it: only its cover hides, so the
     /// icon row is already in place as the cover lands.
     var landing: String?
@@ -236,8 +246,28 @@ private struct LiftMenuHostView: UIViewRepresentable {
             // The lifted copy starts exactly over the tile, so the tile hides now, before the
             // zoom starts: otherwise both show while it grows, a double image.
             let preview = preview(for: identifier)
-            if preview != nil { registry?.lifted = identifier as? String }
+            if let id = identifier as? String {
+                registry?.menuStarted(id)
+                if preview != nil { registry?.lifted = id }
+            }
+            cancelOtherTouches(interaction)
             return preview
+        }
+
+        /// Cancels the press the tile's own button or link is tracking, so letting go does not
+        /// also open it: SwiftUI does not always see that the context menu took the touch.
+        private func cancelOtherTouches(_ interaction: UIContextMenuInteraction) {
+            guard let window, let host = interaction.view else { return }
+            var view = window.hitTest(interaction.location(in: window), with: nil)
+            while let current = view {
+                if current !== host {
+                    for recognizer in current.gestureRecognizers ?? [] where recognizer.isEnabled {
+                        recognizer.isEnabled = false
+                        recognizer.isEnabled = true
+                    }
+                }
+                view = current.superview
+            }
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
@@ -277,6 +307,7 @@ private struct LiftMenuHostView: UIViewRepresentable {
                                     willEndFor configuration: UIContextMenuConfiguration,
                                     animator: UIContextMenuInteractionAnimating?) {
             let id = configuration.identifier as? String
+            if let id { registry?.menuEnded(id) }
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.landing) { [weak self] in
                 self?.showTile(id)
             }

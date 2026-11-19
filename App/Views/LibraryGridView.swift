@@ -637,6 +637,7 @@ struct BookCell: View {
     @Environment(\.coverStyle) private var style
     @Environment(\.libraryIconSize) private var iconSize
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.liftMenu) private var liftMenu
     let book: Book
     /// Set in Select mode: whether the book is picked. A tap then picks or unpicks it.
     var isSelected: Bool?
@@ -650,6 +651,8 @@ struct BookCell: View {
         Button {
             if isSelected != nil {
                 onSelect?()
+            } else if liftMenu?.ignoresTap(on: liftID) == true {
+                // The end of a long press that opened the menu, not a tap.
             } else {
                 Task { await model.activate(book) }
             }
