@@ -33,7 +33,11 @@ final class LiftMenuRegistry {
         var preview: (@MainActor () -> AnyView)?
         /// The full cover, shown large once the menu is open.
         var coverImage: (@MainActor () -> UIImage?)?
-        var onScreen = true
+        /// How many live copies of the tile are on screen. SwiftUI can show a rebuilt tile
+        /// before the old one's onDisappear arrives, so a plain flag could end up false for a
+        /// tile that is showing.
+        var appearances = 0
+        var onScreen: Bool { appearances > 0 }
     }
 
     /// Names the grid's coordinate space, so tiles report frames in the host view's coordinates.
@@ -64,9 +68,9 @@ final class LiftMenuRegistry {
     /// long-press menu until they happened to redraw.
     func setOnScreen(_ id: String, _ onScreen: Bool) {
         if onScreen {
-            entries[id, default: Entry()].onScreen = true
-        } else {
-            entries[id]?.onScreen = false
+            entries[id, default: Entry()].appearances += 1
+        } else if let count = entries[id]?.appearances {
+            entries[id]?.appearances = max(0, count - 1)
         }
     }
 
