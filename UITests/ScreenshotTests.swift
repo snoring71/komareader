@@ -123,7 +123,15 @@ final class ScreenshotTests: XCTestCase {
         // Book Info from the context menu.
         book.press(forDuration: 1.2)
         let infoItem = app.buttons["Book Info"]
-        XCTAssertTrue(infoItem.waitForExistence(timeout: 5), "No Book Info in the context menu")
+        if !infoItem.waitForExistence(timeout: 5) {
+            // Show what is on screen instead, to see why.
+            save(app, "07a-no-book-menu")
+            print(app.debugDescription)
+        }
+        XCTAssertTrue(infoItem.exists, "No Book Info in the context menu")
+        sleep(1)
+        // The icon row and cover lifted together, with no grey box around them (#71).
+        save(app, "07b-book-long-press")
         infoItem.tap()
         let editCover = app.buttons["info-edit-cover"]
         XCTAssertTrue(editCover.waitForExistence(timeout: 10), "Book Info did not open")
@@ -168,6 +176,21 @@ final class ScreenshotTests: XCTestCase {
             save(app, "12-series")
             let starfall = app.buttons["series-Starfall"]
             if starfall.waitForExistence(timeout: 5) {
+                // Pin the series to the sidebar from its long-press menu (#72).
+                starfall.press(forDuration: 1.2)
+                let pin = app.buttons["Pin to Sidebar"]
+                XCTAssertTrue(pin.waitForExistence(timeout: 5), "No Pin to Sidebar on a series")
+                sleep(1)
+                save(app, "12a-series-long-press")
+                pin.tap()
+                sleep(1)
+                openSidebar(app)
+                XCTAssertTrue(app.descendants(matching: .any)["sidebar-Starfall"].firstMatch.waitForExistence(timeout: 5),
+                              "The pinned series is not in the sidebar")
+                save(app, "12b-sidebar-pinned-series")
+                let close = app.buttons["sidebar-close"].firstMatch
+                if close.waitForExistence(timeout: 3) { close.tap() }
+                sleep(1)
                 starfall.tap()
                 sleep(2)
                 save(app, "13-series-starfall")

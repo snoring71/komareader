@@ -61,6 +61,7 @@ struct FolderBrowserView: View {
                 }
                 .padding()
                 .padding(.trailing, letters == nil ? 0 : 14)
+                .liftMenuHost()
             }
             .overlay(alignment: .trailing) {
                 if let letters {
@@ -108,21 +109,40 @@ struct FolderBrowserView: View {
 /// A folder's cell, which opens the folder. Long-press to pin it to the sidebar.
 struct FolderLink: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.coverStyle) private var style
+    @Environment(\.colorScheme) private var colorScheme
     let folder: FolderInfo
     var showsPath = false
 
     var body: some View {
-        NavigationLink(value: SidebarItem.folder(folder.path)) {
-            FolderCell(folder: folder, showsPath: showsPath)
+        let item = SidebarItem.folder(folder.path)
+        let liftID = "folder:\(folder.path)"
+        let model = model
+        NavigationLink(value: item) {
+            FolderCell(folder: folder, showsPath: showsPath, liftID: liftID)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("folder-\(folder.name)")
-        .contextMenu {
-            if model.isPinned(folder.path) {
-                Button("Unpin from Sidebar", systemImage: "pin.slash") { model.setPinned(folder.path, false) }
-            } else {
-                Button("Pin to Sidebar", systemImage: "pin") { model.setPinned(folder.path, true) }
-            }
+        // The cover lifts without the system's grey box around it (#71).
+        .liftMenu(id: liftID, menu: { LiftMenuItems.pin(item, model: model) }, preview: preview(),
+                  cover: { [folder] in folder.coverBookId.flatMap { model.coverNow(for: $0) } })
+    }
+
+    /// Draws the folder's cover for the lifted preview, with this tile's settings.
+    private func preview() -> @MainActor () -> AnyView {
+        let model = model
+        let folder = folder
+        var style = style
+        style.shadowStrength = 0
+        let colorScheme = colorScheme
+        return {
+            AnyView(
+                FolderCover(folder: folder, liftID: nil, preloaded: folder.coverBookId.flatMap { model.coverNow(for: $0) })
+                    .environment(model)
+                    .environment(\.coverStyle, style)
+                    .environment(\.colorScheme, colorScheme)
+                    .environment(\.liftRendering, true)
+            )
         }
     }
 }
@@ -135,20 +155,13 @@ struct FolderCell: View {
     @AppStorage(TitleGrid.folders.key) private var showTitles = true
     let folder: FolderInfo
     var showsPath = false
+    var liftID: String?
 
     var body: some View {
-        let cover = folder.coverBookId.flatMap { model.book(id: $0) }
         VStack(alignment: .leading, spacing: 6) {
-            CoverImage(url: cover.flatMap { model.thumbnails[$0.id] }, title: folder.name,
-                       revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0)
-                .overlay(alignment: .topLeading) {
-                    Image(systemName: "folder.fill")
-                        .font(.caption.weight(.semibold))
-                        .padding(6)
-                        .glassEffect(in: .circle)
-                        .padding(6)
-                }
-                .onAppear { if let cover { model.requestCover(for: cover, urgent: true) } }
+            // The cover lifts on a long press; the name stays (#71).
+            FolderCover(folder: folder, liftID: liftID)
+                .modifier(LiftPart(liftID: liftID))
             if showTitles {
                 Text(folder.name)
                     .font(.footnote.weight(.medium))
@@ -172,5 +185,31 @@ struct FolderCell: View {
             parts.append(folder.children.count == 1 ? "1 folder" : "\(folder.children.count) folders")
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// A folder's cover with its folder badge: the part of its tile that lifts on a long press,
+/// drawn both in the grid and into the lifted preview.
+struct FolderCover: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.coverStyle) private var style
+    @Environment(\.liftRendering) private var rendering
+    let folder: FolderInfo
+    var liftID: String?
+    var preloaded: UIImage?
+
+    var body: some View {
+        let cover = folder.coverBookId.flatMap { model.book(id: $0) }
+        CoverImage(url: cover.flatMap { model.thumbnails[$0.id] }, title: folder.name,
+                   revision: cover.flatMap { model.coverRevision[$0.id] } ?? 0, preloaded: preloaded)
+            .overlay(alignment: .topLeading) {
+                Image(systemName: "folder.fill")
+                    .font(.caption.weight(.semibold))
+                    .padding(6)
+                    .badgeBackground(plain: rendering)
+                    .padding(6)
+            }
+            .modifier(CoverPart(liftID: liftID, cornerRadius: style.cornerRadius))
+            .onAppear { if let cover { model.requestCover(for: cover, urgent: true) } }
     }
 }

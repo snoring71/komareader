@@ -12,7 +12,7 @@ struct SidebarView: View {
         // Only precomputed counts are read here, so the sidebar redraws when a count changes,
         // not on every change to the books.
         let counts = model.summary.counts
-        let pinned = model.pinnedFolders.filter { model.catalog.folders[$0] != nil }
+        let pinned = model.pinned.filter { model.pinStillExists($0) }
         VStack(spacing: 0) {
             header
             ScrollView {
@@ -25,11 +25,12 @@ struct SidebarView: View {
                         row(.downloaded, count: counts[.downloaded])
                     }
                     if !pinned.isEmpty {
-                        SidebarSection("Pinned Folders") {
-                            ForEach(pinned, id: \.self) { path in
-                                row(.folder(path), count: model.catalog.folders[path]?.count)
+                        // Folders and series together, in the order they were pinned (#72).
+                        SidebarSection("Pinned") {
+                            ForEach(pinned, id: \.self) { item in
+                                row(item, count: pinCount(item))
                                     .contextMenu {
-                                        Button("Unpin from Sidebar", systemImage: "pin.slash") { model.setPinned(path, false) }
+                                        Button("Unpin from Sidebar", systemImage: "pin.slash") { model.setPinned(item, false) }
                                     }
                             }
                         }
@@ -72,6 +73,16 @@ struct SidebarView: View {
             Button("Delete Tag", role: .destructive) { if let tag = deleting { model.deleteTag(tag) } }
         } message: {
             Text("The tag is removed from every book. The books are not deleted.")
+        }
+    }
+
+    /// How many books a pinned folder or series holds.
+    private func pinCount(_ item: SidebarItem) -> Int? {
+        switch item {
+        case .folder(let path): return model.catalog.folders[path]?.count
+        case .seriesNamed(let name):
+            return model.catalog.series.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.books.count
+        default: return nil
         }
     }
 

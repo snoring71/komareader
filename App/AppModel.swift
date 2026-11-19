@@ -67,9 +67,10 @@ final class AppModel {
     private(set) var summary = Summary()
     /// The library's synced tag list (`tags.json`), which keeps tags that have no books.
     @ObservationIgnored private var tagList = TagList()
-    /// Folders pinned to the sidebar on this device.
-    var pinnedFolders: [String] = UserDefaults.standard.stringArray(forKey: "pinnedFolders") ?? [] {
-        didSet { UserDefaults.standard.set(pinnedFolders, forKey: "pinnedFolders") }
+    /// Folders and series pinned to the sidebar on this device, in the order they were pinned
+    /// (#72). Saved as `SidebarItem.storageKey`s.
+    var pinned: [SidebarItem] = AppModel.loadPinned() {
+        didSet { UserDefaults.standard.set(pinned.map(\.storageKey), forKey: AppModel.pinnedKey) }
     }
     /// The book whose Book Info sheet is showing in the library.
     var bookInfo: BookRef?
@@ -369,14 +370,37 @@ final class AppModel {
 
     // MARK: Folders
 
-    func isPinned(_ path: String) -> Bool { pinnedFolders.contains(path) }
+    /// A book's cover image right now, read from disk if it is not in memory (long-press preview).
+    func coverNow(for id: String) -> UIImage? {
+        guard let url = thumbnails[id] else { return nil }
+        return CoverMemoryCache.shared.imageNow(for: url, revision: coverRevision[id] ?? 0)
+    }
 
-    func setPinned(_ path: String, _ pinned: Bool) {
-        if pinned {
-            if !pinnedFolders.contains(path) { pinnedFolders.append(path) }
+    func isPinned(_ item: SidebarItem) -> Bool { pinned.contains(item) }
+
+    func setPinned(_ item: SidebarItem, _ isPinned: Bool) {
+        if isPinned {
+            if !pinned.contains(item) { pinned.append(item) }
         } else {
-            pinnedFolders.removeAll { $0 == path }
+            pinned.removeAll { $0 == item }
         }
+    }
+
+    /// Whether a pinned item still has something to show: a folder or series can go away.
+    func pinStillExists(_ item: SidebarItem) -> Bool { exists(item) }
+
+    private static let pinnedKey = "pinnedItems"
+
+    /// The pinned items, starting from the folders pinned before series could be (the old
+    /// `pinnedFolders` list, kept as it was in case an older build runs again).
+    private static func loadPinned() -> [SidebarItem] {
+        let defaults = UserDefaults.standard
+        if let keys = defaults.stringArray(forKey: pinnedKey) {
+            return keys.compactMap(SidebarItem.init(storageKey:)).filter(\.isPinnable)
+        }
+        let folders = (defaults.stringArray(forKey: "pinnedFolders") ?? []).map(SidebarItem.folder)
+        defaults.set(folders.map(\.storageKey), forKey: pinnedKey)
+        return folders
     }
 
     // MARK: Scanning
