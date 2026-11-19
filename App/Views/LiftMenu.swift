@@ -244,18 +244,15 @@ private struct LiftMenuHostView: UIViewRepresentable {
             preview(for: identifier)
         }
 
-        /// How long the copy takes to shrink back into the tile, about. The tile fades in over
-        /// the end of it, under the landing copy: not before (two covers, one shrinking past
-        /// the other) and not after (the shadow comes back late).
+        /// How long the copy takes to shrink back into the tile, about. The tile shows again at
+        /// the end of it, at once and under the landing copy: not before (two covers, one
+        /// shrinking past the other) and not after (the shadow comes back late). Not faded in:
+        /// with the copy fading out at the same time, the two together flickered.
         private static let landing: TimeInterval = 0.28
 
-        private func showTile(_ id: String?, animated: Bool) {
+        private func showTile(_ id: String?) {
             guard let registry, registry.lifted == id else { return }
-            if animated {
-                withAnimation(.easeIn(duration: 0.12)) { registry.lifted = nil }
-            } else {
-                registry.lifted = nil
-            }
+            registry.lifted = nil
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
@@ -269,11 +266,11 @@ private struct LiftMenuHostView: UIViewRepresentable {
                                     animator: UIContextMenuInteractionAnimating?) {
             let id = configuration.identifier as? String
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.landing) { [weak self] in
-                self?.showTile(id, animated: true)
+                self?.showTile(id)
             }
             // At the latest once the copy has landed.
-            animator?.addCompletion { [weak self] in self?.showTile(id, animated: false) }
-            if animator == nil { showTile(id, animated: false) }
+            animator?.addCompletion { [weak self] in self?.showTile(id) }
+            if animator == nil { showTile(id) }
         }
 
         /// The lifting part of a tile drawn into an image, on a clear background, with a
