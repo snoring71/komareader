@@ -123,7 +123,12 @@ final class ScreenshotTests: XCTestCase {
         // Book Info from the context menu.
         book.press(forDuration: 1.2)
         let infoItem = app.buttons["Book Info"]
-        XCTAssertTrue(infoItem.waitForExistence(timeout: 5), "No Book Info in the context menu")
+        if !infoItem.waitForExistence(timeout: 5) {
+            // Show what is on screen instead, to see why.
+            save(app, "07a-no-book-menu")
+            print(app.debugDescription)
+        }
+        XCTAssertTrue(infoItem.exists, "No Book Info in the context menu")
         sleep(1)
         // The icon row and cover lifted together, with no grey box around them (#71).
         save(app, "07b-book-long-press")
