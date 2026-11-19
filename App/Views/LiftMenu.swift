@@ -33,6 +33,7 @@ final class LiftMenuRegistry {
         var preview: (@MainActor () -> AnyView)?
         /// The full cover, shown large once the menu is open.
         var coverImage: (@MainActor () -> UIImage?)?
+        var onScreen = true
     }
 
     /// Names the grid's coordinate space, so tiles report frames in the host view's coordinates.
@@ -58,15 +59,22 @@ final class LiftMenuRegistry {
         change(&entries[id, default: Entry()])
     }
 
-    func remove(_ id: String) {
-        entries[id] = nil
+    /// A tile scrolled out of the lazy grid. Its entry is kept, only marked, because a row that
+    /// comes back may not redraw or report its frame again: removing it left whole rows with no
+    /// long-press menu until they happened to redraw.
+    func setOnScreen(_ id: String, _ onScreen: Bool) {
+        if onScreen {
+            entries[id, default: Entry()].onScreen = true
+        } else {
+            entries[id]?.onScreen = false
+        }
     }
 
     /// The tile under a point in the grid's coordinates. Tiles may overlap a little (a
     /// scrolled row's edge), so the smallest one wins.
     func id(at point: CGPoint) -> String? {
         entries
-            .filter { $0.value.frame.contains(point) && $0.value.menu != nil }
+            .filter { $0.value.onScreen && $0.value.frame.contains(point) && $0.value.menu != nil }
             .min { $0.value.frame.width * $0.value.frame.height < $1.value.frame.width * $1.value.frame.height }?
             .key
     }
@@ -140,7 +148,8 @@ private struct LiftMenuItemModifier: ViewModifier {
                 .onGeometryChange(for: CGRect.self) { [space = registry.space] in $0.frame(in: .named(space)) } action: { frame in
                     registry.update(id) { $0.frame = frame }
                 }
-                .onDisappear { registry.remove(id) }
+                .onAppear { registry.setOnScreen(id, true) }
+                .onDisappear { registry.setOnScreen(id, false) }
         } else {
             content
         }
