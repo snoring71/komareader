@@ -220,7 +220,9 @@ private struct LiftMenuHostView: UIViewRepresentable {
             var large: UIContextMenuContentPreviewProvider?
             if let image = entry.coverImage?() {
                 let screen = window?.bounds ?? self.bounds
-                large = { LargeCoverController(image: image, bounds: screen) }
+                // The cover's shape in the grid, so a wide image is cropped the same way.
+                let aspect = entry.cover.isNull || entry.cover.height == 0 ? nil : entry.cover.width / entry.cover.height
+                large = { LargeCoverController(image: image, aspect: aspect, bounds: screen) }
             }
             return UIContextMenuConfiguration(identifier: id as NSString, previewProvider: large) { _ in menu }
         }
@@ -239,15 +241,21 @@ private struct LiftMenuHostView: UIViewRepresentable {
                                     configuration: UIContextMenuConfiguration,
                                     dismissalPreviewForItemWithIdentifier identifier: NSCopying) -> UITargetedPreview? {
             // Back to where the tile is now (an action may have moved it); none if it left.
-            // The tile shows again as the copy starts back, not once it has landed, so its
-            // drop shadow is already there underneath: the copy covers the tile on the way.
-            let preview = preview(for: identifier)
-            showTile(identifier as? String)
-            return preview
+            preview(for: identifier)
         }
 
-        private func showTile(_ id: String?) {
-            if let registry, registry.lifted == id { registry.lifted = nil }
+        /// How long the copy takes to shrink back into the tile, about. The tile fades in over
+        /// the end of it, under the landing copy: not before (two covers, one shrinking past
+        /// the other) and not after (the shadow comes back late).
+        private static let landing: TimeInterval = 0.28
+
+        private func showTile(_ id: String?, animated: Bool) {
+            guard let registry, registry.lifted == id else { return }
+            if animated {
+                withAnimation(.easeIn(duration: 0.12)) { registry.lifted = nil }
+            } else {
+                registry.lifted = nil
+            }
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
@@ -259,7 +267,13 @@ private struct LiftMenuHostView: UIViewRepresentable {
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     willEndFor configuration: UIContextMenuConfiguration,
                                     animator: UIContextMenuInteractionAnimating?) {
-            showTile(configuration.identifier as? String)
+            let id = configuration.identifier as? String
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.landing) { [weak self] in
+                self?.showTile(id, animated: true)
+            }
+            // At the latest once the copy has landed.
+            animator?.addCompletion { [weak self] in self?.showTile(id, animated: false) }
+            if animator == nil { showTile(id, animated: false) }
         }
 
         /// The lifting part of a tile drawn into an image, on a clear background, with a
@@ -329,15 +343,17 @@ enum LiftMenuItems {
 }
 
 /// A cover shown large while a tile's long-press menu is open (#71): as big as fits in about
-/// half the screen's height, and up to half its width, with nothing around it.
+/// half the screen's height, and up to half its width, cropped like the grid's cover.
 private final class LargeCoverController: UIViewController {
     private let image: UIImage
 
-    init(image: UIImage, bounds: CGRect) {
+    /// `aspect` is the cover's shape in the grid (width / height); the image fills it, cropped
+    /// in the middle as in the grid. Nil uses the image's own shape.
+    init(image: UIImage, aspect: CGFloat?, bounds: CGRect) {
         self.image = image
         super.init(nibName: nil, bundle: nil)
         let maxSize = CGSize(width: bounds.width * 0.5, height: bounds.height * 0.55)
-        let aspect = image.size.height > 0 ? image.size.width / image.size.height : 2.0 / 3.0
+        let aspect = aspect ?? (image.size.height > 0 ? image.size.width / image.size.height : 2.0 / 3.0)
         var size = CGSize(width: maxSize.height * aspect, height: maxSize.height)
         if size.width > maxSize.width { size = CGSize(width: maxSize.width, height: maxSize.width / aspect) }
         preferredContentSize = CGSize(width: size.width.rounded(), height: size.height.rounded())
