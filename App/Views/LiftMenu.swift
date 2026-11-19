@@ -33,6 +33,11 @@ final class LiftMenuRegistry {
         var preview: (@MainActor () -> AnyView)?
         /// The full cover, shown large once the menu is open.
         var coverImage: (@MainActor () -> UIImage?)?
+        /// How many live copies of the tile are on screen. SwiftUI can show a rebuilt tile
+        /// before the old one's onDisappear arrives, so a plain flag could end up false for a
+        /// tile that is showing.
+        var appearances = 0
+        var onScreen: Bool { appearances > 0 }
     }
 
     /// Names the grid's coordinate space, so tiles report frames in the host view's coordinates.
@@ -58,15 +63,22 @@ final class LiftMenuRegistry {
         change(&entries[id, default: Entry()])
     }
 
-    func remove(_ id: String) {
-        entries[id] = nil
+    /// A tile scrolled out of the lazy grid. Its entry is kept, only marked, because a row that
+    /// comes back may not redraw or report its frame again: removing it left whole rows with no
+    /// long-press menu until they happened to redraw.
+    func setOnScreen(_ id: String, _ onScreen: Bool) {
+        if onScreen {
+            entries[id, default: Entry()].appearances += 1
+        } else if let count = entries[id]?.appearances {
+            entries[id]?.appearances = max(0, count - 1)
+        }
     }
 
     /// The tile under a point in the grid's coordinates. Tiles may overlap a little (a
     /// scrolled row's edge), so the smallest one wins.
     func id(at point: CGPoint) -> String? {
         entries
-            .filter { $0.value.frame.contains(point) && $0.value.menu != nil }
+            .filter { $0.value.onScreen && $0.value.frame.contains(point) && $0.value.menu != nil }
             .min { $0.value.frame.width * $0.value.frame.height < $1.value.frame.width * $1.value.frame.height }?
             .key
     }
@@ -140,7 +152,8 @@ private struct LiftMenuItemModifier: ViewModifier {
                 .onGeometryChange(for: CGRect.self) { [space = registry.space] in $0.frame(in: .named(space)) } action: { frame in
                     registry.update(id) { $0.frame = frame }
                 }
-                .onDisappear { registry.remove(id) }
+                .onAppear { registry.setOnScreen(id, true) }
+                .onDisappear { registry.setOnScreen(id, false) }
         } else {
             content
         }
