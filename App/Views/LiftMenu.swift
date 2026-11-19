@@ -37,8 +37,6 @@ final class LiftMenuRegistry {
     @ObservationIgnored private(set) var entries: [String: Entry] = [:]
     /// The tile whose menu is open: it hides while its preview is lifted.
     var lifted: String?
-    /// Whether a menu is open (its tile stays hidden for as long).
-    @ObservationIgnored var isMenuShowing = false
 
     func update(_ id: String, _ change: (inout Entry) -> Void) {
         change(&entries[id, default: Entry()])
@@ -228,31 +226,27 @@ private struct LiftMenuHostView: UIViewRepresentable {
                                     configuration: UIContextMenuConfiguration,
                                     dismissalPreviewForItemWithIdentifier identifier: NSCopying) -> UITargetedPreview? {
             // Back to where the tile is now (an action may have moved it); none if it left.
-            // The tile shows again when the menu has ended (`willEndFor`); this is a backstop
-            // in case a press let go early ends without that call.
-            let id = identifier as? String
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                if let registry = self?.registry, registry.lifted == id, !registry.isMenuShowing { registry.lifted = nil }
-            }
-            return preview(for: identifier)
+            // The tile shows again as the copy starts back, not once it has landed, so its
+            // drop shadow is already there underneath: the copy covers the tile on the way.
+            let preview = preview(for: identifier)
+            showTile(identifier as? String)
+            return preview
+        }
+
+        private func showTile(_ id: String?) {
+            if let registry, registry.lifted == id { registry.lifted = nil }
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     willDisplayMenuFor configuration: UIContextMenuConfiguration,
                                     animator: UIContextMenuInteractionAnimating?) {
             registry?.lifted = configuration.identifier as? String
-            registry?.isMenuShowing = true
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     willEndFor configuration: UIContextMenuConfiguration,
                                     animator: UIContextMenuInteractionAnimating?) {
-            let id = configuration.identifier as? String
-            registry?.isMenuShowing = false
-            let show = { [weak self] in
-                if self?.registry?.lifted == id { self?.registry?.lifted = nil }
-            }
-            if let animator { animator.addCompletion(show) } else { show() }
+            showTile(configuration.identifier as? String)
         }
 
         /// The lifting part of a tile drawn into an image, on a clear background, with a
