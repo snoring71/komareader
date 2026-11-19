@@ -40,6 +40,9 @@ final class LiftMenuRegistry {
     @ObservationIgnored private(set) var entries: [String: Entry] = [:]
     /// The tile whose menu is open: it hides while its preview is lifted.
     var lifted: String?
+    /// The tile whose large cover is shrinking back into it: only its cover hides, so the
+    /// icon row is already in place as the cover lands.
+    var landing: String?
 
     func update(_ id: String, _ change: (inout Entry) -> Void) {
         change(&entries[id, default: Entry()])
@@ -156,7 +159,7 @@ private struct LiftMenuPartModifier: ViewModifier {
                     }
                 }
                 // The lifted copy stands in for it while the menu is open, as in Photos.
-                .opacity(part == .lift && registry.lifted == id ? 0 : 1)
+                .opacity((part == .lift && registry.lifted == id) || (part == .cover && registry.landing == id) ? 0 : 1)
         } else {
             content
         }
@@ -241,7 +244,15 @@ private struct LiftMenuHostView: UIViewRepresentable {
                                     configuration: UIContextMenuConfiguration,
                                     dismissalPreviewForItemWithIdentifier identifier: NSCopying) -> UITargetedPreview? {
             // Back to where the tile is now (an action may have moved it); none if it left.
-            preview(for: identifier)
+            // From the large cover, only the cover goes back: UIKit cross-fades the large view
+            // into this one, and the same picture on both sides keeps that from showing (with
+            // the icon row in it, the two showed through each other as a flash).
+            if let id = identifier as? String, let landing = coverPreview(for: id) {
+                registry?.landing = id
+                registry?.lifted = nil
+                return landing
+            }
+            return preview(for: identifier)
         }
 
         /// How long the copy takes to shrink back into the tile, about. The tile shows again at
@@ -251,8 +262,9 @@ private struct LiftMenuHostView: UIViewRepresentable {
         private static let landing: TimeInterval = 0.28
 
         private func showTile(_ id: String?) {
-            guard let registry, registry.lifted == id else { return }
-            registry.lifted = nil
+            guard let registry else { return }
+            if registry.lifted == id { registry.lifted = nil }
+            if registry.landing == id { registry.landing = nil }
         }
 
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
@@ -271,6 +283,24 @@ private struct LiftMenuHostView: UIViewRepresentable {
             // At the latest once the copy has landed.
             animator?.addCompletion { [weak self] in self?.showTile(id) }
             if animator == nil { showTile(id) }
+        }
+
+        /// Just the tile's cover, cropped as in the grid, for the large cover to shrink back into.
+        private func coverPreview(for id: String) -> UITargetedPreview? {
+            guard let entry = registry?.entries[id], !entry.cover.isNull, !entry.cover.isEmpty,
+                  let image = entry.coverImage?() else { return nil }
+            let cover = entry.cover
+            let view = UIImageView(image: image)
+            view.contentMode = .scaleAspectFill
+            view.clipsToBounds = true
+            view.frame = CGRect(origin: .zero, size: cover.size)
+            let parameters = UIPreviewParameters()
+            parameters.backgroundColor = .clear
+            let outline = UIBezierPath(roundedRect: view.bounds, cornerRadius: entry.cornerRadius)
+            parameters.visiblePath = outline
+            parameters.shadowPath = outline
+            let target = UIPreviewTarget(container: self, center: CGPoint(x: cover.midX, y: cover.midY))
+            return UITargetedPreview(view: view, parameters: parameters, target: target)
         }
 
         /// The lifting part of a tile drawn into an image, on a clear background, with a
