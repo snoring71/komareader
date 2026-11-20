@@ -71,7 +71,7 @@ import Testing
     }
 
     @Test func trimsPlainSideMarginsFromCovers() throws {
-        let crop = try #require(ImageAnalysis.sideMarginCrop(of: try cover(left: 30, right: 15)))
+        let crop = try #require(ImageAnalysis.marginCrop(of: try cover(left: 30, right: 15)))
         // 30 px, then one more in; 15 px, then one more in; top and bottom untouched.
         #expect(abs(crop[0] - 31.0 / 300) < 0.001)
         #expect(abs(crop[2] - 253.0 / 300) < 0.001)
@@ -80,24 +80,70 @@ import Testing
 
     @Test func trimsBlackMarginsWithAWatermark() throws {
         let black = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
-        let crop = try #require(ImageAnalysis.sideMarginCrop(of: try cover(left: 30, right: 0, band: black, watermark: true)))
+        let crop = try #require(ImageAnalysis.marginCrop(of: try cover(left: 30, right: 0, band: black, watermark: true)))
         #expect(abs(crop[0] - 31.0 / 300) < 0.001)
         #expect(abs(crop[2] - 269.0 / 300) < 0.001)
     }
 
     @Test func leavesColouredAndThinBordersAlone() throws {
         let blue = CGColor(red: 0.1, green: 0.3, blue: 0.9, alpha: 1)
-        #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 30, right: 30, band: blue)) == nil)
-        // 2 px on 300 is under 1% of the width.
-        #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 2, right: 2)) == nil)
-        #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 0, right: 0)) == nil)
+        #expect(ImageAnalysis.marginCrop(of: try cover(left: 30, right: 30, band: blue)) == nil)
+        // 2 px is too thin to count.
+        #expect(ImageAnalysis.marginCrop(of: try cover(left: 2, right: 2)) == nil)
+        #expect(ImageAnalysis.marginCrop(of: try cover(left: 0, right: 0)) == nil)
         // Mostly blank: trimming would leave less than a fifth.
-        #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 130, right: 130)) == nil)
+        #expect(ImageAnalysis.marginCrop(of: try cover(left: 130, right: 130)) == nil)
+    }
+
+    /// A 300 × 400 white page; `draw` adds to it (Core Graphics counts y from the bottom).
+    func page(_ draw: (CGContext) -> Void) throws -> CGImage {
+        let context = try #require(CGContext(data: nil, width: 300, height: 400, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 300, height: 400))
+        draw(context)
+        return try #require(context.makeImage())
+    }
+
+    @Test func trimsStackedBands() throws {
+        // Grey frame 20 px each side; art from 20 to 140; white from 140 to the grey frame.
+        let image = try page { context in
+            context.setFillColor(CGColor(red: 0.2, green: 0.2, blue: 0.2, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: 20, height: 400))
+            context.fill(CGRect(x: 280, y: 0, width: 20, height: 400))
+            context.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.3, alpha: 1))
+            context.fill(CGRect(x: 20, y: 0, width: 120, height: 400))
+        }
+        let crop = try #require(ImageAnalysis.marginCrop(of: image))
+        #expect(abs(crop[0] - 21.0 / 300) < 0.001)
+        #expect(abs(crop[2] - 118.0 / 300) < 0.001)
+    }
+
+    @Test func artRunningAcrossABandIsNotAMargin() throws {
+        // White on the left 30 px, but a red title strip runs from the edge into the art.
+        let image = try page { context in
+            context.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.3, alpha: 1))
+            context.fill(CGRect(x: 30, y: 0, width: 270, height: 400))
+            context.fill(CGRect(x: 0, y: 200, width: 30, height: 30))
+        }
+        #expect(ImageAnalysis.marginCrop(of: image) == nil)
+    }
+
+    @Test func trimsThinTopAndBottomBandsOnly() throws {
+        // A white band of 10 px at the top (2.5%) goes; one of 40 px at the bottom (10%) stays.
+        let image = try page { context in
+            context.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.3, alpha: 1))
+            context.fill(CGRect(x: 0, y: 40, width: 300, height: 350))
+        }
+        let crop = try #require(ImageAnalysis.marginCrop(of: image))
+        #expect(crop[0] == 0 && crop[2] == 1)
+        #expect(abs(crop[1] - 11.0 / 400) < 0.001)
+        #expect(abs(crop[3] - 389.0 / 400) < 0.001)
     }
 
     /// A cover on the right half of a white two-page scan: more than half the width goes.
     @Test func trimsAWideBlankLeftHalf() throws {
-        let crop = try #require(ImageAnalysis.sideMarginCrop(of: try cover(left: 160, right: 20)))
+        let crop = try #require(ImageAnalysis.marginCrop(of: try cover(left: 160, right: 20)))
         #expect(abs(crop[0] - 161.0 / 300) < 0.001)
         #expect(abs(crop[2] - 118.0 / 300) < 0.001)
     }

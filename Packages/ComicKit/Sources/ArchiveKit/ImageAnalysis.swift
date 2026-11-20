@@ -89,17 +89,21 @@ public enum ImageAnalysis {
         return [Double(left) / Double(width), Double(top) / Double(height), w, h]
     }
 
-    /// The crop that trims plain side margins from a cover, as fractions `[x, 0, width, 1]`,
-    /// or nil when neither side has one. Only the left and right edges are looked at.
+    /// The crop that trims plain margins from a cover, as fractions `[x, y, width, height]`,
+    /// or nil when there are none.
     ///
-    /// A margin is a band along a side whose colour is white, black or grey (not a coloured
-    /// border) and whose columns are mostly that colour: up to `watermarkShare` of a column may
-    /// differ, so a watermark printed in the band does not stop it. Bands narrower than
-    /// `minimumBand` of the width are left alone. The crop then goes one pixel further in on
-    /// each trimmed side, so a blurred or JPEG-smudged edge between band and art is not kept.
-    /// Returns nil if trimming would leave less than a fifth of the width (a blank page, say).
-    /// A cover on one half of a white two-page scan trims away more than half, so that is allowed.
-    public static func sideMarginCrop(of image: CGImage, minimumBand: Double = 0.01, watermarkShare: Double = 0.15) -> [Double]? {
+    /// A margin is a band along an edge whose colour is white, black or grey (not a coloured
+    /// border) and whose lines are mostly that colour: up to `watermarkShare` of a line may
+    /// differ, so a watermark printed in the band does not stop it. Bands can be stacked (a grey
+    /// frame around a white half page, say): each is measured with its own colour. A band is not
+    /// a margin if some art runs right across it (a title strip reaching the page edge), and
+    /// bands thinner than `minimumBand` of the page are left alone. Left and right come first;
+    /// then top and bottom are looked at between those, and trimmed only if their band is no
+    /// more than `maximumTopBottom` of the height. Each trimmed edge goes one pixel further in,
+    /// so a blurred or JPEG-smudged edge between band and art is not kept. Sides are not trimmed
+    /// if less than a fifth of the width would be left (a blank page, say).
+    public static func marginCrop(of image: CGImage, minimumBand: Double = 0.004, watermarkShare: Double = 0.15,
+                                  maximumTopBottom: Double = 0.05) -> [Double]? {
         // Measured on a copy no bigger than the shared cover, so "one pixel" is a cover pixel.
         let longest = 1200.0
         let scale = min(1, longest / Double(max(image.width, image.height)))
@@ -107,61 +111,97 @@ public enum ImageAnalysis {
         let height = Int((Double(image.height) * scale).rounded())
         guard width >= 16, height >= 16, let pixels = rgba(image, width: width, height: height) else { return nil }
 
-        func pixel(_ x: Int, _ y: Int) -> (Int, Int, Int) {
+        typealias Colour = (r: Int, g: Int, b: Int)
+        /// One edge's lines: columns (for left and right) or rows (for top and bottom), counted
+        /// from the edge inwards, each looked at across `across`.
+        struct Edge {
+            var vertical: Bool
+            var start: Int
+            var step: Int
+            var count: Int
+            var across: Range<Int>
+        }
+        func pixel(_ edge: Edge, line: Int, at position: Int) -> Colour {
+            let l = edge.start + edge.step * line
+            let (x, y) = edge.vertical ? (l, position) : (position, l)
             let i = (y * width + x) * 4
             return (Int(pixels[i]), Int(pixels[i + 1]), Int(pixels[i + 2]))
         }
-        /// The typical colour of the outermost two columns on a side (each channel's median),
-        /// if it is neutral: white, black or a grey.
-        func neutralReference(columns: [Int]) -> (Int, Int, Int)? {
+        func differs(_ p: Colour, _ reference: Colour) -> Bool {
+            abs(p.r - reference.r) + abs(p.g - reference.g) + abs(p.b - reference.b) > 48
+        }
+        /// The typical colour of two lines (each channel's median), if it is white, black or grey.
+        func neutralReference(_ edge: Edge, line: Int) -> Colour? {
             var reds: [Int] = [], greens: [Int] = [], blues: [Int] = []
-            reds.reserveCapacity(height * columns.count)
-            greens.reserveCapacity(height * columns.count)
-            blues.reserveCapacity(height * columns.count)
-            for x in columns {
-                for y in 0..<height {
-                    let p = pixel(x, y)
-                    reds.append(p.0); greens.append(p.1); blues.append(p.2)
+            for l in [line, line + 1] {
+                for position in edge.across {
+                    let p = pixel(edge, line: l, at: position)
+                    reds.append(p.r); greens.append(p.g); blues.append(p.b)
                 }
             }
             func median(_ values: [Int]) -> Int { values.sorted()[values.count / 2] }
-            let colour = (median(reds), median(greens), median(blues))
-            let spread = max(colour.0, colour.1, colour.2) - min(colour.0, colour.1, colour.2)
-            return spread <= 24 ? colour : nil
+            let colour = (r: median(reds), g: median(greens), b: median(blues))
+            return max(colour.r, colour.g, colour.b) - min(colour.r, colour.g, colour.b) <= 24 ? colour : nil
         }
-        let allowedMisses = Int(Double(height) * watermarkShare)
-        func columnMatches(_ x: Int, _ reference: (Int, Int, Int)) -> Bool {
-            var misses = 0
-            for y in 0..<height {
-                let p = pixel(x, y)
-                if abs(p.0 - reference.0) + abs(p.1 - reference.1) + abs(p.2 - reference.2) > 48 {
+        /// How many lines in from the edge are margin, band after band.
+        func margin(_ edge: Edge) -> Int {
+            let span = edge.across.count
+            guard span > 0 else { return 0 }
+            let allowedMisses = Int(Double(span) * watermarkShare)
+            func lineMatches(_ line: Int, _ reference: Colour) -> Bool {
+                var misses = 0
+                for position in edge.across where differs(pixel(edge, line: line, at: position), reference) {
                     misses += 1
                     if misses > allowedMisses { return false }
                 }
+                return true
             }
-            return true
-        }
-        /// How many columns from the outside in are margin, stepping by `step` from `start`.
-        func band(from start: Int, step: Int) -> Int {
-            guard let reference = neutralReference(columns: [start, start + step]) else { return 0 }
-            var count = 0
-            var x = start
-            while count < width, columnMatches(x, reference) {
-                count += 1
-                x += step
+            var done = 0
+            while done < edge.count - 1 {
+                // A new band may start a line or two in, past the blurred seam with the last one.
+                var found: (start: Int, length: Int, reference: Colour)?
+                for offset in 0..<(done == 0 ? 1 : 3) {
+                    let first = done + offset
+                    guard first + 1 < edge.count, let reference = neutralReference(edge, line: first) else { continue }
+                    var length = 0
+                    while first + length < edge.count, lineMatches(first + length, reference) { length += 1 }
+                    if length >= 2 {
+                        found = (first, length, reference)
+                        break
+                    }
+                }
+                guard let band = found else { break }
+                // Art running right across the band (on more than 1% of it) means it is not a margin.
+                var crossings = 0
+                for position in edge.across {
+                    var misses = 0
+                    for line in band.start..<(band.start + band.length)
+                    where differs(pixel(edge, line: line, at: position), band.reference) { misses += 1 }
+                    if Double(misses) >= Double(band.length) * 0.9 { crossings += 1 }
+                }
+                guard Double(crossings) <= Double(span) * 0.01 else { break }
+                done = band.start + band.length
             }
-            return count
+            return done
         }
-        let minimum = max(2, Int((Double(width) * minimumBand).rounded(.up)))
-        var left = band(from: 0, step: 1)
-        var right = band(from: width - 1, step: -1)
-        left = left >= minimum ? left + 1 : 0
-        right = right >= minimum ? right + 1 : 0
-        guard left > 0 || right > 0 else { return nil }
-        let kept = width - left - right
-        guard Double(kept) >= Double(width) * 0.2 else { return nil }
+        /// A band thick enough to trim, plus the extra pixel; otherwise 0.
+        func trim(_ band: Int, of size: Int) -> Int {
+            band >= max(3, Int((Double(size) * minimumBand).rounded())) ? band + 1 : 0
+        }
+
+        var left = trim(margin(Edge(vertical: true, start: 0, step: 1, count: width, across: 0..<height)), of: width)
+        var right = trim(margin(Edge(vertical: true, start: width - 1, step: -1, count: width, across: 0..<height)), of: width)
+        if Double(width - left - right) < Double(width) * 0.2 { left = 0; right = 0 }
+        let columns = left..<(width - right)
+        let tallest = Int(Double(height) * maximumTopBottom)
+        var top = trim(margin(Edge(vertical: false, start: 0, step: 1, count: height, across: columns)), of: height)
+        var bottom = trim(margin(Edge(vertical: false, start: height - 1, step: -1, count: height, across: columns)), of: height)
+        if top > tallest + 1 { top = 0 }
+        if bottom > tallest + 1 { bottom = 0 }
+        guard left > 0 || right > 0 || top > 0 || bottom > 0 else { return nil }
         func rounded(_ value: Double) -> Double { (value * 10000).rounded() / 10000 }
-        return [rounded(Double(left) / Double(width)), 0, rounded(Double(kept) / Double(width)), 1]
+        return [rounded(Double(left) / Double(width)), rounded(Double(top) / Double(height)),
+                rounded(Double(width - left - right) / Double(width)), rounded(Double(height - top - bottom) / Double(height))]
     }
 
     /// `image` drawn at `width` × `height` as RGBA bytes, rows from the top.

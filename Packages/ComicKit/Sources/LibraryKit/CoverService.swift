@@ -196,7 +196,7 @@ public actor CoverService {
         }
     }
 
-    /// Trims plain white, black or grey side margins from a cover made for the first time (or
+    /// Trims plain white, black or grey margins from a cover made for the first time (or
     /// regenerated). The trim is saved like a cover edit: a recipe in the record and a rendered
     /// `.custom.jpg`, so it syncs, shows its handles in Edit Cover, and Reset undoes it. Books
     /// whose record already has a real edit are left alone. Returns the trimmed cover's JPEG.
@@ -204,7 +204,7 @@ public actor CoverService {
         var record = store.read(bookId: book.id)
             ?? BookRecord(bookId: book.id, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
         if let edit = record.cover, !edit.isDefault { return nil }
-        guard let crop = ImageAnalysis.sideMarginCrop(of: cover),
+        guard let crop = ImageAnalysis.marginCrop(of: cover),
               let trimmed = CoverRenderer.crop(cover, to: crop),
               let jpeg = ImageDecoder.jpegData(trimmed, quality: 0.85) else { return nil }
         do {

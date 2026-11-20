@@ -81,8 +81,8 @@ copies tag by tag, keeping whichever entry has the later `updatedAt`.
   clockwise: 0, 90, 180 or 270) is applied. To re-render a cover: rotate the page, then crop.
   `covers/<bookId>.custom.jpg` holds the result. A `cover` of page 0, uncropped and not rotated
   means the user went back to the default cover; there is then no `.custom.jpg`.
-  An app making a book's first cover may trim plain white, black or grey side margins and save
-  that trim as a `cover` of page 0 with only `x` and `width` cropped (plus its `.custom.jpg`).
+  An app making a book's first cover may trim plain white, black or grey margins and save
+  that trim as a `cover` of page 0 (plus its `.custom.jpg`).
 - `flags` holds the user's Favorite and Bookmarked marks.
 - `tags` holds the user's own tags for the book, in the user's spelling. Tags are matched
   ignoring case, and a book lists each tag once. Renaming or deleting a tag rewrites `tags`

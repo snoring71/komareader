@@ -360,13 +360,13 @@ struct CoverEditorView: View {
         Task { await showRotated() }
     }
 
-    /// Trims plain white, black or grey margins from the left and right of the page shown, the
+    /// Trims plain white, black or grey margins from the page shown (top and bottom only a little), the
     /// same way a new book's cover is trimmed. Switches to Free so the handles can adjust it.
     private func autoCrop() {
         guard let image = shown?.cgImage else { return }
         let degrees = rotation, page = pageIndex
         Task {
-            let found = await Task.detached(priority: .userInitiated) { ImageAnalysis.sideMarginCrop(of: image) }.value
+            let found = await Task.detached(priority: .userInitiated) { ImageAnalysis.marginCrop(of: image) }.value
             guard degrees == rotation, page == pageIndex else { return }
             guard let found, found.count == 4 else {
                 withAnimation { noMarginsFound = true }
