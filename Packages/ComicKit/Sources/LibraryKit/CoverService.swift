@@ -183,12 +183,13 @@ public actor CoverService {
             if !wasDownloaded { try await CloudFiles.download(fileURL) }
             defer { if !wasDownloaded { try? CloudFiles.evict(fileURL) } }
 
-            let cover = try await BookSourceFactory.firstPageImage(url: fileURL, format: book.format, maxPixelSize: sharedCoverHeight)
+            // Decoded larger than the cover, so the margin check still sees a one-pixel white edge.
+            let page = try await BookSourceFactory.firstPageImage(url: fileURL, format: book.format, maxPixelSize: analysisHeight)
             // While the file is here (a book in iCloud is removed again below), read its metadata too.
             let metadata = book.metadataRead ? nil : MetadataReader.read(url: fileURL, format: book.format)
-            guard let jpeg = ImageDecoder.jpegData(cover, quality: 0.85) else { return (nil, metadata) }
+            guard let jpeg = try coverJPEG(page) else { return (nil, metadata) }
             try store.writeCover(jpeg, bookId: book.id)
-            let shown = autoCrop(cover, book: book, store: store) ?? jpeg
+            let shown = autoCrop(page, book: book, store: store) ?? jpeg
             try writeThumbnail(from: try ImageDecoder.downsample(data: shown, maxPixelSize: thumbnailHeight), to: thumbURL)
             return (thumbURL, metadata)
         } catch {
@@ -200,13 +201,13 @@ public actor CoverService {
     /// regenerated). The trim is saved like a cover edit: a recipe in the record and a rendered
     /// `.custom.jpg`, so it syncs, shows its handles in Edit Cover, and Reset undoes it. Books
     /// whose record already has a real edit are left alone. Returns the trimmed cover's JPEG.
-    private static func autoCrop(_ cover: CGImage, book: Book, store: RecordStore) -> Data? {
+    private static func autoCrop(_ page: CGImage, book: Book, store: RecordStore) -> Data? {
         var record = store.read(bookId: book.id)
             ?? BookRecord(bookId: book.id, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
         if let edit = record.cover, !edit.isDefault { return nil }
-        guard let crop = ImageAnalysis.marginCrop(of: cover),
-              let trimmed = CoverRenderer.crop(cover, to: crop),
-              let jpeg = ImageDecoder.jpegData(trimmed, quality: 0.85) else { return nil }
+        guard let crop = ImageAnalysis.marginCrop(of: page),
+              let trimmed = CoverRenderer.crop(page, to: crop),
+              let jpeg = try? coverJPEG(trimmed) else { return nil }
         do {
             try store.writeCover(jpeg, bookId: book.id, custom: true)
             record.cover = BookRecord.CoverEdit(page: 0, crop: crop)
@@ -216,6 +217,16 @@ public actor CoverService {
             try? store.deleteCover(bookId: book.id, custom: true)
             return nil
         }
+    }
+
+    /// The first page is read at up to this size for the margin check, then scaled to the cover.
+    static let analysisHeight: CGFloat = 2400
+
+    /// `image` as a cover JPEG, no larger than `sharedCoverHeight`.
+    private static func coverJPEG(_ image: CGImage) throws -> Data? {
+        guard CGFloat(max(image.width, image.height)) > sharedCoverHeight else { return ImageDecoder.jpegData(image, quality: 0.85) }
+        guard let full = ImageDecoder.jpegData(image, quality: 0.92) else { return nil }
+        return ImageDecoder.jpegData(try ImageDecoder.downsample(data: full, maxPixelSize: sharedCoverHeight), quality: 0.85)
     }
 
     private static func writeThumbnail(from image: CGImage, to url: URL) throws {

@@ -96,16 +96,17 @@ public enum ImageAnalysis {
     /// border) and whose lines are mostly that colour: up to `watermarkShare` of a line may
     /// differ, so a watermark printed in the band does not stop it. Bands can be stacked (a grey
     /// frame around a white half page, say): each is measured with its own colour. A band is not
-    /// a margin if some art runs right across it (a title strip reaching the page edge), and
-    /// bands thinner than `minimumBand` of the page are left alone. Left and right come first;
+    /// a margin if some art runs right across it (a title strip reaching the page edge). Even a
+    /// one-pixel white line along an edge counts. Left and right come first;
     /// then top and bottom are looked at between those, and trimmed only if their band is no
     /// more than `maximumTopBottom` of the height. Each trimmed edge goes one pixel further in,
     /// so a blurred or JPEG-smudged edge between band and art is not kept. Sides are not trimmed
     /// if less than a fifth of the width would be left (a blank page, say).
-    public static func marginCrop(of image: CGImage, minimumBand: Double = 0.004, watermarkShare: Double = 0.15,
+    public static func marginCrop(of image: CGImage, watermarkShare: Double = 0.15,
                                   maximumTopBottom: Double = 0.05) -> [Double]? {
-        // Measured on a copy no bigger than the shared cover, so "one pixel" is a cover pixel.
-        let longest = 1200.0
+        // Measured on a copy no bigger than the cover editor's page, sharp enough that a one-pixel
+        // line along an edge is still there (at the shared cover's 1200 px it would be blurred away).
+        let longest = 2400.0
         let scale = min(1, longest / Double(max(image.width, image.height)))
         let width = Int((Double(image.width) * scale).rounded())
         let height = Int((Double(image.height) * scale).rounded())
@@ -165,7 +166,8 @@ public enum ImageAnalysis {
                     guard first + 1 < edge.count, let reference = neutralReference(edge, line: first) else { continue }
                     var length = 0
                     while first + length < edge.count, lineMatches(first + length, reference) { length += 1 }
-                    if length >= 2 {
+                    // The first band can be a single line; later ones need two, so a seam is not a band.
+                    if length >= (done == 0 ? 1 : 2) {
                         found = (first, length, reference)
                         break
                     }
@@ -184,9 +186,9 @@ public enum ImageAnalysis {
             }
             return done
         }
-        /// A band thick enough to trim, plus the extra pixel; otherwise 0.
+        /// The band plus the extra pixel, or 0 when there is no band.
         func trim(_ band: Int, of size: Int) -> Int {
-            band >= max(3, Int((Double(size) * minimumBand).rounded())) ? band + 1 : 0
+            band > 0 ? band + 1 : 0
         }
 
         var left = trim(margin(Edge(vertical: true, start: 0, step: 1, count: width, across: 0..<height)), of: width)

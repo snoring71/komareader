@@ -88,8 +88,6 @@ import Testing
     @Test func leavesColouredAndThinBordersAlone() throws {
         let blue = CGColor(red: 0.1, green: 0.3, blue: 0.9, alpha: 1)
         #expect(ImageAnalysis.marginCrop(of: try cover(left: 30, right: 30, band: blue)) == nil)
-        // 2 px is too thin to count.
-        #expect(ImageAnalysis.marginCrop(of: try cover(left: 2, right: 2)) == nil)
         #expect(ImageAnalysis.marginCrop(of: try cover(left: 0, right: 0)) == nil)
         // Mostly blank: trimming would leave less than a fifth.
         #expect(ImageAnalysis.marginCrop(of: try cover(left: 130, right: 130)) == nil)
@@ -127,6 +125,19 @@ import Testing
             context.fill(CGRect(x: 0, y: 200, width: 30, height: 30))
         }
         #expect(ImageAnalysis.marginCrop(of: image) == nil)
+    }
+
+    @Test func trimsOnePixelEdges() throws {
+        // A one-pixel white line on the left and along the bottom; one more pixel goes too.
+        let image = try page { context in
+            context.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.3, alpha: 1))
+            context.fill(CGRect(x: 1, y: 1, width: 299, height: 399))
+        }
+        let crop = try #require(ImageAnalysis.marginCrop(of: image))
+        #expect(abs(crop[0] - 2.0 / 300) < 0.001)
+        #expect(abs(crop[2] - 298.0 / 300) < 0.001)
+        #expect(crop[1] == 0)
+        #expect(abs(crop[3] - 398.0 / 400) < 0.001)
     }
 
     @Test func trimsThinTopAndBottomBandsOnly() throws {
