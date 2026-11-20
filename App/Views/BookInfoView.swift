@@ -155,7 +155,7 @@ struct BookInfoView: View {
                                 hasOwnOptions = false
                             }
                         } message: {
-                            Text("Direction, page layout, fit, background, crop and image adjustments go back to your Book Defaults on all your devices. Reading progress, favorites, bookmarks and tags stay.")
+                            Text(ReaderResetText.message)
                         }
                 }
             }

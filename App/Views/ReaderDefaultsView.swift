@@ -5,7 +5,6 @@ import SwiftUI
 /// while reading a book applies to that book only.
 struct ReaderDefaultsView: View {
     @Environment(AppModel.self) private var model
-    @AppStorage(CoverIntro.settingKey) private var showCoverIntro = true
 
     var body: some View {
         @Bindable var defaults = model.readerDefaults
@@ -27,10 +26,17 @@ struct ReaderDefaultsView: View {
                     ForEach(ReaderOptions.PageLayout.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 Toggle("Split Double Pages", isOn: $defaults.splitDoublePages)
+                // Here as in the reader's Page Layout panel (#94).
+                Picker("Binding Shadow", selection: Binding(
+                    get: { BindingShadowStrength.nearest(defaults.bindingShadow) },
+                    set: { defaults.bindingShadow = $0.rawValue }
+                )) {
+                    ForEach(BindingShadowStrength.allCases) { Text($0.title).tag($0) }
+                }
             } header: {
                 Text("Page Layout")
             } footer: {
-                Text("Split Double Pages shows an image that holds two pages as two separate pages, in reading order. With Two Pages, the halves still share the screen.")
+                Text("Split Double Pages shows an image that holds two pages as two separate pages, in reading order. With Two Pages, the halves still share the screen. Binding Shadow darkens the middle of two-page spreads, like the fold of a printed book.")
             }
 
             Section {
@@ -56,16 +62,10 @@ struct ReaderDefaultsView: View {
                         set: { defaults.background = ReaderOptions.Background($0) }
                     ), supportsOpacity: false)
                 }
-                Picker("Binding Shadow", selection: Binding(
-                    get: { BindingShadowStrength.nearest(defaults.bindingShadow) },
-                    set: { defaults.bindingShadow = $0.rawValue }
-                )) {
-                    ForEach(BindingShadowStrength.allCases) { Text($0.title).tag($0) }
-                }
             } header: {
                 Text("Appearance")
             } footer: {
-                Text("Match Page fills the space around the page with the colour at its edges. Binding Shadow darkens the middle of two-page spreads, like the fold of a printed book.")
+                Text("Match Page fills the space around the page with the colour at its edges.")
             }
 
             Section {
@@ -77,14 +77,6 @@ struct ReaderDefaultsView: View {
                 Text("Image Adjustments")
             } footer: {
                 Text("Paper Grain lays a printed-paper texture over pages; Paper Tone warms white paper. Off by default.")
-            }
-
-            Section {
-                Toggle("Show Cover First", isOn: $showCoverIntro)
-            } header: {
-                Text("Opening Books")
-            } footer: {
-                Text("Shows the cover when a book opens: for a moment if you've read it before, or until you turn to the first page.")
             }
 
             Section {

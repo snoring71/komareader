@@ -291,29 +291,25 @@ final class ScreenshotTests: XCTestCase {
             }
         }
 
-        // Share Page under More (#60): the share sheet, or the left/right question first.
-        if more.waitForExistence(timeout: 3) {
-            more.tap()
-            let share = app.buttons["reader-share-page"]
-            if share.waitForExistence(timeout: 3) {
-                share.tap()
+        // Share Page in the top bar (#60, #92): the share sheet, or the left/right question first.
+        let share = app.buttons["reader-share-page"].firstMatch
+        if share.waitForExistence(timeout: 3) {
+            share.tap()
+            sleep(2)
+            let left = app.buttons["reader-share-left"].firstMatch
+            if left.exists {
+                save(app, "17e-reader-share-which-page")
+                left.tap()
                 sleep(2)
-                let left = app.buttons["reader-share-left"]
-                if left.exists {
-                    save(app, "17e-reader-share-which-page")
-                    left.tap()
-                    sleep(2)
-                }
-                save(app, "17f-reader-share-sheet")
             }
-            // Out of the share sheet and the panel, however many taps that takes.
-            let morePanel = app.descendants(matching: .any)["reader-more-panel"].firstMatch
+            save(app, "17f-reader-share-sheet")
+            // Out of the share sheet, however many taps that takes.
             let shareSheet = app.otherElements["ActivityListView"].firstMatch
-            for _ in 0..<4 where morePanel.exists || shareSheet.exists {
+            for _ in 0..<4 where shareSheet.exists {
                 app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
                 sleep(1)
             }
-            XCTAssertFalse(morePanel.exists, "The More panel did not close after sharing")
+            XCTAssertFalse(shareSheet.exists, "The share sheet did not close")
         }
 
         // The cover button in the page bar goes back to the cover; a tap forward returns.
