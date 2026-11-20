@@ -91,8 +91,15 @@ import Testing
         // 2 px on 300 is under 1% of the width.
         #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 2, right: 2)) == nil)
         #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 0, right: 0)) == nil)
-        // Mostly blank: trimming would leave less than half.
-        #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 100, right: 100)) == nil)
+        // Mostly blank: trimming would leave less than a fifth.
+        #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 130, right: 130)) == nil)
+    }
+
+    /// A cover on the right half of a white two-page scan: more than half the width goes.
+    @Test func trimsAWideBlankLeftHalf() throws {
+        let crop = try #require(ImageAnalysis.sideMarginCrop(of: try cover(left: 160, right: 20)))
+        #expect(abs(crop[0] - 161.0 / 300) < 0.001)
+        #expect(abs(crop[2] - 118.0 / 300) < 0.001)
     }
 
     @Test func reusesUnpackedPages() async throws {

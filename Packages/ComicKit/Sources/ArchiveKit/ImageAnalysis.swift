@@ -97,7 +97,8 @@ public enum ImageAnalysis {
     /// differ, so a watermark printed in the band does not stop it. Bands narrower than
     /// `minimumBand` of the width are left alone. The crop then goes one pixel further in on
     /// each trimmed side, so a blurred or JPEG-smudged edge between band and art is not kept.
-    /// Returns nil if trimming would leave less than half the width.
+    /// Returns nil if trimming would leave less than a fifth of the width (a blank page, say).
+    /// A cover on one half of a white two-page scan trims away more than half, so that is allowed.
     public static func sideMarginCrop(of image: CGImage, minimumBand: Double = 0.01, watermarkShare: Double = 0.15) -> [Double]? {
         // Measured on a copy no bigger than the shared cover, so "one pixel" is a cover pixel.
         let longest = 1200.0
@@ -158,7 +159,7 @@ public enum ImageAnalysis {
         right = right >= minimum ? right + 1 : 0
         guard left > 0 || right > 0 else { return nil }
         let kept = width - left - right
-        guard Double(kept) >= Double(width) * 0.5 else { return nil }
+        guard Double(kept) >= Double(width) * 0.2 else { return nil }
         func rounded(_ value: Double) -> Double { (value * 10000).rounded() / 10000 }
         return [rounded(Double(left) / Double(width)), 0, rounded(Double(kept) / Double(width)), 1]
     }
