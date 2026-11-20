@@ -131,10 +131,10 @@ public enum ImageAnalysis {
         func differs(_ p: Colour, _ reference: Colour) -> Bool {
             abs(p.r - reference.r) + abs(p.g - reference.g) + abs(p.b - reference.b) > 48
         }
-        /// The typical colour of two lines (each channel's median), if it is white, black or grey.
-        func neutralReference(_ edge: Edge, line: Int) -> Colour? {
+        /// The typical colour of `lines` lines (each channel's median), if it is white, black or grey.
+        func neutralReference(_ edge: Edge, line: Int, lines: Int) -> Colour? {
             var reds: [Int] = [], greens: [Int] = [], blues: [Int] = []
-            for l in [line, line + 1] {
+            for l in line..<(line + lines) {
                 for position in edge.across {
                     let p = pixel(edge, line: l, at: position)
                     reds.append(p.r); greens.append(p.g); blues.append(p.b)
@@ -163,7 +163,9 @@ public enum ImageAnalysis {
                 var found: (start: Int, length: Int, reference: Colour)?
                 for offset in 0..<(done == 0 ? 1 : 3) {
                     let first = done + offset
-                    guard first + 1 < edge.count, let reference = neutralReference(edge, line: first) else { continue }
+                    // The outermost line alone, so a one-pixel edge line has its own colour.
+                    let lines = done == 0 ? 1 : 2
+                    guard first + lines <= edge.count, let reference = neutralReference(edge, line: first, lines: lines) else { continue }
                     var length = 0
                     while first + length < edge.count, lineMatches(first + length, reference) { length += 1 }
                     // The first band can be a single line; later ones need two, so a seam is not a band.
