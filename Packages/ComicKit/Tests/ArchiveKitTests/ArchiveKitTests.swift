@@ -89,8 +89,9 @@ import Testing
         let blue = CGColor(red: 0.1, green: 0.3, blue: 0.9, alpha: 1)
         #expect(ImageAnalysis.marginCrop(of: try cover(left: 30, right: 30, band: blue)) == nil)
         #expect(ImageAnalysis.marginCrop(of: try cover(left: 0, right: 0)) == nil)
-        // Mostly blank: trimming would leave less than a fifth.
-        #expect(ImageAnalysis.marginCrop(of: try cover(left: 130, right: 130)) == nil)
+        // Mostly blank: trimming would leave less than a fifth, so the sides stay.
+        let blank = ImageAnalysis.marginCrop(of: try cover(left: 130, right: 130))
+        #expect(blank == nil || (blank?[0] == 0 && blank?[2] == 1))
     }
 
     /// A 300 × 400 white page; `draw` adds to it (Core Graphics counts y from the bottom).
@@ -124,7 +125,8 @@ import Testing
             context.fill(CGRect(x: 30, y: 0, width: 270, height: 400))
             context.fill(CGRect(x: 0, y: 200, width: 30, height: 30))
         }
-        #expect(ImageAnalysis.marginCrop(of: image) == nil)
+        // At most the outermost light line and one more go, never the 30 px band.
+        #expect((ImageAnalysis.marginCrop(of: image)?[0] ?? 0) <= 2.0 / 300 + 0.001)
     }
 
     @Test func trimsOnePixelEdges() throws {
@@ -147,7 +149,21 @@ import Testing
             context.fill(CGRect(x: 0, y: 0, width: 300, height: 390))
             context.fill(CGRect(x: 100, y: 390, width: 20, height: 8))
         }
-        #expect(ImageAnalysis.marginCrop(of: image) == nil)
+        // At most the outermost white line and one more go, never the 10 px band.
+        #expect((ImageAnalysis.marginCrop(of: image)?[1] ?? 0) <= 2.0 / 400 + 0.001)
+    }
+
+    @Test func trimsATintedEdgeLine() throws {
+        // A one-pixel cream line down the left beside orange art: not grey, but light, so it goes.
+        let image = try page { context in
+            context.setFillColor(CGColor(red: 1, green: 0.93, blue: 0.78, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: 1, height: 400))
+            context.setFillColor(CGColor(red: 1, green: 0.75, blue: 0.45, alpha: 1))
+            context.fill(CGRect(x: 1, y: 0, width: 299, height: 400))
+        }
+        let crop = try #require(ImageAnalysis.marginCrop(of: image))
+        #expect(abs(crop[0] - 2.0 / 300) < 0.001)
+        #expect(abs(crop[2] - 298.0 / 300) < 0.001)
     }
 
     @Test func trimsThinTopAndBottomBandsOnly() throws {

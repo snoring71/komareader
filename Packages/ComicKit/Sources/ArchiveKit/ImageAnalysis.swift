@@ -196,6 +196,18 @@ public enum ImageAnalysis {
                 guard Double(crossings) <= limit, Double(reaching) <= limit else { break }
                 done = band.start + band.length
             }
+            // No band, but the outermost line may still be a thin light or dark edge that picks up
+            // a tint from the art beside it (cream next to orange, say): trim it if almost all of
+            // it is light, or almost all dark. At worst that takes two pixels of real art.
+            if done == 0 {
+                var light = 0, dark = 0
+                for position in edge.across {
+                    let p = pixel(edge, line: 0, at: position)
+                    if min(p.r, p.g, p.b) >= 180 { light += 1 }
+                    if max(p.r, p.g, p.b) <= 60 { dark += 1 }
+                }
+                if Double(max(light, dark)) >= Double(span) * 0.85 { done = 1 }
+            }
             return done
         }
         /// The band plus the extra pixel, or 0 when there is no band.
