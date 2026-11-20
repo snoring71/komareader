@@ -402,14 +402,36 @@ enum LiftMenuItems {
         UIMenu(title: "", options: .displayInline, children: children)
     }
 
-    /// Pin to Sidebar or Unpin from Sidebar, for a folder or a series (#72).
-    @MainActor static func pin(_ item: SidebarItem, model: AppModel) -> UIMenu {
+    /// Pin to Sidebar or Unpin from Sidebar, for a folder or a series (#72), then actions for all
+    /// of its books (#101): a series' volumes, or a folder's books and its subfolders' (the books
+    /// its tile counts). Each shows only when it would change something.
+    @MainActor static func group(_ item: SidebarItem, model: AppModel) -> UIMenu {
         let pinned = model.isPinned(item)
-        return UIMenu(title: "", children: [
-            action(pinned ? "Unpin from Sidebar" : "Pin to Sidebar", pinned ? "pin.slash" : "pin") {
-                model.setPinned(item, !pinned)
-            },
-        ])
+        let pin = action(pinned ? "Unpin from Sidebar" : "Pin to Sidebar", pinned ? "pin.slash" : "pin") {
+            model.setPinned(item, !pinned)
+        }
+        let books = model.books.filter { book in
+            if case .folder(let path) = item {
+                return !book.isMissing && (book.folder == path || book.folder.hasPrefix(path + "/"))
+            }
+            return item.includes(book)
+        }
+        let ids = Set(books.map(\.id))
+        var reading: [UIMenuElement] = []
+        if books.contains(where: { $0.status != .read }) {
+            reading.append(action("Mark All as Read", "checkmark.circle", identifier: "group-mark-read") { model.setFinished(ids, true) })
+        }
+        if books.contains(where: { $0.status != .unread }) {
+            reading.append(action("Mark All as Unread", "circle", identifier: "group-mark-unread") { model.setFinished(ids, false) })
+        }
+        var file: [UIMenuElement] = []
+        if books.contains(where: { !$0.isDownloaded }) {
+            file.append(action("Download All", "icloud.and.arrow.down", identifier: "group-download") { model.download(ids) })
+        }
+        if books.contains(where: \.isDownloaded) {
+            file.append(action("Remove All from iPad", "icloud.and.arrow.up") { model.removeDownloads(ids) })
+        }
+        return UIMenu(title: "", children: [section([pin]), section(reading), section(file)])
     }
 }
 
