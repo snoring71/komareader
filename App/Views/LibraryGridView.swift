@@ -35,6 +35,12 @@ struct LibraryGridView: View {
     enum SortOrder: String, CaseIterable, Identifiable {
         case title = "Title", recentlyAdded = "Recently Added", recentlyRead = "Recently Read"
         var id: String { rawValue }
+
+        /// The menu's word for it. Folders and series have names, not titles (#99, #100); the
+        /// saved value stays "Title".
+        func label(byName: Bool) -> String {
+            self == .title && byName ? "Name" : rawValue
+        }
     }
 
     static let sizeRange: ClosedRange<Double> = 90...300
@@ -245,7 +251,7 @@ struct LibraryGridView: View {
                 } else if case .tag(let name) = item {
                     ContentUnavailableView("No Books Tagged “\(name)”", systemImage: "tag", description: Text("Long-press a book and choose Tags… to add this tag. The tag stays until you delete it from the sidebar."))
                 } else if item == .bookmarked {
-                    ContentUnavailableView("No Bookmarked Books", systemImage: "bookmark", description: Text("Books you bookmark, and books with a bookmarked page, appear here. To bookmark a page, tap the bookmark button in the reader."))
+                    ContentUnavailableView("No Bookmarked Books", systemImage: "bookmark", description: Text("Books with a bookmarked page appear here. To bookmark a page, tap the bookmark button in the reader."))
                 } else {
                     ContentUnavailableView("No Books", systemImage: "books.vertical", description: Text("Comics you add to \(model.libraryName) appear here."))
                 }
@@ -374,6 +380,8 @@ struct LibraryToolbar: ToolbarContent {
     @Binding var coverSize: Double
     @Binding var showSettings: Bool
     var showsSort = true
+    /// Sort By says Name rather than Title (folders, series).
+    var sortsByName = false
     /// The grid's Show Titles setting; nil where there is none.
     var showTitles: Binding<Bool>?
     /// Starts Select mode; nil where books cannot be selected.
@@ -407,12 +415,19 @@ struct LibraryToolbar: ToolbarContent {
                 }
                 if showsSort {
                     Picker("Sort By", selection: $sort) {
-                        ForEach(LibraryGridView.SortOrder.allCases) { Text($0.rawValue).tag($0) }
+                        ForEach(LibraryGridView.SortOrder.allCases) { Text($0.label(byName: sortsByName)).tag($0) }
                     }
                 }
                 Section("Cover Size (or pinch the grid)") {
+                    // The menu stays open, so a few taps step through the sizes (#98).
                     Button("Larger", systemImage: "plus.magnifyingglass") { coverSize = min(LibraryGridView.sizeRange.upperBound, coverSize + 30) }
+                        .menuActionDismissBehavior(.disabled)
+                        .disabled(coverSize >= LibraryGridView.sizeRange.upperBound)
+                        .accessibilityIdentifier("library-cover-larger")
                     Button("Smaller", systemImage: "minus.magnifyingglass") { coverSize = max(LibraryGridView.sizeRange.lowerBound, coverSize - 30) }
+                        .menuActionDismissBehavior(.disabled)
+                        .disabled(coverSize <= LibraryGridView.sizeRange.lowerBound)
+                        .accessibilityIdentifier("library-cover-smaller")
                 }
                 if let showTitles {
                     Section {
@@ -519,7 +534,8 @@ struct SeriesGridView: View {
     @Environment(AppModel.self) private var model
     @State private var search = ""
     @State private var showSettings = false
-    @AppStorage("sortOrder") private var sort: LibraryGridView.SortOrder = .title
+    /// Its own sort, apart from the books' and folders' (#100).
+    @AppStorage("seriesSortOrder") private var sort: LibraryGridView.SortOrder = .title
     @AppStorage("coverSize") private var coverSize: Double = 150
     @AppStorage(TitleGrid.series.key) private var showTitles = true
     @Environment(\.coverStyle) private var style
@@ -528,7 +544,7 @@ struct SeriesGridView: View {
     var body: some View {
         // Read here: the menus use it later, after the grid has been drawn.
         let model = model
-        let groups = model.catalog.series.filter { search.isEmpty || $0.name.localizedStandardContains(search) }
+        let groups = sorted(model.catalog.series.filter { search.isEmpty || $0.name.localizedStandardContains(search) })
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: coverSize, maximum: coverSize * 1.35), spacing: 20, alignment: .top)], spacing: 24) {
                 ForEach(groups) { group in
@@ -540,7 +556,7 @@ struct SeriesGridView: View {
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("series-\(group.name)")
                     // Pin to Sidebar, as for folders (#72), with the same lift as books (#71).
-                    .liftMenu(id: liftID, menu: { LiftMenuItems.pin(item, model: model) },
+                    .liftMenu(id: liftID, menu: { LiftMenuItems.group(item, model: model) },
                               preview: seriesPreview(group),
                               cover: { group.books.first.flatMap { model.coverNow(for: $0.id) } })
                 }
@@ -560,8 +576,22 @@ struct SeriesGridView: View {
         }
         .navigationTitle("Series")
         .searchable(text: $search, prompt: "Search series")
-        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: false, showTitles: $showTitles) }
+        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, sortsByName: true, showTitles: $showTitles) }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
+    }
+
+    /// The catalog keeps series by name; the other orders go by each series' newest book.
+    private func sorted(_ groups: [SeriesGroup]) -> [SeriesGroup] {
+        switch sort {
+        case .title:
+            return groups
+        case .recentlyAdded:
+            let latest = Dictionary(groups.map { ($0.id, $0.books.map(\.addedAt).max() ?? .distantPast) }, uniquingKeysWith: max)
+            return groups.sorted { (latest[$0.id] ?? .distantPast) > (latest[$1.id] ?? .distantPast) }
+        case .recentlyRead:
+            let latest = Dictionary(groups.map { ($0.id, $0.books.compactMap(\.lastReadAt).max() ?? .distantPast) }, uniquingKeysWith: max)
+            return groups.sorted { (latest[$0.id] ?? .distantPast) > (latest[$1.id] ?? .distantPast) }
+        }
     }
 
     /// Draws a series' stack for the lifted preview, with the grid's settings.
@@ -645,6 +675,8 @@ struct BookCell: View {
     var place = "grid"
     var onSelect: (() -> Void)?
     @State private var confirmDelete = false
+    /// Regenerate Cover was picked for an edited cover, and waits for a yes (#89).
+    @State private var confirmRegenerate = false
 
     var body: some View {
         let liftID = "\(place):\(book.id)"
@@ -684,6 +716,12 @@ struct BookCell: View {
         } message: {
             Text(MissingBooks.deleteMessage)
         }
+        // The same question as Book Info's (#89).
+        .confirmationDialog("Regenerate this cover?", isPresented: $confirmRegenerate, titleVisibility: .visible) {
+            Button("Regenerate Cover", role: .destructive) { Task { await model.regenerateCover(book) } }
+        } message: {
+            Text(CoverQuestions.regenerateEdited)
+        }
     }
 
     /// The long-press menu, made when the press happens from the book as it is then. None in
@@ -694,9 +732,12 @@ struct BookCell: View {
         let fallback = book
         let selecting = isSelected != nil
         let confirmDelete = $confirmDelete
+        let confirmRegenerate = $confirmRegenerate
         return {
             guard !selecting else { return nil }
-            return BookMenu.make(model.book(id: id) ?? fallback, model: model) { confirmDelete.wrappedValue = true }
+            return BookMenu.make(model.book(id: id) ?? fallback, model: model,
+                                 confirmDelete: { confirmDelete.wrappedValue = true },
+                                 confirmRegenerate: { confirmRegenerate.wrappedValue = true })
         }
     }
 
@@ -725,10 +766,13 @@ struct BookCell: View {
     }
 }
 
-/// A book's long-press menu, as a UIKit menu so the lifted cover can look right (#71).
+/// A book's long-press menu, as a UIKit menu so the lifted cover can look right (#71). Its
+/// groups come in the same order as Select mode's Actions menu (#91): the book itself, Favorite,
+/// reading, the file, and the cover.
 @MainActor
 enum BookMenu {
-    static func make(_ book: Book, model: AppModel, confirmDelete: @escaping () -> Void) -> UIMenu {
+    static func make(_ book: Book, model: AppModel, confirmDelete: @escaping () -> Void,
+                     confirmRegenerate: @escaping () -> Void) -> UIMenu {
         typealias Item = LiftMenuItems
         let info = Item.action("Book Info", "info.circle") { model.bookInfo = .init(id: book.id) }
         if book.isMissing {
@@ -738,35 +782,71 @@ enum BookMenu {
                 Item.action("Delete from Library", "trash", destructive: true, confirmDelete),
             ])
         }
-        let edit: [UIMenuElement] = [
+        let top: [UIMenuElement] = [
             info,
             Item.action("Tags…", "tag") { model.tagEditor = .init(ids: [book.id]) },
-        ] + pinMenu(book, model: model) + [
-            Item.action("Edit Cover…", "crop") { Task { await model.editCover(book) } },
-            Item.action("Regenerate Cover", "arrow.triangle.2.circlepath") { Task { await model.regenerateCover(book) } },
-        ]
-        let marks: [UIMenuElement] = [
+        ] + pinMenu(book, model: model)
+        var marks: [UIMenuElement] = [
             Item.action(book.favorite ? "Remove from Favorites" : "Favorite", book.favorite ? "heart.slash" : "heart") {
                 model.setFavorite(book, !book.favorite)
             },
-            Item.action(book.bookmarked ? "Remove Bookmark" : "Bookmark", book.bookmarked ? "bookmark.slash" : "bookmark") {
-                model.setBookmarked(book, !book.bookmarked)
-            },
         ]
-        var rest: [UIMenuElement] = []
-        if book.isDownloaded {
-            rest.append(Item.action("Remove from iPad", "icloud.and.arrow.up") { model.removeDownload(book) })
-        } else {
-            rest.append(Item.action("Download", "icloud.and.arrow.down") { Task { await model.download(book) } })
+        // Bookmarks are pages now (#96); a book bookmarked the old way can still drop it.
+        if book.bookmarked {
+            marks.append(Item.action("Remove Bookmark", "bookmark.slash") { model.setBookmarked(book, false) })
         }
+        var reading: [UIMenuElement] = []
         if book.status != .read {
-            rest.append(Item.action("Mark as Read", "checkmark.circle") { model.setFinished(book, true) })
+            reading.append(Item.action("Mark as Read", "checkmark.circle") { model.setFinished(book, true) })
         }
         // Also for a book in progress: it goes back to as if never opened.
         if book.status != .unread {
-            rest.append(Item.action("Mark as Unread", "circle") { model.setFinished(book, false) })
+            reading.append(Item.action("Mark as Unread", "circle") { model.setFinished(book, false) })
         }
-        return UIMenu(title: "", children: [Item.section(edit), Item.section(marks), Item.section(rest)])
+        reading.append(directionMenu(book, model: model))
+        let file: UIMenuElement
+        if book.isDownloaded {
+            file = Item.action("Remove from iPad", "icloud.and.arrow.up") { model.removeDownload(book) }
+        } else {
+            file = Item.action("Download", "icloud.and.arrow.down") { Task { await model.download(book) } }
+        }
+        return UIMenu(title: "", children: [
+            Item.section(top), Item.section(marks), Item.section(reading), Item.section([file]),
+            coverMenu(book, model: model, confirmRegenerate: confirmRegenerate),
+        ])
+    }
+
+    /// Reading Direction, with the book's current one checked (#91).
+    private static func directionMenu(_ book: Book, model: AppModel) -> UIMenu {
+        let rightToLeft = model.direction(of: book) == .rightToLeft
+        let ltr = LiftMenuItems.action("Left to Right", "arrow.right") { model.saveDirection(bookId: book.id, rightToLeft: false) }
+        let rtl = LiftMenuItems.action("Right to Left (Manga)", "arrow.left") { model.saveDirection(bookId: book.id, rightToLeft: true) }
+        ltr.state = rightToLeft ? .off : .on
+        rtl.state = rightToLeft ? .on : .off
+        return UIMenu(title: "Reading Direction", image: UIImage(systemName: "arrow.left.arrow.right"), children: [ltr, rtl])
+    }
+
+    /// Cover ▸ Edit Cover…, Use Default Cover and Regenerate Cover (#95). Whether the cover is
+    /// edited is in the book's record, read as the submenu opens; an edited cover offers Use
+    /// Default Cover, and Regenerate Cover asks first, as in Book Info (#89).
+    private static func coverMenu(_ book: Book, model: AppModel, confirmRegenerate: @escaping () -> Void) -> UIMenu {
+        let edit = LiftMenuItems.action("Edit Cover…", "crop") { Task { await model.editCover(book) } }
+        let rest = UIDeferredMenuElement.uncached { completion in
+            Task { @MainActor in
+                let edited = await model.record(for: book.id)?.cover.map { !$0.isDefault } == true
+                var items: [UIMenuElement] = []
+                if edited {
+                    items.append(LiftMenuItems.action("Use Default Cover", "arrow.uturn.backward") {
+                        Task { await model.resetCover(book) }
+                    })
+                }
+                items.append(LiftMenuItems.action("Regenerate Cover", "arrow.triangle.2.circlepath") {
+                    if edited { confirmRegenerate() } else { Task { await model.regenerateCover(book) } }
+                })
+                completion(items)
+            }
+        }
+        return UIMenu(title: "Cover", image: UIImage(systemName: "photo"), children: [edit, rest])
     }
 
     /// Pin… with Pin Series and Pin Folder for the book's series and folder (#72). Each one
@@ -976,6 +1056,10 @@ enum SelectionConfirm: Identifiable {
     }
 }
 
+enum CoverQuestions {
+    static let regenerateEdited = "Your edited cover is removed on all your devices, and a new cover is made from the first page."
+}
+
 enum MissingBooks {
     static let deleteMessage = "The file is already gone. This removes the book's reading progress, cover and other details from Comic Reader on all your devices. If the file comes back, it shows up as a new book."
 }
@@ -1032,14 +1116,20 @@ struct SelectionToolbar: ToolbarContent {
         } else {
             let books = picked
             let allFavorite = books.allSatisfy(\.favorite)
-            let allBookmarked = books.allSatisfy(\.bookmarked)
             let allRead = books.allSatisfy { $0.status == .read }
+            // The same order as a book's long-press menu (#91).
+            Section {
+                // Keeps the selection when the sheet closes, so another action can follow (#64).
+                Button("Tags…", systemImage: "tag") { model.tagEditor = .init(ids: ids) }
+                    .accessibilityIdentifier("selection-tags")
+            }
             Section {
                 Button(allFavorite ? "Remove from Favorites" : "Favorite", systemImage: allFavorite ? "heart.slash" : "heart") {
                     finish { model.setFavorite(ids, !allFavorite) }
                 }
-                Button(allBookmarked ? "Remove Bookmark" : "Bookmark", systemImage: allBookmarked ? "bookmark.slash" : "bookmark") {
-                    finish { model.setBookmarked(ids, !allBookmarked) }
+                // Bookmarks are pages now (#96); books bookmarked the old way can still drop it.
+                if books.contains(where: \.bookmarked) {
+                    Button("Remove Bookmark", systemImage: "bookmark.slash") { finish { model.setBookmarked(ids, false) } }
                 }
             }
             Section {
@@ -1051,15 +1141,10 @@ struct SelectionToolbar: ToolbarContent {
                         Button("Mark as Unread", systemImage: "circle") { finish { model.setFinished(ids, false) } }
                     }
                 }
-            }
-            Section {
-                // Keeps the selection when the sheet closes, so another action can follow (#64).
-                Button("Tags…", systemImage: "tag") { model.tagEditor = .init(ids: ids) }
-                    .accessibilityIdentifier("selection-tags")
-            }
-            Menu("Reading Direction", systemImage: "arrow.left.arrow.right") {
-                Button("Left to Right") { finish { model.setDirection(ids, .leftToRight) } }
-                Button("Right to Left (Manga)") { finish { model.setDirection(ids, .rightToLeft) } }
+                Menu("Reading Direction", systemImage: "arrow.left.arrow.right") {
+                    Button("Left to Right") { finish { model.setDirection(ids, .leftToRight) } }
+                    Button("Right to Left (Manga)") { finish { model.setDirection(ids, .rightToLeft) } }
+                }
             }
             Section {
                 if books.contains(where: { !$0.isDownloaded }) {

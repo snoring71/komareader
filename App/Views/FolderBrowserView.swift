@@ -85,7 +85,7 @@ struct FolderBrowserView: View {
         }
         .navigationTitle("Folders")
         .searchable(text: $search, prompt: "Search folders")
-        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showTitles: $showTitles) }
+        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, sortsByName: true, showTitles: $showTitles) }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
 
@@ -124,7 +124,7 @@ struct FolderLink: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier("folder-\(folder.name)")
         // The cover lifts without the system's grey box around it (#71).
-        .liftMenu(id: liftID, menu: { LiftMenuItems.pin(item, model: model) }, preview: preview(),
+        .liftMenu(id: liftID, menu: { LiftMenuItems.group(item, model: model) }, preview: preview(),
                   cover: { [folder] in folder.coverBookId.flatMap { model.coverNow(for: $0) } })
     }
 

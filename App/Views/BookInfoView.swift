@@ -3,7 +3,7 @@ import ComicCore
 import LibraryKit
 import SwiftUI
 
-/// The Book Info sheet: cover, reading status, Favorite and Bookmarked, reader settings,
+/// The Book Info sheet: cover, reading status, Favorite and tags, reader settings,
 /// details, the file and its download state.
 struct BookInfoView: View {
     @Environment(AppModel.self) private var model
@@ -84,7 +84,7 @@ struct BookInfoView: View {
                         .confirmationDialog("Regenerate this cover?", isPresented: $confirmRegenerate, titleVisibility: .visible) {
                             Button("Regenerate Cover", role: .destructive) { Task { await model.regenerateCover(book) } }
                         } message: {
-                            Text("Your edited cover is removed on all your devices, and a new cover is made from the first page.")
+                            Text(CoverQuestions.regenerateEdited)
                         }
                     }
                 }
@@ -118,8 +118,11 @@ struct BookInfoView: View {
                     Label("Favorite", systemImage: "heart")
                 }
                 .accessibilityIdentifier("info-favorite")
-                Toggle(isOn: Binding(get: { book.bookmarked }, set: { model.setBookmarked(book, $0) })) {
-                    Label("Bookmarked", systemImage: "bookmark")
+                // Bookmarks are pages now (#96); a book bookmarked the old way can still drop it.
+                if book.bookmarked {
+                    Button("Remove Bookmark", systemImage: "bookmark.slash") { model.setBookmarked(book, false) }
+                        .tint(.primary)
+                        .accessibilityIdentifier("info-remove-bookmark")
                 }
                 NavigationLink {
                     TagEditorView(bookIds: [book.id], inSheet: false)
