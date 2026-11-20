@@ -96,7 +96,8 @@ public enum ImageAnalysis {
     /// border) and whose lines are mostly that colour: up to `watermarkShare` of a line may
     /// differ, so a watermark printed in the band does not stop it. Bands can be stacked (a grey
     /// frame around a white half page, say): each is measured with its own colour. A band is not
-    /// a margin if some art runs right across it (a title strip reaching the page edge). Even a
+    /// a margin if art runs right across it (a title strip reaching the page edge) or reaches into
+    /// it from the art beside it (hair or a title on a white cover). Even a
     /// one-pixel white line along an edge counts. Left and right come first;
     /// then top and bottom are looked at between those, and trimmed only if their band is no
     /// more than `maximumTopBottom` of the height. Each trimmed edge goes one pixel further in,
@@ -175,15 +176,24 @@ public enum ImageAnalysis {
                     }
                 }
                 guard let band = found else { break }
-                // Art running right across the band (on more than 1% of it) means it is not a margin.
-                var crossings = 0
+                // Not a margin if, on more than 1% of it, art runs right across the band (a title
+                // strip reaching the page edge) or reaches into it from the art beside it (a
+                // character's hair, a title, on a white cover). A watermark sits inside the band
+                // without touching the art, so it does not count.
+                var crossings = 0, reaching = 0
+                let reach = max(2, band.length / 4)
                 for position in edge.across {
-                    var misses = 0
-                    for line in band.start..<(band.start + band.length)
-                    where differs(pixel(edge, line: line, at: position), band.reference) { misses += 1 }
-                    if Double(misses) >= Double(band.length) * 0.9 { crossings += 1 }
+                    var misses = 0, run = 0, inRun = true
+                    for line in (band.start..<(band.start + band.length)).reversed() {
+                        let off = differs(pixel(edge, line: line, at: position), band.reference)
+                        if off { misses += 1 }
+                        if !off { inRun = false } else if inRun { run += 1 }
+                    }
+                    if band.length >= 4, Double(misses) >= Double(band.length) * 0.9 { crossings += 1 }
+                    if run >= reach { reaching += 1 }
                 }
-                guard Double(crossings) <= Double(span) * 0.01 else { break }
+                let limit = Double(span) * 0.01
+                guard Double(crossings) <= limit, Double(reaching) <= limit else { break }
                 done = band.start + band.length
             }
             return done

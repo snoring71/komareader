@@ -140,6 +140,16 @@ import Testing
         #expect(abs(crop[3] - 398.0 / 400) < 0.001)
     }
 
+    @Test func artReachingIntoABandIsNotAMargin() throws {
+        // White across the top 10 px, but the art (hair, say) reaches up into it to 2 px from the top.
+        let image = try page { context in
+            context.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.3, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: 300, height: 390))
+            context.fill(CGRect(x: 100, y: 390, width: 20, height: 8))
+        }
+        #expect(ImageAnalysis.marginCrop(of: image) == nil)
+    }
+
     @Test func trimsThinTopAndBottomBandsOnly() throws {
         // A white band of 10 px at the top (2.5%) goes; one of 40 px at the bottom (10%) stays.
         let image = try page { context in
