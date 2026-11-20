@@ -183,7 +183,8 @@ import Testing
         context.fill(CGRect(x: 0, y: 0, width: 200, height: 300))
         context.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.3, alpha: 1))
         context.fill(CGRect(x: 20, y: 0, width: 160, height: 300))
-        let jpeg = try #require(ImageDecoder.jpegData(try #require(context.makeImage()), quality: 1))
+        let page = try #require(context.makeImage())
+        let jpeg = try #require(ImageDecoder.jpegData(page, quality: 1))
         try jpeg.write(to: folder.appendingPathComponent("001.jpg"))
         let book = Book(id: "M", relativePath: "M", title: "M", folder: "", format: .folder, size: nil, modified: nil,
                         isDownloaded: true, isMissing: false, addedAt: Date(), pageCount: nil, currentPage: nil,
