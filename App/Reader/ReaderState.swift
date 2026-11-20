@@ -226,19 +226,23 @@ final class ReaderState {
         return options
     }
 
-    /// The book goes back to following the defaults (its crop stays).
+    /// Everything back to the defaults, the page crop too, as Book Info's Reset does (#90).
     func resetToDefaults() {
+        change { options in options = ReaderOptions(updatedAt: options.updatedAt) }
+    }
+
+    /// Whether Reset to Defaults would change anything (a crop counts).
+    var canReset: Bool { !options.isEmpty }
+
+    /// Makes this book's settings the defaults for every book, and lets this one follow them.
+    /// Its crop stays: a crop is the book's own and has no default.
+    func useAsDefaults() {
+        defaults.adopt(resolvedOptions)
         change { options in
             let crop = options.crop
             options = ReaderOptions(updatedAt: options.updatedAt)
             options.crop = crop
         }
-    }
-
-    /// Makes this book's settings the defaults for every book, and lets this one follow them.
-    func useAsDefaults() {
-        defaults.adopt(resolvedOptions)
-        resetToDefaults()
     }
 
     /// Takes a direction changed elsewhere (Book Info) without saving it again.

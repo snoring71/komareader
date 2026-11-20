@@ -7,7 +7,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.coverShadow) private var coverShadow: Double = CoverStyle.defaultShadowStrength
     @AppStorage(SettingsKeys.coverShadowDirection) private var shadowDirection: CoverShadowDirection = .around
     @AppStorage(SettingsKeys.roundedCorners) private var roundedCorners = true
-    var coverInfo = CoverInfoSettings()
+    @AppStorage(CoverIntro.settingKey) private var showCoverIntro = true
 
     var body: some View {
         @Bindable var policy = model.coverPolicy
@@ -58,23 +58,15 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Toggle("Show Info on Covers", isOn: coverInfo.$isOn)
-                        .accessibilityIdentifier("settings-cover-info")
-                    CoverInfoFieldControls()
-                        .disabled(!coverInfo.isOn)
-                } header: {
-                    Text("Cover Info")
-                } footer: {
-                    Text("Shows these details over the bottom of each cover, in place of the title under it. The info button in the library's toolbar turns it on and off. Title, author and publisher come from the book file (ComicInfo.xml or the PDF's details) once the book is on this iPad; until then the title is the file name.")
-                }
-
-                Section {
                     NavigationLink("Book Defaults") { ReaderDefaultsView() }
                         .accessibilityIdentifier("settings-book-defaults")
+                    // For every book alike, so here rather than among the Book Defaults (#93).
+                    Toggle("Show Cover First", isOn: $showCoverIntro)
+                        .accessibilityIdentifier("settings-show-cover-first")
                 } header: {
                     Text("Reading")
                 } footer: {
-                    Text("How books open until you change a setting while reading one.")
+                    Text("Book Defaults are how books open until you change a setting while reading one. Show Cover First shows the cover when a book opens: for a moment if you've read it before, or until you turn to the first page.")
                 }
 
                 Section("Library") {

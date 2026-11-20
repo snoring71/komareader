@@ -150,7 +150,7 @@ extension ReaderBarItem {
 
     @MainActor
     static func more(_ state: ReaderState) -> ReaderBarItem {
-        ReaderBarItem(id: "more", group: .more, label: "More Settings",
+        ReaderBarItem(id: "more", group: .more, label: "Book Settings",
                       icon: AnyView(Image(systemName: "ellipsis")),
                       behavior: .panel { _ in AnyView(MoreSettingsPanel(state: state)) })
     }

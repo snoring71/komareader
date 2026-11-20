@@ -338,6 +338,9 @@ struct ReaderScreen: View {
                 .glassEffect(in: .capsule)
             Spacer(minLength: 0)
 
+            // Acts on the page on screen, like Select Text beside it (#92).
+            SharePageButton(state: state)
+
             if PageTextAnalyzer.isSupported {
                 // Lit while Select Text is on.
                 if state.selectingText {

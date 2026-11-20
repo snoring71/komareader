@@ -3,7 +3,7 @@ import ComicCore
 import SwiftUI
 
 // The small panels that open from items in the reader's menu bar. Every change applies to
-// this book at once and is saved as its own; Use as Defaults (under •••) hands the book's
+// this book at once and is saved as its own; Use as Defaults (under •••, Book Settings) hands the book's
 // settings on to every book. Plain buttons and the custom ChoiceBar only: segmented pickers
 // and nested menus missed taps inside popovers.
 
@@ -240,48 +240,53 @@ struct AdjustmentsPanel: View {
     }
 }
 
-// MARK: - More
+// MARK: - Book Settings
 
+/// Under ••• in the menu bar: hands this book's settings on to every book, or drops them (#92).
 struct MoreSettingsPanel: View {
     let state: ReaderState
     /// Use as Defaults was tapped once and is waiting to be confirmed.
     @State private var confirmingDefaults = false
-    /// Two pages are on screen: Share Page asks which one.
-    @State private var choosingPage = false
-    /// The page file is being made (an archive page still unpacking, a PDF page rendering).
-    @State private var preparingShare = false
-    @State private var shareFailed = false
-    @State private var shareAnchor = ShareAnchor.Holder()
+    /// Reset to Defaults was tapped once and is waiting to be confirmed (#90).
+    @State private var confirmingReset = false
 
     var body: some View {
-        BarPanel(title: "More", width: 320) {
+        BarPanel(title: "Book Settings", width: 320) {
             VStack(spacing: 0) {
-                if choosingPage {
-                    choosePage
-                        .transition(.opacity)
-                } else {
-                    row(shareFailed ? "Couldn’t Share This Page" : "Share Page", systemImage: "square.and.arrow.up") { sharePage() }
-                        .overlay(alignment: .trailing) {
-                            if preparingShare { ProgressView().padding(.trailing, 12) }
-                        }
-                        .disabled(preparingShare)
-                        .accessibilityIdentifier("reader-share-page")
-                        .transition(.opacity)
-                }
-                Divider().padding(.leading, 40)
                 if confirmingDefaults {
-                    confirmDefaults
-                        .transition(.opacity)
+                    confirm("Use this book's settings for every book that hasn't set its own?",
+                            action: "Use as Defaults", identifier: "reader-use-defaults") {
+                        state.useAsDefaults()
+                        confirmingDefaults = false
+                    } cancel: { confirmingDefaults = false }
+                    .transition(.opacity)
                 } else {
-                    row("Use as Defaults for All Books", systemImage: "checkmark.circle") { confirmingDefaults = true }
-                        .accessibilityIdentifier("reader-use-defaults")
-                        .transition(.opacity)
+                    row("Use as Defaults for All Books", systemImage: "checkmark.circle") {
+                        confirmingReset = false
+                        confirmingDefaults = true
+                    }
+                    .accessibilityIdentifier("reader-use-defaults")
+                    .transition(.opacity)
                 }
                 Divider().padding(.leading, 40)
-                row("Reset to Defaults", systemImage: "arrow.uturn.backward") { state.resetToDefaults() }
-                    .disabled(!state.hasOwnSettings)
-                    .opacity(state.hasOwnSettings ? 1 : 0.4)
+                if confirmingReset {
+                    // The same question as Book Info's Reset to Defaults.
+                    confirm("Reset this book's reader settings? \(ReaderResetText.message)",
+                            action: "Reset", identifier: "reader-reset-defaults") {
+                        state.resetToDefaults()
+                        confirmingReset = false
+                    } cancel: { confirmingReset = false }
+                    .transition(.opacity)
+                } else {
+                    row("Reset to Defaults", systemImage: "arrow.uturn.backward") {
+                        confirmingDefaults = false
+                        confirmingReset = true
+                    }
+                    .disabled(!state.canReset)
+                    .opacity(state.canReset ? 1 : 0.4)
                     .accessibilityIdentifier("reader-reset-defaults")
+                    .transition(.opacity)
+                }
             }
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(PanelFill.color))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(PanelFill.edge))
@@ -290,96 +295,29 @@ struct MoreSettingsPanel: View {
                 .foregroundStyle(.secondary)
         }
         .animation(.easeInOut(duration: 0.2), value: confirmingDefaults)
-        .animation(.easeInOut(duration: 0.2), value: choosingPage)
-        // The share sheet points at the panel.
-        .background(ShareAnchor(holder: shareAnchor))
+        .animation(.easeInOut(duration: 0.2), value: confirmingReset)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-more-panel")
     }
 
-    /// Shares the page on screen as it is in the book (no crop, split or adjustments). With
-    /// two pages showing, asks which one first.
-    private func sharePage() {
-        let pages = state.pagesOnScreenLeftToRight
-        if pages.count > 1 {
-            choosingPage = true
-        } else if let page = pages.first {
-            share(page)
-        }
-    }
-
-    private var choosePage: some View {
+    /// Asks before a change, in place of its row.
+    private func confirm(_ question: String, action: String, identifier: String,
+                         perform: @escaping () -> Void, cancel: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Share which page?")
+            Text(question)
                 .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
-                let pages = state.pagesOnScreenLeftToRight
-                Button("Left Page") {
-                    choosingPage = false
-                    if let left = pages.first { share(left) }
-                }
-                .buttonStyle(.bordered)
-                .lineLimit(1)
-                .fixedSize()
-                .accessibilityIdentifier("reader-share-left")
-                Button("Right Page") {
-                    choosingPage = false
-                    if let right = pages.last { share(right) }
-                }
-                .buttonStyle(.bordered)
-                .lineLimit(1)
-                .fixedSize()
-                .accessibilityIdentifier("reader-share-right")
-                Spacer(minLength: 0)
-                Button("Cancel") { choosingPage = false }
-                    .buttonStyle(.borderless)
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            .tint(.primary)
-        }
-        .padding(12)
-    }
-
-    private func share(_ page: Int) {
-        preparingShare = true
-        shareFailed = false
-        let source = state.source, title = state.book.title
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Shared Pages", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        Task { @MainActor in
-            defer { preparingShare = false }
-            do {
-                let file = try await PageExport.export(source, page: page, title: title, to: directory)
-                shareAnchor.present([file]) {
-                    try? FileManager.default.removeItem(at: directory)
-                }
-            } catch {
-                shareFailed = true
-            }
-        }
-    }
-
-    /// Asks before changing every book in the library.
-    private var confirmDefaults: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Use this book's settings for every book that hasn't set its own?")
-                .font(.subheadline)
-            HStack {
-                Button("Cancel") { confirmingDefaults = false }
+                Button("Cancel", action: cancel)
                     .buttonStyle(.bordered)
-                    .accessibilityIdentifier("reader-use-defaults-cancel")
+                    .accessibilityIdentifier("\(identifier)-cancel")
                 Spacer()
-                Button {
-                    state.useAsDefaults()
-                    confirmingDefaults = false
-                } label: {
+                Button(action: perform) {
                     // Inverse text on the black/white accent fill, so it reads in dark mode too.
-                    Text("Use as Defaults").foregroundStyle(Color.onAccent)
+                    Text(action).foregroundStyle(Color.onAccent)
                 }
                 .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("reader-use-defaults-confirm")
+                .accessibilityIdentifier("\(identifier)-confirm")
             }
         }
         .padding(12)
@@ -401,6 +339,89 @@ struct MoreSettingsPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// What Reset to Defaults does, in the reader and in Book Info alike (#90).
+enum ReaderResetText {
+    static let message = "Direction, page layout, fit, background, crop and image adjustments go back to your Book Defaults on all your devices. Reading progress, favorites, bookmarks and tags stay."
+}
+
+// MARK: - Share Page
+
+/// The top bar's Share button (#92): shares the page on screen as it is in the book (no crop,
+/// split or adjustments). With two pages showing, it asks which one.
+struct SharePageButton: View {
+    let state: ReaderState
+    /// The page file is being made (an archive page still unpacking, a PDF page rendering).
+    @State private var preparing = false
+    @State private var failed = false
+    @State private var anchor = ShareAnchor.Holder()
+
+    var body: some View {
+        let pages = state.pagesOnScreenLeftToRight
+        Group {
+            if pages.count > 1 {
+                Menu {
+                    Button("Left Page") { share(pages[0]) }
+                        .accessibilityIdentifier("reader-share-left")
+                    Button("Right Page") { share(pages[pages.count - 1]) }
+                        .accessibilityIdentifier("reader-share-right")
+                } label: {
+                    icon
+                }
+                .menuStyle(.button)
+            } else {
+                Button {
+                    if let page = pages.first { share(page) }
+                } label: {
+                    icon
+                }
+            }
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .disabled(preparing)
+        // The share sheet points at the button.
+        .background(ShareAnchor(holder: anchor))
+        .accessibilityLabel(failed ? "Couldn’t Share This Page" : "Share Page")
+        .accessibilityIdentifier("reader-share-page")
+    }
+
+    private var icon: some View {
+        ZStack {
+            if preparing {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: failed ? "exclamationmark.triangle" : "square.and.arrow.up")
+                    .font(.body.weight(.semibold))
+            }
+        }
+        .frame(width: 28, height: 28)
+    }
+
+    private func share(_ page: Int) {
+        preparing = true
+        failed = false
+        let source = state.source, title = state.book.title
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Shared Pages", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        Task { @MainActor in
+            defer { preparing = false }
+            do {
+                let file = try await PageExport.export(source, page: page, title: title, to: directory)
+                anchor.present([file]) {
+                    try? FileManager.default.removeItem(at: directory)
+                }
+            } catch {
+                failed = true
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    failed = false
+                }
+            }
+        }
     }
 }
 

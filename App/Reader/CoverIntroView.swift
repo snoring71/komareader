@@ -13,7 +13,7 @@ struct CoverIntro {
     /// Otherwise it shows for a moment while the pages load, then gives way to them.
     let waits: Bool
 
-    /// Settings › Book Defaults › Show Cover First.
+    /// Settings › Reading › Show Cover First.
     static let settingKey = "showCoverIntro"
     static var isEnabled: Bool { UserDefaults.standard.object(forKey: settingKey) as? Bool ?? true }
 }
