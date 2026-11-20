@@ -188,10 +188,33 @@ public actor CoverService {
             let metadata = book.metadataRead ? nil : MetadataReader.read(url: fileURL, format: book.format)
             guard let jpeg = ImageDecoder.jpegData(cover, quality: 0.85) else { return (nil, metadata) }
             try store.writeCover(jpeg, bookId: book.id)
-            try writeThumbnail(from: try ImageDecoder.downsample(data: jpeg, maxPixelSize: thumbnailHeight), to: thumbURL)
+            let shown = autoCrop(cover, book: book, store: store) ?? jpeg
+            try writeThumbnail(from: try ImageDecoder.downsample(data: shown, maxPixelSize: thumbnailHeight), to: thumbURL)
             return (thumbURL, metadata)
         } catch {
             return (nil, nil)
+        }
+    }
+
+    /// Trims plain white, black or grey side margins from a cover made for the first time (or
+    /// regenerated). The trim is saved like a cover edit: a recipe in the record and a rendered
+    /// `.custom.jpg`, so it syncs, shows its handles in Edit Cover, and Reset undoes it. Books
+    /// whose record already has a real edit are left alone. Returns the trimmed cover's JPEG.
+    private static func autoCrop(_ cover: CGImage, book: Book, store: RecordStore) -> Data? {
+        var record = store.read(bookId: book.id)
+            ?? BookRecord(bookId: book.id, file: .init(path: book.relativePath, size: book.size, modified: book.modified))
+        if let edit = record.cover, !edit.isDefault { return nil }
+        guard let crop = ImageAnalysis.sideMarginCrop(of: cover),
+              let trimmed = CoverRenderer.crop(cover, to: crop),
+              let jpeg = ImageDecoder.jpegData(trimmed, quality: 0.85) else { return nil }
+        do {
+            try store.writeCover(jpeg, bookId: book.id, custom: true)
+            record.cover = BookRecord.CoverEdit(page: 0, crop: crop)
+            try store.write(record)
+            return jpeg
+        } catch {
+            try? store.deleteCover(bookId: book.id, custom: true)
+            return nil
         }
     }
 

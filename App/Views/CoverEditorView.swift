@@ -32,6 +32,8 @@ struct CoverEditorView: View {
     /// `pageImage` after rotation, as shown on the canvas.
     @State private var shown: UIImage?
     @State private var saving = false
+    /// Shown for a moment when Auto Crop finds no side margins.
+    @State private var noMarginsFound = false
 
     @State private var zoom: CGFloat = 1
     @State private var zoomAtStart: CGFloat = 1
@@ -48,6 +50,19 @@ struct CoverEditorView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 canvas
+                    .overlay(alignment: .top) {
+                        if noMarginsFound {
+                            Text("No margins found")
+                                .font(.callout)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .environment(\.colorScheme, .dark)
+                                .padding(.top, 12)
+                                .transition(.opacity)
+                                .accessibilityIdentifier("cover-no-margins")
+                        }
+                    }
                 controls
                 if let pages, pages.pageCount > 1 {
                     PageStrip(source: pages, selection: pageIndex) { choose(page: $0) }
@@ -311,6 +326,13 @@ struct CoverEditorView: View {
             }
             .accessibilityIdentifier("cover-rotate")
 
+            Button {
+                autoCrop()
+            } label: {
+                Label("Auto Crop", systemImage: "arrow.right.and.line.vertical.and.arrow.left")
+            }
+            .accessibilityIdentifier("cover-auto-crop")
+
             Picker("Proportions", selection: Binding(get: { aspect }, set: { setAspect($0) })) {
                 ForEach(Aspect.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -336,6 +358,27 @@ struct CoverEditorView: View {
         crop = CGRect(x: 1 - crop.maxY, y: crop.minX, width: crop.height, height: crop.width)
         zoom = 1; zoomAtStart = 1; pan = .zero; panAtStart = .zero
         Task { await showRotated() }
+    }
+
+    /// Trims plain white, black or grey margins from the left and right of the page shown, the
+    /// same way a new book's cover is trimmed. Switches to Free so the handles can adjust it.
+    private func autoCrop() {
+        guard let image = shown?.cgImage else { return }
+        let degrees = rotation, page = pageIndex
+        Task {
+            let found = await Task.detached(priority: .userInitiated) { ImageAnalysis.sideMarginCrop(of: image) }.value
+            guard degrees == rotation, page == pageIndex else { return }
+            guard let found, found.count == 4 else {
+                withAnimation { noMarginsFound = true }
+                try? await Task.sleep(for: .seconds(2))
+                withAnimation { noMarginsFound = false }
+                return
+            }
+            aspect = .free
+            withAnimation(.snappy) {
+                crop = CGRect(x: found[0], y: found[1], width: found[2], height: found[3])
+            }
+        }
     }
 
     private func setAspect(_ newValue: Aspect) {

@@ -170,6 +170,34 @@ import Testing
         #expect(store.existingCoverURL(bookId: "C") != nil)
     }
 
+    @Test func newCoversLoseTheirPlainSideMargins() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = try RecordStore.open(dataRoot: root.appendingPathComponent("Data"), folderName: "Lib")
+        let covers = CoverService(store: store, thumbnailDirectory: root.appendingPathComponent("Thumbs"), cloudPause: 0)
+        let folder = root.appendingPathComponent("Margins 1", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // 200 × 300, white bands of 20 px on each side.
+        let context = try #require(CGContext(data: nil, width: 200, height: 300, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 200, height: 300))
+        context.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.3, alpha: 1))
+        context.fill(CGRect(x: 20, y: 0, width: 160, height: 300))
+        let jpeg = try #require(ImageDecoder.jpegData(try #require(context.makeImage()), quality: 1))
+        try jpeg.write(to: folder.appendingPathComponent("001.jpg"))
+        let book = Book(id: "M", relativePath: "M", title: "M", folder: "", format: .folder, size: nil, modified: nil,
+                        isDownloaded: true, isMissing: false, addedAt: Date(), pageCount: nil, currentPage: nil,
+                        finished: false, lastReadAt: nil, direction: nil, favorite: false, bookmarked: false, series: "M", number: nil)
+        await covers.request(book, fileURL: folder, urgent: true)
+        #expect(await waitFor { covers.existingThumbnail(bookId: "M") != nil })
+        let edit = try #require(store.read(bookId: "M")?.cover)
+        #expect(edit.page == 0 && edit.rotation == 0)
+        #expect(abs(edit.crop[0] - 0.105) < 0.02)
+        #expect(abs(edit.crop[2] - 0.79) < 0.03)
+        #expect(FileManager.default.fileExists(atPath: store.coverURL(bookId: "M", custom: true).path))
+        #expect(FileManager.default.fileExists(atPath: store.coverURL(bookId: "M").path))
+    }
+
     @Test func scanLeavesOutEpubs() throws {
         let root = try makeLibrary()
         try Data([1]).write(to: root.appendingPathComponent("ARIA/Novel.epub"))

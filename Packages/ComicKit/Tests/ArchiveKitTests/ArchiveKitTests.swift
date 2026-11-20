@@ -52,6 +52,49 @@ import Testing
         #expect(edge.red > 0.95 && edge.green > 0.95 && edge.blue > 0.95)
     }
 
+    /// A cover of 300 × 400: `band` colour down the left `left` and right `right` pixels,
+    /// colourful art in between, and an optional dark watermark in the left band.
+    func cover(left: Int, right: Int, band: CGColor = CGColor(red: 1, green: 1, blue: 1, alpha: 1),
+               watermark: Bool = false) throws -> CGImage {
+        let context = try #require(CGContext(data: nil, width: 300, height: 400, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(band)
+        context.fill(CGRect(x: 0, y: 0, width: 300, height: 400))
+        context.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.3, alpha: 1))
+        context.fill(CGRect(x: left, y: 0, width: 300 - left - right, height: 400))
+        if watermark {
+            // A small vertical logo in the band: 10% of the height.
+            context.setFillColor(CGColor(red: 0.3, green: 0.3, blue: 0.3, alpha: 1))
+            context.fill(CGRect(x: 5, y: 180, width: max(1, left - 10), height: 40))
+        }
+        return try #require(context.makeImage())
+    }
+
+    @Test func trimsPlainSideMarginsFromCovers() throws {
+        let crop = try #require(ImageAnalysis.sideMarginCrop(of: try cover(left: 30, right: 15)))
+        // 30 px, then one more in; 15 px, then one more in; top and bottom untouched.
+        #expect(abs(crop[0] - 31.0 / 300) < 0.001)
+        #expect(abs(crop[2] - 253.0 / 300) < 0.001)
+        #expect(crop[1] == 0 && crop[3] == 1)
+    }
+
+    @Test func trimsBlackMarginsWithAWatermark() throws {
+        let black = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let crop = try #require(ImageAnalysis.sideMarginCrop(of: try cover(left: 30, right: 0, band: black, watermark: true)))
+        #expect(abs(crop[0] - 31.0 / 300) < 0.001)
+        #expect(abs(crop[2] - 269.0 / 300) < 0.001)
+    }
+
+    @Test func leavesColouredAndThinBordersAlone() throws {
+        let blue = CGColor(red: 0.1, green: 0.3, blue: 0.9, alpha: 1)
+        #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 30, right: 30, band: blue)) == nil)
+        // 2 px on 300 is under 1% of the width.
+        #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 2, right: 2)) == nil)
+        #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 0, right: 0)) == nil)
+        // Mostly blank: trimming would leave less than half.
+        #expect(ImageAnalysis.sideMarginCrop(of: try cover(left: 100, right: 100)) == nil)
+    }
+
     @Test func reusesUnpackedPages() async throws {
         let cache = try tempDir()
         let url = try fixture("sample.cbz")
