@@ -1,3 +1,4 @@
+import ComicCore
 import LibraryKit
 import SwiftUI
 
@@ -17,7 +18,10 @@ struct FolderBrowserView: View {
         if search.isEmpty {
             folders = (all[""]?.children ?? []).compactMap { all[$0] }
         } else {
-            folders = all.values.filter { !$0.path.isEmpty && $0.name.localizedStandardContains(search) }
+            let query = SearchQuery(search)
+            let model = model
+            _ = model.searchKeysRevision
+            folders = all.values.filter { !$0.path.isEmpty && query.matches(model.searchKey($0.name)) }
                 .naturallySorted(by: \.name)
         }
         switch sort {
