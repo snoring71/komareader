@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Past searches for one search field (#109), newest first, kept on this iPad across launches.
 /// Each field (books, series, folders) has its own list.
@@ -70,26 +71,70 @@ private struct SearchHistoryBox: View {
     @Binding var text: String
     @Binding var raw: String
     let list: String
+    /// The top of the keyboard in screen points, or nil when no on-screen keyboard is up.
+    @State private var keyboardTop: CGFloat?
+
+    /// Below the search field in the toolbar: the status bar plus the toolbar row.
+    private static let belowToolbar: CGFloat = 54
+    /// Space kept between the box and the top of the keyboard.
+    private static let keyboardGap: CGFloat = 24
+    private static let rowHeight: CGFloat = 45
 
     var body: some View {
         let history = SearchHistory.decode(raw)
-        ZStack {
-            if isSearching && text.isEmpty && !history.isEmpty {
-                box(history)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+        let shown = isSearching && text.isEmpty && !history.isEmpty
+        // Laid out over the whole screen and placed by screen position, not by the grid's safe
+        // area: that area grows with the large title, which left a gap above the box when
+        // search started at the very top of the library.
+        GeometryReader { proxy in
+            let frame = proxy.frame(in: .global)
+            let top = Self.windowTopInset + Self.belowToolbar - frame.minY
+            let bottom = min(frame.height, (keyboardTop ?? .infinity) - frame.minY) - Self.keyboardGap
+            ZStack(alignment: .topTrailing) {
+                if shown {
+                    box(history, maxHeight: max(Self.rowHeight * 2, bottom - top))
+                        .padding(.top, top)
+                        .padding(.trailing, 16)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         }
-        .animation(.snappy(duration: 0.2), value: isSearching && text.isEmpty)
+        .ignoresSafeArea()
+        .animation(.snappy(duration: 0.2), value: shown)
+        .onChange(of: shown, initial: true) { _, now in model.searchHistoryShown = now }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            let screen = Self.screenHeight
+            // A hardware keyboard leaves only a small bar, or nothing, on screen.
+            keyboardTop = end.minY < screen - 1 ? end.minY : nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardTop = nil
+        }
         // Searches that led somewhere are kept too, not only ones ended with Return: opening a
         // book from the results, or a series or folder (which pushes a new screen).
         .onChange(of: model.openBook != nil) { _, opened in
             if opened, isSearching { remember() }
         }
-        .onDisappear { if isSearching { remember() } }
+        .onDisappear {
+            if isSearching { remember() }
+            model.searchHistoryShown = false
+        }
     }
 
-    private func box(_ history: [String]) -> some View {
-        ScrollView {
+    private static var keyWindow: UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first
+    }
+
+    private static var windowTopInset: CGFloat { keyWindow?.safeAreaInsets.top ?? 24 }
+    private static var screenHeight: CGFloat { keyWindow?.screen.bounds.height ?? .infinity }
+
+    private func box(_ history: [String], maxHeight: CGFloat) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        return ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(Array(history.enumerated()), id: \.element) { index, term in
                     if index > 0 { Divider().padding(.leading, 44) }
@@ -98,13 +143,16 @@ private struct SearchHistoryBox: View {
             }
             .padding(.vertical, 6)
         }
+        // Scrolling the list must not put the keyboard away: with the field empty, that ends
+        // the search and closes the box mid-scroll.
+        .scrollDismissesKeyboard(.never)
         .scrollBounceBehavior(.basedOnSize)
-        // About eight rows show; more scroll.
-        .frame(maxHeight: min(CGFloat(history.count) * 45 + 12, 372))
+        // Up to about eight rows; more scroll.
+        .frame(height: min(CGFloat(history.count) * Self.rowHeight + 12, 372, maxHeight))
         .frame(width: 340)
-        .glassEffect(in: .rect(cornerRadius: 20))
-        .padding(.top, 8)
-        .padding(.trailing, 16)
+        .clipShape(shape)
+        // The glass sits behind the list rather than on it, so the list keeps its own touches.
+        .background { Color.clear.glassEffect(in: shape) }
         .accessibilityIdentifier("search-history-\(list)")
     }
 
