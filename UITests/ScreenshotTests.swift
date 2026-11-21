@@ -352,7 +352,12 @@ final class ScreenshotTests: XCTestCase {
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5))
 
         let term = app.descendants(matching: .any)["search-history-term-Night"].firstMatch
-        XCTAssertTrue(term.waitForExistence(timeout: 5), "Search not in the history box")
+        if !term.waitForExistence(timeout: 5) {
+            // Show what is on screen instead, to see why.
+            save(app, "21a-no-search-history")
+            print(app.debugDescription)
+        }
+        XCTAssertTrue(term.exists, "Search not in the history list")
         sleep(1)
         save(app, "21-search-history")
 
