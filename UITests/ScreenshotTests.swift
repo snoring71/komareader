@@ -351,12 +351,12 @@ final class ScreenshotTests: XCTestCase {
         field.tap()
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5))
 
-        let term = app.buttons["search-history-term-Night"]
+        let term = app.descendants(matching: .any)["search-history-term-Night"].firstMatch
         XCTAssertTrue(term.waitForExistence(timeout: 5), "Search not in the history box")
         sleep(1)
         save(app, "21-search-history")
 
-        app.buttons["search-history-remove-Night"].tap()
+        app.buttons["search-history-remove-Night"].firstMatch.tap()
         XCTAssertTrue(term.waitForNonExistence(timeout: 5), "X did not remove the search")
     }
 
