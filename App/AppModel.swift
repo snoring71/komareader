@@ -124,6 +124,7 @@ final class AppModel {
 
     private func booksDidChange(from old: [Book]) {
         updateSummary()
+        defer { updateSearchKeys() }
         let structural = old.count != books.count || zip(old, books).contains { a, b in
             a.id != b.id || a.title != b.title || a.series != b.series || a.number != b.number || a.isMissing != b.isMissing || a.relativePath != b.relativePath
         }
@@ -149,6 +150,47 @@ final class AppModel {
         catalog.folders = FolderInfo.tree(from: books, titleRank: catalog.titleRank)
         for (i, book) in books.enumerated() { catalog.position[book.id] = i }
         self.catalog = catalog
+    }
+
+    /// Search keys (#106) for every title, folder, series and tag, made off the main thread
+    /// because reading Japanese text with the dictionary takes a moment per string. Kept by
+    /// text across library changes, so only new strings are ever read.
+    @ObservationIgnored private var searchKeys: [String: SearchKey] = [:]
+    @ObservationIgnored private var searchKeysInProgress: Set<String> = []
+    /// Bumped when new search keys are ready, so a search on screen runs again with them.
+    private(set) var searchKeysRevision = 0
+
+    /// The search key for a string shown in the library. Until its full key is ready, a plain
+    /// one (no readings) stands in.
+    func searchKey(_ text: String) -> SearchKey {
+        searchKeys[text] ?? SearchKey(plain: text)
+    }
+
+    private func updateSearchKeys() {
+        var missing: Set<String> = []
+        func add(_ text: String) {
+            if !text.isEmpty, searchKeys[text] == nil, !searchKeysInProgress.contains(text) { missing.insert(text) }
+        }
+        for book in books {
+            add(book.title)
+            add(book.folder)
+            add(book.series)
+            book.tags.forEach(add)
+        }
+        for folder in catalog.folders.values { add(folder.name) }
+        for group in catalog.series { add(group.name) }
+        guard !missing.isEmpty else { return }
+        searchKeysInProgress.formUnion(missing)
+        let strings = Array(missing)
+        Task { [weak self] in
+            let keys = await Task.detached(priority: .utility) {
+                Dictionary(uniqueKeysWithValues: strings.map { ($0, SearchKey($0)) })
+            }.value
+            guard let self else { return }
+            self.searchKeys.merge(keys) { _, new in new }
+            self.searchKeysInProgress.subtract(strings)
+            self.searchKeysRevision += 1
+        }
     }
 
     /// One pass over the books. Assigned only when something changed, so the sidebar does

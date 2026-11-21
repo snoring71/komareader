@@ -1,3 +1,4 @@
+import ComicCore
 import LibraryKit
 import SwiftUI
 
@@ -53,9 +54,13 @@ struct LibraryGridView: View {
         let search = appliedSearch
         var books = model.books.filter(item.includes)
         if !search.isEmpty {
-            books = books.filter {
-                $0.title.localizedStandardContains(search) || $0.folder.localizedStandardContains(search)
-                    || $0.series.localizedStandardContains(search) || $0.tags.contains { $0.localizedStandardContains(search) }
+            // Kana, kanji and romaji all find Japanese titles (#106).
+            let query = SearchQuery(search)
+            let model = model
+            _ = model.searchKeysRevision
+            books = books.filter { book in
+                query.matches(model.searchKey(book.title)) || query.matches(model.searchKey(book.folder))
+                    || query.matches(model.searchKey(book.series)) || book.tags.contains { query.matches(model.searchKey($0)) }
             }
         }
         if case .seriesNamed = item {
@@ -545,7 +550,9 @@ struct SeriesGridView: View {
     var body: some View {
         // Read here: the menus use it later, after the grid has been drawn.
         let model = model
-        let groups = sorted(model.catalog.series.filter { search.isEmpty || $0.name.localizedStandardContains(search) })
+        let query = SearchQuery(search)
+        let _ = query.isEmpty ? 0 : model.searchKeysRevision
+        let groups = sorted(model.catalog.series.filter { query.isEmpty || query.matches(model.searchKey($0.name)) })
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
