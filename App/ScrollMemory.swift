@@ -40,6 +40,13 @@ final class ScrollKeeper {
     private var order: [String: Int]?
     private var top: String?
     private var scrolledDown = false
+    /// The ids on screen right now, in any order.
+    private var onScreen: [String] = []
+
+    /// Whether the grid is showing `id` (the top marker: whether it is at the top).
+    func isShowing(_ id: String) -> Bool {
+        id == ScrollTopMarker.id ? !scrolledDown : onScreen.contains(id)
+    }
     private var restored = false
     /// True from the moment the grid is to go back to a saved spot until it has: what scrolls
     /// past in between is not where the user is.
@@ -47,6 +54,7 @@ final class ScrollKeeper {
 
     /// The grid's visible ids (in any order) changed.
     func noteVisible(_ visible: [String], key: String, memory: ScrollMemory) {
+        onScreen = visible
         guard !isFiltered else { return }
         let order = gridOrder()
         top = visible.min { (order[$0] ?? .max) < (order[$1] ?? .max) }
@@ -201,7 +209,9 @@ private struct RemembersScroll: ViewModifier {
                     // A search ended: back to where the user was in the full list (#105).
                     let spot = keeper.spotBeforeSearch
                     keeper.spotBeforeSearch = nil
-                    restore(to: spot, orTop: true)
+                    // The search bar takes about a third of a second to close, and can move the
+                    // grid as it does, so stay hidden at least that long.
+                    restore(to: spot, orTop: true, hiddenAtLeast: .milliseconds(350))
                 }
             }
     }
@@ -214,7 +224,7 @@ private struct RemembersScroll: ViewModifier {
 
     /// Scrolls to `spot`. `orTop`: with no spot, go to the top (after a search the grid may
     /// be scrolled anywhere); otherwise leave the grid where it is.
-    private func restore(to spot: ScrollMemory.Spot?, orTop: Bool) {
+    private func restore(to spot: ScrollMemory.Spot?, orTop: Bool, hiddenAtLeast: Duration = .zero) {
         let memory = model.scrollMemory
         let key = item.storageKey
         guard spot != nil || orTop else { return }
@@ -223,20 +233,32 @@ private struct RemembersScroll: ViewModifier {
         keeper.beginRestore()
         isMoving = true
         Task { @MainActor in
+            let clock = ContinuousClock()
+            let start = clock.now
             var noAnimation = Transaction()
             noAnimation.disablesAnimations = true
             let id = keeper.target(for: spot) ?? ScrollTopMarker.id
-            // Let the grid lay out the full list first. Just after the list grows from a few
-            // results back to the whole library, the lazy grid's height is still a guess: a
-            // single jump then landed where no covers had been made, and the page stayed
-            // blank until the user scrolled. So jump, let it lay out there, and jump again.
+            // Jump, and keep jumping until the grid is really there, then show it. One jump is
+            // not enough: just after the list grows from a few results back to the whole
+            // library, the lazy grid's height is still a guess and a jump can land where no
+            // covers have been made (a blank page). And as a search closes, the navigation
+            // bar puts its large title back and moves the grid to the top after our jump.
+            // Hidden all the while, so none of that shows.
             try? await Task.sleep(for: .milliseconds(20))
             withTransaction(noAnimation) { proxy.scrollTo(id, anchor: .top) }
-            try? await Task.sleep(for: .milliseconds(30))
-            withTransaction(noAnimation) { proxy.scrollTo(id, anchor: .top) }
+            var settled = 0
+            for _ in 0..<30 {
+                try? await Task.sleep(for: .milliseconds(30))
+                if keeper.isShowing(id) {
+                    // There twice in a row, so a late move by the navigation bar is caught.
+                    settled += 1
+                    if settled >= 2, clock.now - start >= hiddenAtLeast { break }
+                } else {
+                    settled = 0
+                    withTransaction(noAnimation) { proxy.scrollTo(id, anchor: .top) }
+                }
+            }
             keeper.endRestore(at: id == ScrollTopMarker.id ? nil : .init(id: id, index: spot?.index), key: key, memory: memory)
-            // Once more, so the covers there are drawn before the grid shows again.
-            try? await Task.sleep(for: .milliseconds(30))
             keeper.inSearch = false
             isMoving = false
         }
