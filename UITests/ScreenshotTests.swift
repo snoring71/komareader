@@ -401,6 +401,48 @@ final class ScreenshotTests: XCTestCase {
         save(app, "24-library-after-select")
     }
 
+    /// Each library view keeps its scroll position when the user goes to another view and
+    /// back (#105).
+    func testScrollPositionIsKept() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoCount", "200"]
+        app.launch()
+
+        let first = app.buttons["book-Night Market 2"]
+        XCTAssertTrue(first.waitForExistence(timeout: 90), "Demo library did not appear")
+        sleep(2)
+
+        // Scroll All Books well down, to a book far from the top.
+        let target = app.buttons["book-Series 12 1"]
+        let grid = app.scrollViews.firstMatch
+        for _ in 0..<20 where !(target.exists && target.isHittable) {
+            grid.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(target.isHittable, "Could not scroll to the test book")
+        sleep(1)
+        save(app, "25-scroll-before")
+
+        // Away to another sidebar item, and back.
+        go(to: "Favorites", in: app)
+        sleep(1)
+        go(to: "All Books", in: app)
+        XCTAssertTrue(target.waitForExistence(timeout: 5), "All Books did not come back where it was")
+        sleep(1)
+        save(app, "26-scroll-after")
+        XCTAssertTrue(target.isHittable, "All Books did not come back where it was")
+        XCTAssertFalse(first.isHittable, "All Books went back to the top")
+    }
+
+    /// Picks a sidebar row by its label.
+    private func go(to row: String, in app: XCUIApplication) {
+        openSidebar(app)
+        let item = app.descendants(matching: .any)["sidebar-\(row)"].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "No \(row) in the sidebar")
+        let label = app.staticTexts[row].firstMatch
+        (label.isHittable ? label : item).tap()
+        sleep(2)
+    }
+
     private func save(_ app: XCUIApplication, _ name: String) {
         // The screen-level capture keeps landscape shots the right way up.
         let screenshot = XCUIScreen.main.screenshot()
