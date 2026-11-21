@@ -941,15 +941,16 @@ struct BookCoverStack: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The Read mark: inverse check on a primary tab with rounded top corners, reaching down
+    /// The Read mark: a check on a tab with rounded top corners (black and white in light mode,
+    /// soft greys in dark mode, see `Color.readTabFill`), reaching down
     /// to touch the cover; the row's padding keeps it clear of the cover's rounded corner.
     private var readTab: some View {
         UnevenRoundedRectangle(topLeadingRadius: 6, topTrailingRadius: 6, style: .continuous)
-            .fill(Color.primary)
+            .fill(Color.readTabFill)
             .overlay {
                 Image(systemName: "checkmark")
                     .font(.system(size: iconSize, weight: .heavy))
-                    .foregroundStyle(Color.onAccent)
+                    .foregroundStyle(Color.readTabCheck)
                     .padding(.top, 1)
             }
             .frame(width: iconSize * 2.6, height: iconSize * 1.75)

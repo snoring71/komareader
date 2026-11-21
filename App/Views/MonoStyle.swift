@@ -9,6 +9,20 @@ extension Color {
     static let onAccent = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark ? .black : .white
     })
+
+    /// The Read tab's fill: black in light mode; in dark mode a dark grey that stands out from
+    /// the black background without the glare of a white tab (#73).
+    static let readTabFill = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3C / 255, alpha: 1)
+            : .black
+    })
+
+    /// The Read tab's checkmark: white in light mode; in dark mode a lighter grey, not full
+    /// white, so it reads clearly without drawing the eye (#73).
+    static let readTabCheck = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark ? UIColor(white: 0xA8 / 255, alpha: 1) : .white
+    })
 }
 
 /// A switch in black and white instead of green: on is a solid primary track with an inverted
