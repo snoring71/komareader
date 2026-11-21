@@ -55,10 +55,16 @@ final class ScrollKeeper {
 
     /// Whether the grid is scrolled away from its top.
     func noteScrolledDown(_ down: Bool, key: String, memory: ScrollMemory) {
-        guard !isFiltered, down != scrolledDown else { return }
+        guard down != scrolledDown else { return }
         scrolledDown = down
+        guard !isFiltered else { return }
         save(key: key, memory: memory)
     }
+
+    /// The view's spot as a search began, put back when it ends. Taken then because the
+    /// callbacks around the end of a search (the results still on screen as the full list
+    /// returns) can overwrite the saved spot before the grid moves back.
+    var spotBeforeSearch: ScrollMemory.Spot?
 
     private func save(key: String, memory: ScrollMemory) {
         guard !isRestoring else { return }
@@ -170,7 +176,7 @@ private struct RemembersScroll: ViewModifier {
             }
             .onAppear {
                 guard keeper.takeFirstAppearance() else { return }
-                restore(orTop: false)
+                restore(to: memory.spot(for: key), orTop: false)
             }
             .onChange(of: model.libraryPath.count) { old, new in
                 // Back to this view from a folder or series opened on top of it: the search
@@ -179,9 +185,19 @@ private struct RemembersScroll: ViewModifier {
                 clearSearch()
             }
             .onChange(of: isFiltered) { was, now in
-                // A search ended: back to where the user was in the full list (#105).
-                guard was, !now else { return }
-                restore(orTop: true)
+                if now && !was {
+                    // A search began: keep the spot, and show the results from the top. Left
+                    // where it was, a grid scrolled down showed the few results above the screen.
+                    keeper.spotBeforeSearch = memory.spot(for: key)
+                    var noAnimation = Transaction()
+                    noAnimation.disablesAnimations = true
+                    withTransaction(noAnimation) { proxy.scrollTo(ScrollTopMarker.id, anchor: .top) }
+                } else if was && !now {
+                    // A search ended: back to where the user was in the full list (#105).
+                    let spot = keeper.spotBeforeSearch
+                    keeper.spotBeforeSearch = nil
+                    restore(to: spot, orTop: true)
+                }
             }
     }
 
@@ -191,12 +207,11 @@ private struct RemembersScroll: ViewModifier {
         return i + 1
     }
 
-    /// Scrolls to the saved spot. `orTop`: with no saved spot, go to the top (after a search
-    /// the grid may be scrolled anywhere); otherwise leave the grid where it is.
-    private func restore(orTop: Bool) {
+    /// Scrolls to `spot`. `orTop`: with no spot, go to the top (after a search the grid may
+    /// be scrolled anywhere); otherwise leave the grid where it is.
+    private func restore(to spot: ScrollMemory.Spot?, orTop: Bool) {
         let memory = model.scrollMemory
         let key = item.storageKey
-        let spot = memory.spot(for: key)
         guard spot != nil || orTop else { return }
         let keeper = keeper
         let proxy = proxy

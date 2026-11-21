@@ -434,6 +434,23 @@ final class ScreenshotTests: XCTestCase {
         save(app, "26-scroll-after")
         XCTAssertTrue(target.isHittable, "All Books did not come back where it was")
         XCTAssertFalse(first.isHittable, "All Books went back to the top")
+
+        // A search from down the page shows its results on screen, and clearing it goes back
+        // to the same spot.
+        let field = app.searchFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "No search field")
+        field.tap()
+        field.typeText("Starfall")
+        let result = app.buttons["book-Starfall 1"].firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5), "No search results")
+        sleep(1)
+        save(app, "27-scroll-search-results")
+        XCTAssertTrue(result.isHittable, "The search results are off screen")
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8))
+        XCTAssertTrue(target.waitForExistence(timeout: 5), "Clearing the search did not go back")
+        sleep(1)
+        save(app, "28-scroll-after-search")
+        XCTAssertTrue(target.isHittable, "Clearing the search did not go back to the same spot")
     }
 
     /// Picks a sidebar row by its label.
