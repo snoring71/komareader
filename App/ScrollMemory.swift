@@ -65,6 +65,9 @@ final class ScrollKeeper {
     /// callbacks around the end of a search (the results still on screen as the full list
     /// returns) can overwrite the saved spot before the grid moves back.
     var spotBeforeSearch: ScrollMemory.Spot?
+    /// From the start of a search until the grid is back at `spotBeforeSearch`, so the grid
+    /// is already hidden in the first frame that shows the full list again.
+    var inSearch = false
 
     private func save(key: String, memory: ScrollMemory) {
         guard !isRestoring else { return }
@@ -161,6 +164,7 @@ private struct RemembersScroll: ViewModifier {
         // Hidden from the very first frame when there is a spot to go back to, so the top of
         // the page never shows before the grid gets there.
         let hidden = isMoving || (!keeper.hasAppeared && memory.spot(for: key) != nil)
+            || (keeper.inSearch && !isFiltered)
         content
             .opacity(hidden ? 0 : 1)
             // Hides at once; fades back in once it is in place.
@@ -189,6 +193,7 @@ private struct RemembersScroll: ViewModifier {
                     // A search began: keep the spot, and show the results from the top. Left
                     // where it was, a grid scrolled down showed the few results above the screen.
                     keeper.spotBeforeSearch = memory.spot(for: key)
+                    keeper.inSearch = true
                     var noAnimation = Transaction()
                     noAnimation.disablesAnimations = true
                     withTransaction(noAnimation) { proxy.scrollTo(ScrollTopMarker.id, anchor: .top) }
@@ -218,19 +223,21 @@ private struct RemembersScroll: ViewModifier {
         keeper.beginRestore()
         isMoving = true
         Task { @MainActor in
-            // Let the grid draw the full list first.
-            await Task.yield()
             var noAnimation = Transaction()
             noAnimation.disablesAnimations = true
-            if let id = keeper.target(for: spot) {
-                withTransaction(noAnimation) { proxy.scrollTo(id, anchor: .top) }
-                keeper.endRestore(at: .init(id: id, index: spot?.index), key: key, memory: memory)
-            } else {
-                withTransaction(noAnimation) { proxy.scrollTo(ScrollTopMarker.id, anchor: .top) }
-                keeper.endRestore(at: nil, key: key, memory: memory)
-            }
-            // One more pass so the grid has drawn the books there before it shows again.
-            await Task.yield()
+            let id = keeper.target(for: spot) ?? ScrollTopMarker.id
+            // Let the grid lay out the full list first. Just after the list grows from a few
+            // results back to the whole library, the lazy grid's height is still a guess: a
+            // single jump then landed where no covers had been made, and the page stayed
+            // blank until the user scrolled. So jump, let it lay out there, and jump again.
+            try? await Task.sleep(for: .milliseconds(20))
+            withTransaction(noAnimation) { proxy.scrollTo(id, anchor: .top) }
+            try? await Task.sleep(for: .milliseconds(30))
+            withTransaction(noAnimation) { proxy.scrollTo(id, anchor: .top) }
+            keeper.endRestore(at: id == ScrollTopMarker.id ? nil : .init(id: id, index: spot?.index), key: key, memory: memory)
+            // Once more, so the covers there are drawn before the grid shows again.
+            try? await Task.sleep(for: .milliseconds(30))
+            keeper.inSearch = false
             isMoving = false
         }
     }
