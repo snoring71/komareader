@@ -414,9 +414,12 @@ final class ScreenshotTests: XCTestCase {
 
         // Scroll All Books well down, to a book far from the top.
         let target = app.buttons["book-Series 12 1"]
-        let grid = app.scrollViews.firstMatch
-        for _ in 0..<20 where !(target.exists && target.isHittable) {
-            grid.swipeUp(velocity: .slow)
+        // A drag on the screen rather than `scrollViews.firstMatch`, which finds the hidden
+        // sidebar's list first.
+        let low = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+        let high = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        for _ in 0..<25 where !(target.exists && target.isHittable) {
+            low.press(forDuration: 0.05, thenDragTo: high)
         }
         XCTAssertTrue(target.isHittable, "Could not scroll to the test book")
         sleep(1)
