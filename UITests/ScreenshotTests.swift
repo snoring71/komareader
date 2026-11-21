@@ -428,6 +428,68 @@ final class ScreenshotTests: XCTestCase {
         save(app, "24-library-after-select")
     }
 
+    /// Each library view keeps its scroll position when the user goes to another view and
+    /// back (#105).
+    func testScrollPositionIsKept() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demoCount", "200"]
+        app.launch()
+
+        let first = app.buttons["book-Night Market 2"]
+        XCTAssertTrue(first.waitForExistence(timeout: 90), "Demo library did not appear")
+        sleep(2)
+
+        // Scroll All Books well down, to a book far from the top.
+        let target = app.buttons["book-Series 12 1"]
+        // A drag on the screen rather than `scrollViews.firstMatch`, which finds the hidden
+        // sidebar's list first.
+        let low = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+        let high = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        for _ in 0..<25 where !(target.exists && target.isHittable) {
+            low.press(forDuration: 0.05, thenDragTo: high)
+        }
+        XCTAssertTrue(target.isHittable, "Could not scroll to the test book")
+        sleep(1)
+        save(app, "25-scroll-before")
+
+        // Away to another sidebar item, and back.
+        go(to: "Favorites", in: app)
+        sleep(1)
+        go(to: "All Books", in: app)
+        XCTAssertTrue(target.waitForExistence(timeout: 5), "All Books did not come back where it was")
+        sleep(1)
+        save(app, "26-scroll-after")
+        XCTAssertTrue(target.isHittable, "All Books did not come back where it was")
+        XCTAssertFalse(first.isHittable, "All Books went back to the top")
+
+        // A search from down the page shows its results on screen, and clearing it goes back
+        // to the same spot.
+        let field = app.searchFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "No search field")
+        field.tap()
+        field.typeText("Starfall")
+        let result = app.buttons["book-Starfall 1"].firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5), "No search results")
+        sleep(1)
+        save(app, "27-scroll-search-results")
+        XCTAssertTrue(result.isHittable, "The search results are off screen")
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8))
+        XCTAssertTrue(target.waitForExistence(timeout: 5), "Clearing the search did not go back")
+        sleep(1)
+        save(app, "28-scroll-after-search")
+        XCTAssertTrue(target.isHittable, "Clearing the search did not go back to the same spot")
+    }
+
+    /// Picks a sidebar row by its label.
+    private func go(to row: String, in app: XCUIApplication) {
+        openSidebar(app)
+        let item = app.descendants(matching: .any)["sidebar-\(row)"].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "No \(row) in the sidebar")
+        let label = app.staticTexts[row].firstMatch
+        (label.isHittable ? label : item).tap()
+        sleep(2)
+    }
+
     private func save(_ app: XCUIApplication, _ name: String) {
         // The screen-level capture keeps landscape shots the right way up.
         let screenshot = XCUIScreen.main.screenshot()

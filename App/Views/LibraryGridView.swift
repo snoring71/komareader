@@ -27,6 +27,8 @@ struct LibraryGridView: View {
     /// Kept in a plain object, not in view state: it changes on every row scrolled past, and
     /// redrawing the grid each time would sort the whole library again.
     @State private var scrollSpot = ScrollSpot()
+    /// Keeps this view's place for the session, for coming back to it (#105).
+    @State private var keeper = ScrollKeeper()
 
     final class ScrollSpot {
         var firstVisible: String?
@@ -125,6 +127,7 @@ struct LibraryGridView: View {
             ScrollView {
               // Explicit spacing, so the gaps below are exactly what they say.
               VStack(alignment: .leading, spacing: 0) {
+                ScrollTopMarker()
                 if !continueReading.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Continue Reading").font(.title3.bold())
@@ -206,7 +209,11 @@ struct LibraryGridView: View {
             }
             .environment(\.showTitles, showTitles)
             .environment(\.libraryIconSize, LibraryIconSize.forCover(width: size))
-            .onScrollTargetVisibilityChange(idType: Book.ID.self, threshold: 0.5) { ids in
+            // Back where the user left off in this view earlier in the session, or at the
+            // last launch (#105).
+            .remembersScroll(keeper, item: item, ids: books.map(\.id),
+                             isFiltered: !search.isEmpty || !appliedSearch.isEmpty, proxy: proxy,
+                             clearSearch: { search = ""; appliedSearch = "" }) { ids in
                 visible.ids = visible.inGridOrder(ids)
                 scrollSpot.firstVisible = visible.ids.first
                 if let top = visible.ids.first { LibraryPosition.noteTopBook(.init(list: listKey, bookId: top)) }
@@ -218,14 +225,6 @@ struct LibraryGridView: View {
             }
             .onChange(of: coverInfo.isOn) { keepPlace(proxy) }
             .onChange(of: showTitles) { keepPlace(proxy) }
-            .onAppear {
-                // Back where the user left off at the last launch (the first book means the top).
-                guard let id = model.takeRestoreAnchor(for: listKey), id != books.first?.id, books.contains(where: { $0.id == id }) else { return }
-                Task { @MainActor in
-                    await Task.yield()
-                    proxy.scrollTo(id, anchor: .top)
-                }
-            }
             .onChange(of: size) { _, _ in
                 // Keep the books that were on screen in view as the columns change.
                 guard let id = visible.zoomAnchor ?? visible.middle else { return }
@@ -545,6 +544,8 @@ struct SeriesGridView: View {
     @AppStorage(TitleGrid.series.key) private var showTitles = true
     @Environment(\.coverStyle) private var style
     @Environment(\.colorScheme) private var colorScheme
+    /// Keeps the grid's place for the session, for coming back to it (#105).
+    @State private var keeper = ScrollKeeper()
 
     var body: some View {
         // Read here: the menus use it later, after the grid has been drawn.
@@ -552,24 +553,32 @@ struct SeriesGridView: View {
         let query = SearchQuery(search)
         let _ = query.isEmpty ? 0 : model.searchKeysRevision
         let groups = sorted(model.catalog.series.filter { query.isEmpty || query.matches(model.searchKey($0.name)) })
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: coverSize, maximum: coverSize * 1.35), spacing: 20, alignment: .top)], spacing: 24) {
-                ForEach(groups) { group in
-                    let item = SidebarItem.seriesNamed(group.name)
-                    let liftID = "series:\(group.name)"
-                    NavigationLink(value: item) {
-                        SeriesCell(group: group, liftID: liftID)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    ScrollTopMarker()
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: coverSize, maximum: coverSize * 1.35), spacing: 20, alignment: .top)], spacing: 24) {
+                        ForEach(groups) { group in
+                            let item = SidebarItem.seriesNamed(group.name)
+                            let liftID = "series:\(group.name)"
+                            NavigationLink(value: item) {
+                                SeriesCell(group: group, liftID: liftID)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("series-\(group.name)")
+                            // Pin to Sidebar, as for folders (#72), with the same lift as books (#71).
+                            .liftMenu(id: liftID, menu: { LiftMenuItems.group(item, model: model) },
+                                      preview: seriesPreview(group),
+                                      cover: { group.books.first.flatMap { model.coverNow(for: $0.id) } })
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("series-\(group.name)")
-                    // Pin to Sidebar, as for folders (#72), with the same lift as books (#71).
-                    .liftMenu(id: liftID, menu: { LiftMenuItems.group(item, model: model) },
-                              preview: seriesPreview(group),
-                              cover: { group.books.first.flatMap { model.coverNow(for: $0.id) } })
+                    .scrollTargetLayout()
+                    .padding()
+                    .liftMenuHost()
                 }
             }
-            .padding()
-            .liftMenuHost()
+            .remembersScroll(keeper, item: .series, ids: groups.map(\.id), isFiltered: !search.isEmpty,
+                             proxy: proxy, clearSearch: { search = "" })
         }
         .environment(\.showTitles, showTitles)
         .overlay {

@@ -55,7 +55,6 @@ final class AppModel {
             guard selection != oldValue else { return }
             // Each sidebar item starts at the top of its own stack.
             if !libraryPath.isEmpty { libraryPath = [] }
-            restoreAnchor = nil
             LibraryPosition.save(selection: selection, path: libraryPath)
         }
     }
@@ -63,8 +62,8 @@ final class AppModel {
     var libraryPath: [SidebarItem] = [] {
         didSet { if libraryPath != oldValue { LibraryPosition.save(selection: selection, path: libraryPath) } }
     }
-    /// The book to scroll back to when the library first appears after a launch.
-    @ObservationIgnored private var restoreAnchor: LibraryPosition.Anchor?
+    /// Where each library view was scrolled to, for this session (#105).
+    @ObservationIgnored let scrollMemory = ScrollMemory()
     /// Counts for the sidebar and the tags in use, worked out when `books` changes rather
     /// than on every sidebar redraw.
     private(set) var summary = Summary()
@@ -392,7 +391,10 @@ final class AppModel {
         guard exists(saved.selection) else { return }
         selection = saved.selection
         libraryPath = Array(saved.path.prefix { exists($0) })
-        restoreAnchor = saved.anchor
+        // The book that was at the top of the grid, which the grid scrolls to as it appears.
+        if let anchor = saved.anchor {
+            scrollMemory.set(.init(id: anchor.bookId, index: nil), for: anchor.list)
+        }
     }
 
     /// Whether a saved sidebar item still has something to show.
@@ -404,13 +406,6 @@ final class AppModel {
         case .missing: return summary.counts[.missing] != nil
         default: return true
         }
-    }
-
-    /// The book a grid should scroll to as it first appears, once.
-    func takeRestoreAnchor(for list: String) -> String? {
-        guard let anchor = restoreAnchor, anchor.list == list else { return nil }
-        restoreAnchor = nil
-        return anchor.bookId
     }
 
     // MARK: Folders

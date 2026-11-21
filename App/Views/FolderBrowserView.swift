@@ -11,6 +11,8 @@ struct FolderBrowserView: View {
     @AppStorage("folderSortOrder") private var sort: LibraryGridView.SortOrder = .title
     @AppStorage("coverSize") private var coverSize: Double = 150
     @AppStorage(TitleGrid.folders.key) private var showTitles = true
+    /// Keeps the grid's place for the session, for coming back to it (#105).
+    @State private var keeper = ScrollKeeper()
 
     private var folders: [FolderInfo] {
         let all = model.catalog.folders
@@ -60,13 +62,19 @@ struct FolderBrowserView: View {
         let letters = letterAnchors(folders)
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: coverSize, maximum: coverSize * 1.35), spacing: 16, alignment: .top)], spacing: 22) {
-                    ForEach(folders) { FolderLink(folder: $0, showsPath: !search.isEmpty) }
+                VStack(spacing: 0) {
+                    ScrollTopMarker()
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: coverSize, maximum: coverSize * 1.35), spacing: 16, alignment: .top)], spacing: 22) {
+                        ForEach(folders) { FolderLink(folder: $0, showsPath: !search.isEmpty) }
+                    }
+                    .scrollTargetLayout()
+                    .padding()
+                    .padding(.trailing, letters == nil ? 0 : 14)
+                    .liftMenuHost()
                 }
-                .padding()
-                .padding(.trailing, letters == nil ? 0 : 14)
-                .liftMenuHost()
             }
+            .remembersScroll(keeper, item: .folders, ids: folders.map(\.id), isFiltered: !search.isEmpty,
+                             proxy: proxy, clearSearch: { search = "" })
             .overlay(alignment: .trailing) {
                 if let letters {
                     LetterIndex(keys: letters.map(\.key)) { key in
