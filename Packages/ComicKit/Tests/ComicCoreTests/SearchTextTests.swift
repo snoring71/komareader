@@ -75,7 +75,7 @@ import Testing
     @Test func manyTitlesAreQuick() {
         let titles = (0..<500).map { "進撃の巨人 第\($0)巻" }
         let start = Date()
-        let keys = titles.map(SearchKey.init)
+        let keys = titles.map { SearchKey($0) }
         let elapsed = Date().timeIntervalSince(start)
         print("reading: 500 titles in \(elapsed)s")
         #expect(keys.count == 500)
