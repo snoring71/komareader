@@ -89,6 +89,9 @@ final class ScrollKeeper {
         return ids[min(index, ids.count - 1)]
     }
 
+    /// Whether the view has appeared before (and had its chance to go back to its spot).
+    var hasAppeared: Bool { restored }
+
     /// True the first time the view appears, so a view the navigation stack kept (and whose
     /// scroll position is still there) is not scrolled again.
     func takeFirstAppearance() -> Bool {
@@ -117,8 +120,10 @@ struct ScrollTopMarker: View {
 
 extension View {
     /// Keeps a library grid's scroll position for the session (#105) and puts it back when
-    /// the view appears again. Coming back to the view from a folder or series opened on top
-    /// of it clears its search (`clearSearch`) and returns to the spot in the full list.
+    /// the view appears again. Leaving a search (cancelling it, or coming back to the view from
+    /// a folder or series opened from the results, which clears it with `clearSearch`) returns
+    /// to the spot in the full list. The grid is hidden while it moves, so the top of the page
+    /// does not flash first.
     ///
     /// The grid's lazy stack needs `.scrollTargetLayout()` for the visible ids to arrive, and
     /// the scroll content starts with a `ScrollTopMarker`.
@@ -139,13 +144,21 @@ private struct RemembersScroll: ViewModifier {
     let proxy: ScrollViewProxy
     let clearSearch: () -> Void
     let onVisible: (([String]) -> Void)?
+    /// True while the grid moves back to a saved spot.
+    @State private var isMoving = false
 
     func body(content: Content) -> some View {
         let _ = (keeper.ids = ids)
         let _ = (keeper.isFiltered = isFiltered)
         let memory = model.scrollMemory
         let key = item.storageKey
+        // Hidden from the very first frame when there is a spot to go back to, so the top of
+        // the page never shows before the grid gets there.
+        let hidden = isMoving || (!keeper.hasAppeared && memory.spot(for: key) != nil)
         content
+            .opacity(hidden ? 0 : 1)
+            // Hides at once; fades back in once it is in place.
+            .animation(hidden ? nil : .easeOut(duration: 0.15), value: hidden)
             .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.5) { visible in
                 keeper.noteVisible(visible, key: key, memory: memory)
                 onVisible?(visible)
@@ -161,10 +174,13 @@ private struct RemembersScroll: ViewModifier {
             }
             .onChange(of: model.libraryPath.count) { old, new in
                 // Back to this view from a folder or series opened on top of it: the search
-                // goes, and the grid returns to where it was in the full list.
+                // goes (and the change below puts the grid back).
                 guard new < old, new == depth, keeper.isFiltered else { return }
-                keeper.isFiltered = false
                 clearSearch()
+            }
+            .onChange(of: isFiltered) { was, now in
+                // A search ended: back to where the user was in the full list (#105).
+                guard was, !now else { return }
                 restore(orTop: true)
             }
     }
@@ -185,16 +201,22 @@ private struct RemembersScroll: ViewModifier {
         let keeper = keeper
         let proxy = proxy
         keeper.beginRestore()
+        isMoving = true
         Task { @MainActor in
             // Let the grid draw the full list first.
             await Task.yield()
+            var noAnimation = Transaction()
+            noAnimation.disablesAnimations = true
             if let id = keeper.target(for: spot) {
-                proxy.scrollTo(id, anchor: .top)
+                withTransaction(noAnimation) { proxy.scrollTo(id, anchor: .top) }
                 keeper.endRestore(at: .init(id: id, index: spot?.index), key: key, memory: memory)
             } else {
-                proxy.scrollTo(ScrollTopMarker.id, anchor: .top)
+                withTransaction(noAnimation) { proxy.scrollTo(ScrollTopMarker.id, anchor: .top) }
                 keeper.endRestore(at: nil, key: key, memory: memory)
             }
+            // One more pass so the grid has drawn the books there before it shows again.
+            await Task.yield()
+            isMoving = false
         }
     }
 }
