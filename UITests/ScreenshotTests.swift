@@ -333,6 +333,33 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Cover Info on the covers, then Select mode and its actions. Runs last (name order).
+    /// Past searches show in a glass box under the field and can be removed one by one (#109).
+    func testSearchHistory() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["book-Night Market 2"].waitForExistence(timeout: 90), "Demo library did not appear")
+        sleep(2)
+
+        let field = app.searchFields["Search books"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "No search field")
+        field.tap()
+        field.typeText("Night\n")
+        sleep(1)
+        // Empty the field while still searching: the history box shows.
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5))
+
+        let term = app.buttons["search-history-term-Night"]
+        XCTAssertTrue(term.waitForExistence(timeout: 5), "Search not in the history box")
+        sleep(1)
+        save(app, "21-search-history")
+
+        app.buttons["search-history-remove-Night"].tap()
+        XCTAssertTrue(term.waitForNonExistence(timeout: 5), "X did not remove the search")
+    }
+
     func testSelectAndCoverInfo() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]

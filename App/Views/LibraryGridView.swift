@@ -263,7 +263,7 @@ struct LibraryGridView: View {
             }
         }
         .navigationTitle(selectionTitle ?? item.title)
-        .searchable(text: $search, prompt: "Search books")
+        .searchableWithHistory(text: $search, prompt: "Search books", list: "books")
         .task(id: search) {
             // Filtering thousands of books on every keystroke makes typing lag, so wait for a pause.
             if !search.isEmpty, (try? await Task.sleep(for: .milliseconds(200))) == nil { return }
@@ -582,7 +582,7 @@ struct SeriesGridView: View {
             }
         }
         .navigationTitle("Series")
-        .searchable(text: $search, prompt: "Search series")
+        .searchableWithHistory(text: $search, prompt: "Search series", list: "series")
         .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, sortsByName: true, showTitles: $showTitles) }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
