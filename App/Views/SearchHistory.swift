@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 /// Past searches for one search field (#109), newest first, kept on this iPad across launches.
 /// Each field (books, series, folders) has its own list.
@@ -42,6 +43,8 @@ private struct SearchHistoryModifier: ViewModifier {
     let prompt: String
     let list: String
     @AppStorage private var raw: String
+    @State private var presented = false
+    @FocusState private var focused: Bool
 
     init(text: Binding<String>, prompt: String, list: String) {
         _text = text
@@ -54,9 +57,13 @@ private struct SearchHistoryModifier: ViewModifier {
         content
             // Inside `.searchable`, so the box can read whether search is active.
             .overlay(alignment: .topTrailing) {
-                SearchHistoryBox(text: $text, raw: $raw, list: list)
+                SearchHistoryBox(text: $text, raw: $raw, list: list) {
+                    presented = true
+                    focused = true
+                }
             }
-            .searchable(text: $text, prompt: prompt)
+            .searchable(text: $text, isPresented: $presented, prompt: prompt)
+            .searchFocused($focused)
             .onSubmit(of: .search) { remember() }
     }
 
@@ -71,6 +78,11 @@ private struct SearchHistoryBox: View {
     @Binding var text: String
     @Binding var raw: String
     let list: String
+    /// Starts the search again, keyboard up, after a touch in the box ended it.
+    let reopen: () -> Void
+    /// Kept open after the search ended because the touch that ended it was in the box.
+    @State private var held = false
+    @State private var boxFrame: CGRect = .zero
     /// The top of the keyboard in screen points, or nil when no on-screen keyboard is up.
     @State private var keyboardTop: CGFloat?
 
@@ -82,7 +94,7 @@ private struct SearchHistoryBox: View {
 
     var body: some View {
         let history = SearchHistory.decode(raw)
-        let shown = isSearching && text.isEmpty && !history.isEmpty
+        let shown = (isSearching || held) && text.isEmpty && !history.isEmpty
         // Laid out over the whole screen and placed by screen position, not by the grid's safe
         // area: that area grows with the large title, which left a gap above the box when
         // search started at the very top of the library.
@@ -103,6 +115,25 @@ private struct SearchHistoryBox: View {
         .ignoresSafeArea()
         .animation(.snappy(duration: 0.2), value: shown)
         .onChange(of: shown, initial: true) { _, now in model.searchHistoryShown = now }
+        .onAppear { TouchTracker.install() }
+        // Touching anywhere outside the search field ends a search with nothing typed, and
+        // that includes the box: scrolling it or deleting a row closed it. When the touch that
+        // ended the search was in the box, keep the box and start the search again.
+        .onChange(of: isSearching) { _, searching in
+            if searching {
+                held = false
+            } else if TouchTracker.touchedRecently(in: boxFrame) {
+                held = true
+                reopen()
+            } else {
+                held = false
+            }
+        }
+        .onChange(of: text) { _, new in if !new.isEmpty { held = false } }
+        .onReceive(NotificationCenter.default.publisher(for: TouchTracker.touchDown)) { note in
+            // A touch elsewhere lets a held box go.
+            if held, let point = note.object as? CGPoint, !boxFrame.contains(point) { held = false }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
             guard let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
             let screen = Self.screenHeight
@@ -153,6 +184,7 @@ private struct SearchHistoryBox: View {
         .clipShape(shape)
         // The glass sits behind the list rather than on it, so the list keeps its own touches.
         .background { Color.clear.glassEffect(in: shape) }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { boxFrame = $0 }
         .accessibilityIdentifier("search-history-\(list)")
     }
 
@@ -197,5 +229,52 @@ private struct SearchHistoryBox: View {
 
     private func remember(_ term: String? = nil) {
         raw = SearchHistory.encode(SearchHistory.adding(term ?? text, to: SearchHistory.decode(raw)))
+    }
+}
+
+/// Notes where and when each touch on the screen starts, without taking part in any gesture,
+/// so the search history box can tell whether a touch in it is what ended the search.
+@MainActor
+enum TouchTracker {
+    static let touchDown = Notification.Name("TouchTracker.touchDown")
+    private static var last: (point: CGPoint, time: Date)?
+    private static var installed = Set<ObjectIdentifier>()
+
+    static func install() {
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows where !installed.contains(ObjectIdentifier(window)) {
+                installed.insert(ObjectIdentifier(window))
+                let recognizer = Recognizer(target: nil, action: nil)
+                recognizer.cancelsTouchesInView = false
+                recognizer.delaysTouchesBegan = false
+                recognizer.delaysTouchesEnded = false
+                recognizer.delegate = recognizer
+                window.addGestureRecognizer(recognizer)
+            }
+        }
+    }
+
+    static func touchedRecently(in frame: CGRect) -> Bool {
+        guard let last, Date().timeIntervalSince(last.time) < 1.5 else { return false }
+        return frame.insetBy(dx: -4, dy: -4).contains(last.point)
+    }
+
+    fileprivate static func note(_ point: CGPoint) {
+        last = (point, Date())
+        NotificationCenter.default.post(name: touchDown, object: point)
+    }
+
+    private final class Recognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            if let touch = touches.first, let window = view {
+                TouchTracker.note(touch.location(in: window))
+            }
+            // Never recognizes, so it never gets in another gesture's way.
+            state = .failed
+        }
+
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool { false }
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool { false }
     }
 }
