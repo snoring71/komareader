@@ -104,6 +104,7 @@ struct PageViewer: UIViewControllerRepresentable {
         func showEndPage(in controller: UIPageViewController) {
             guard let end = state.makeEndPage?() else { return }
             let direction: UIPageViewController.NavigationDirection = state.rightToLeft ? .reverse : .forward
+            state.onEndPage = true
             controller.setViewControllers([EndPageController(end)], direction: direction, animated: true) { [weak self] finished in
                 if finished { self?.state.showChrome = false }
             }
@@ -111,9 +112,16 @@ struct PageViewer: UIViewControllerRepresentable {
 
         /// Not Now on that page: back to the last page.
         func leaveEndPage(in controller: UIPageViewController) {
-            guard controller.viewControllers?.first is EndPageController, state.spreads.indices.contains(displayedSpread) else { return }
+            let last = state.spreads.count - 1
+            state.onEndPage = false
+            guard controller.viewControllers?.first is EndPageController, state.spreads.indices.contains(last) else { return }
             let direction: UIPageViewController.NavigationDirection = state.rightToLeft ? .forward : .reverse
-            let page = makeController(displayedSpread)
+            // The last screen of the layout now on screen, which a turn of the iPad may have
+            // renumbered while the next-book page showed.
+            displayedSpread = last
+            // Not during this SwiftUI update: the reader's state follows a moment later.
+            DispatchQueue.main.async { [state] in state.show(spread: last) }
+            let page = makeController(last)
             controller.setViewControllers([page], direction: direction, animated: true)
             followBackground(of: page)
             becameCurrent(page)
@@ -139,9 +147,9 @@ struct PageViewer: UIViewControllerRepresentable {
             let forward = target >= displayedSpread
             // Next comes from the right in left-to-right books, from the left in manga.
             let direction: UIPageViewController.NavigationDirection = (forward != state.rightToLeft) ? .forward : .reverse
-            // Still on the last page after a new layout (landscape pairs pages, so the last
-            // spread's number changes as the iPad turns).
-            let onEndPage = controller.viewControllers?.first is EndPageController && target == state.spreads.count - 1
+            // The next-book page stays through a new layout: turning the iPad renumbers the
+            // screens (landscape pairs pages; split mode halves the last image in portrait).
+            let onEndPage = state.onEndPage && controller.viewControllers?.first is EndPageController
             displayedSpread = target
             layoutVersion = state.layoutVersion
             rightToLeft = state.rightToLeft
@@ -256,10 +264,12 @@ struct PageViewer: UIViewControllerRepresentable {
                 return
             }
             if pvc.viewControllers?.first is EndPageController {
+                state.onEndPage = true
                 if state.showChrome { state.showChrome = false }
                 return
             }
             guard let current = pvc.viewControllers?.first as? SpreadViewController else { return }
+            state.onEndPage = false
             displayedSpread = current.spreadIndex
             state.show(spread: current.spreadIndex)
             // Turning the page by swiping puts the controls away.
