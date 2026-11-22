@@ -211,6 +211,10 @@ struct LibraryGridView: View {
             .environment(\.libraryIconSize, LibraryIconSize.forCover(width: size))
             // Back where the user left off in this view earlier in the session, or at the
             // last launch (#105).
+            // A search that starts with whole text at once (a past search picked, or text
+            // pasted) has the full list on screen, scrolled to its top, until the results are
+            // worked out. Hidden for that moment, as elsewhere, so only the results show.
+            .opacity(!search.isEmpty && appliedSearch.isEmpty ? 0 : 1)
             .remembersScroll(keeper, item: item, ids: books.map(\.id),
                              isFiltered: !search.isEmpty || !appliedSearch.isEmpty, proxy: proxy,
                              clearSearch: { search = ""; appliedSearch = "" }) { ids in
@@ -265,7 +269,8 @@ struct LibraryGridView: View {
         .searchableWithHistory(text: $search, prompt: "Search books", list: "books")
         .task(id: search) {
             // Filtering thousands of books on every keystroke makes typing lag, so wait for a pause.
-            if !search.isEmpty, (try? await Task.sleep(for: .milliseconds(200))) == nil { return }
+            // Not before the first results, though: the grid is hidden until they are in.
+            if !search.isEmpty, !appliedSearch.isEmpty, (try? await Task.sleep(for: .milliseconds(200))) == nil { return }
             appliedSearch = search
         }
         .toolbar {
