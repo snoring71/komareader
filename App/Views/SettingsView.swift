@@ -8,6 +8,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.coverShadowDirection) private var shadowDirection: CoverShadowDirection = .around
     @AppStorage(SettingsKeys.roundedCorners) private var roundedCorners = true
     @AppStorage(CoverIntro.settingKey) private var showCoverIntro = true
+    @AppStorage(ShelfZoom.settingKey) private var openFromShelf = true
 
     var body: some View {
         @Bindable var policy = model.coverPolicy
@@ -63,6 +64,9 @@ struct SettingsView: View {
                     // For every book alike, so here rather than among the Book Defaults (#93).
                     Toggle("Show Cover First", isOn: $showCoverIntro)
                         .accessibilityIdentifier("settings-show-cover-first")
+                    // The cover grows into the reader and shrinks back (#127).
+                    Toggle("Open from the Shelf", isOn: $openFromShelf)
+                        .accessibilityIdentifier("settings-open-from-shelf")
                 } header: {
                     Text("Reading")
                 } footer: {

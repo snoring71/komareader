@@ -12,6 +12,8 @@ struct RootView: View {
     @State private var sidebarShown = false
     /// The reader restore (#66) is tried once, when the library is first ready.
     @State private var restoreTried = false
+    /// Covers in the library and the reader zoom between each other in this (#127).
+    @Namespace private var shelfZoom
 
     var body: some View {
         @Bindable var model = model
@@ -60,6 +62,7 @@ struct RootView: View {
                 }
             }
         }
+        .environment(\.shelfZoom, ShelfZoom.isEnabled ? shelfZoom : nil)
         .onChange(of: model.openBook?.id) { _, id in
             ReaderRestore.note(bookId: id)
         }
@@ -82,6 +85,7 @@ struct RootView: View {
             ReaderScreen(book: open.book, source: open.source, options: open.options, defaults: model.readerDefaults, handOff: open.handOff, intro: open.intro, bookmarks: open.bookmarks)
                 .toggleStyle(MonoToggleStyle())
                 .id(open.id)
+                .modifier(ShelfZoomDestination(sourceID: model.openedFrom, namespace: shelfZoom))
         }
         .sheet(item: $model.bookInfo) { ref in
             BookInfoView(bookId: ref.id)
@@ -154,6 +158,7 @@ struct ResumeButton: View {
                 Section("Recently Read") {
                     ForEach(model.recentBooks(limit: 8)) { book in
                         Button {
+                            model.openedFrom = nil
                             Task { await model.open(book) }
                         } label: {
                             Label(book.title, systemImage: book.status == .read ? "checkmark.circle" : "book")
@@ -174,6 +179,7 @@ struct ResumeButton: View {
                 // Inverse text on the black or white accent glass (#55).
                 .foregroundStyle(Color.onAccent)
             } primaryAction: {
+                model.openedFrom = nil
                 Task { await model.open(last) }
             }
             .menuStyle(.button)

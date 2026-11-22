@@ -974,6 +974,7 @@ struct BookCell: View {
             } else {
                 // Where it was opened from, so its last page can offer the next book (#83).
                 model.readingContext = gridOrder.map { AppModel.ReadingContext(listName: $0.listName, ids: $0.books.map(\.id)) }
+                model.openedFrom = ShelfZoom.isEnabled ? liftID : nil
                 Task { await model.activate(book) }
             }
         } label: {
@@ -981,6 +982,8 @@ struct BookCell: View {
                 // The icon row and cover lift together on a long press; the title stays (#71).
                 BookCoverStack(book: book, isSelected: isSelected, liftID: liftID)
                     .liftMenuPart(.lift, id: liftID)
+                    // The reader grows out of this cover and shrinks back into it (#127).
+                    .modifier(ShelfZoomSource(id: liftID))
                 if showTitles && !info.isOn {
                     // Every cell keeps room for two title lines, so all rows are the same height and the
                     // scroll bar does not jump as rows of different heights come into view.

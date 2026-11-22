@@ -32,6 +32,10 @@ final class AppModel {
     /// The search history box is open (#109); the Resume button fades out so it doesn't cover it.
     var searchHistoryShown = false
 
+    /// The cover the open book was tapped on in the library, which the reader zooms out of and
+    /// back into (#127). Nil when it was opened another way.
+    var openedFrom: String?
+
     var openBook: OpenBook? {
         didSet {
             let reading = openBook != nil
@@ -1216,6 +1220,8 @@ final class AppModel {
         // Not Now while it downloaded, or the reader closed: the download is kept, but the
         // book waits for Read Now.
         guard nextToOpen == book.id, openBook != nil else { return }
+        // The next book has no cover on screen to close back into.
+        openedFrom = nil
         nextToOpen = nil
         // The finished book's progress goes into the library before the next one takes over.
         applyReadingProgress()
