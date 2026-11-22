@@ -41,8 +41,20 @@ final class AppModel {
             if !reading {
                 applyReadingProgress()
                 flushFileMetadata()
+                let waiting = readerClosedWaiters
+                readerClosedWaiters = []
+                waiting.forEach { $0.resume() }
             }
         }
+    }
+    /// Background work waiting for the reader to close (see `waitForReaderToClose`).
+    @ObservationIgnored private var readerClosedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Returns once no book is open. Waiting here, rather than checking every few seconds,
+    /// lets the app sleep while a book is read.
+    func waitForReaderToClose() async {
+        guard openBook != nil else { return }
+        await withCheckedContinuation { readerClosedWaiters.append($0) }
     }
     /// The open book with its latest position. It is kept out of `books` until the reader
     /// closes: changing `books` redraws the library behind the reader, and doing that on
@@ -157,7 +169,12 @@ final class AppModel {
         return books[i]
     }
 
+    /// Bumped on every change to `books`, so a view can keep work it did on them (the grid's
+    /// filtered and sorted list) until they change.
+    private(set) var booksVersion = 0
+
     private func booksDidChange(from old: [Book]) {
+        booksVersion &+= 1
         updateSummary()
         defer {
             updateSearchKeys()
@@ -1635,7 +1652,7 @@ final class AppModel {
         metadataTask = Task { [weak self] in
             for item in todo {
                 // Stay out of the way of the reader.
-                while self?.openBook != nil, !Task.isCancelled { try? await Task.sleep(for: .seconds(2)) }
+                await self?.waitForReaderToClose()
                 guard self != nil, !Task.isCancelled else { break }
                 let metadata = await Task.detached(priority: .utility) { () -> BookData? in
                     // A book removed from the iPad meanwhile is left for later.

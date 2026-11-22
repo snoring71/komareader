@@ -101,7 +101,42 @@ struct LibraryGridView: View {
 
     private var size: Double { pinchSize ?? coverSize }
 
+    /// The filtered and sorted books, kept until something they depend on changes. The body
+    /// runs again for much else (each frame of a pinch, each tap in Select mode, a dialog),
+    /// and filtering and sorting the whole library each time made those slow in a big one.
+    @State private var visibleCache = VisibleCache()
+
+    final class VisibleCache {
+        struct Key: Equatable {
+            let item: SidebarItem
+            let booksVersion: Int
+            let searchKeysRevision: Int
+            let lists: LibraryLists
+            let upNext: [String]
+            let search: String
+            let filter: LibraryFilter
+            let sort: SortOrder
+            let ascending: Bool
+            /// Filters like "read in the last 7 days" move on with the date.
+            let day: Date
+        }
+        var key: Key?
+        var books: [Book] = []
+    }
+
     private var visibleBooks: [Book] {
+        // Read every time, so the grid still redraws when any of these change.
+        let key = VisibleCache.Key(item: item, booksVersion: model.booksVersion, searchKeysRevision: model.searchKeysRevision,
+                                   lists: model.lists, upNext: model.upNext, search: appliedSearch, filter: filter,
+                                   sort: sort, ascending: ascending, day: Calendar.current.startOfDay(for: Date()))
+        if visibleCache.key == key { return visibleCache.books }
+        let books = computeVisibleBooks()
+        visibleCache.key = key
+        visibleCache.books = books
+        return books
+    }
+
+    private func computeVisibleBooks() -> [Book] {
         // A typed search may hold field prefixes (#81); it and the filter bar are one filter.
         let active = filter.combined(with: LibraryFilter.parse(appliedSearch))
         var books = baseBooks
