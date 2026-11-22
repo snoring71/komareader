@@ -72,6 +72,9 @@ struct SettingsView: View {
                 Section("Library") {
                     LabeledContent("Folder", value: model.libraryName)
                     LabeledContent("Books", value: "\(model.books.filter { !$0.isMissing }.count)")
+                    // How series, numbers and authors are read from file names (#77).
+                    NavigationLink("File Names") { FileNamesView() }
+                        .accessibilityIdentifier("settings-file-names")
                     Button("Change Library Folder…") {
                         dismiss()
                         model.changeFolder()

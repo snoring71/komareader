@@ -51,12 +51,34 @@ public struct BookRecord: Codable, Equatable, Sendable {
         }
     }
 
+    /// The user's own edits to the book's data (#76). A field that is nil (or an empty list)
+    /// has no edit, and shows what the file or its name says. The whole group merges as one,
+    /// newest `updatedAt` wins. `writers` is always written, as version 0.1 requires it.
     public struct Metadata: Codable, Equatable, Sendable {
         public var series: String?
         public var number: String?
         public var title: String?
         public var writers: [String]
         public var year: Int?
+        public var volume: String?
+        public var count: Int?
+        public var summary: String?
+        public var month: Int?
+        public var day: Int?
+        public var pencillers: [String]?
+        public var inkers: [String]?
+        public var colorists: [String]?
+        public var letterers: [String]?
+        public var coverArtists: [String]?
+        public var editors: [String]?
+        public var translators: [String]?
+        public var publisher: String?
+        public var imprint: String?
+        public var genres: [String]?
+        public var language: String?
+        public var ageRating: String?
+        public var isbn: String?
+        public var web: String?
         public var updatedAt: Date
 
         public init(series: String? = nil, number: String? = nil, title: String? = nil, writers: [String] = [], year: Int? = nil, updatedAt: Date = Date()) {
@@ -66,6 +88,74 @@ public struct BookRecord: Codable, Equatable, Sendable {
             self.writers = writers
             self.year = year
             self.updatedAt = updatedAt
+        }
+
+        public init(_ values: BookData, updatedAt: Date = Date()) {
+            self.init(updatedAt: updatedAt)
+            self.values = values
+        }
+
+        /// The edits as book data (no file tags or direction: those are not edited here).
+        public var values: BookData {
+            get {
+                var data = BookData()
+                data.series = series
+                data.number = number
+                data.title = title
+                data.writers = writers.isEmpty ? nil : writers
+                data.year = year
+                data.volume = volume
+                data.count = count
+                data.summary = summary
+                data.month = month
+                data.day = day
+                data.pencillers = pencillers
+                data.inkers = inkers
+                data.colorists = colorists
+                data.letterers = letterers
+                data.coverArtists = coverArtists
+                data.editors = editors
+                data.translators = translators
+                data.publisher = publisher
+                data.imprint = imprint
+                data.genres = genres
+                data.language = language
+                data.ageRating = ageRating
+                data.isbn = isbn
+                data.web = web
+                return data
+            }
+            set {
+                func text(_ value: String?) -> String? { value.flatMap(BookData.cleanText) }
+                func list(_ value: [String]?) -> [String]? {
+                    let names = (value ?? []).compactMap(BookData.cleanText)
+                    return names.isEmpty ? nil : names
+                }
+                series = text(newValue.series)
+                number = text(newValue.number)
+                title = text(newValue.title)
+                writers = list(newValue.writers) ?? []
+                year = newValue.year
+                volume = text(newValue.volume)
+                count = newValue.count
+                summary = text(newValue.summary)
+                month = newValue.month
+                day = newValue.day
+                pencillers = list(newValue.pencillers)
+                inkers = list(newValue.inkers)
+                colorists = list(newValue.colorists)
+                letterers = list(newValue.letterers)
+                coverArtists = list(newValue.coverArtists)
+                editors = list(newValue.editors)
+                translators = list(newValue.translators)
+                publisher = text(newValue.publisher)
+                imprint = text(newValue.imprint)
+                genres = list(newValue.genres)
+                language = text(newValue.language)
+                ageRating = text(newValue.ageRating)
+                isbn = text(newValue.isbn)
+                web = text(newValue.web)
+            }
         }
     }
 

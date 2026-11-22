@@ -160,11 +160,20 @@ struct BookInfoView: View {
                 }
             }
 
-            Section("Metadata") {
-                LabeledContent("Series", value: book.series)
-                LabeledContent("Number", value: book.number ?? "–")
-                if let author = book.author { LabeledContent("Author", value: author) }
-                if let publisher = book.publisher { LabeledContent("Publisher", value: publisher) }
+            Section {
+                bookData(book)
+                NavigationLink {
+                    BookDataEditorView(bookIds: [book.id], inSheet: false)
+                } label: {
+                    Label("Edit Info…", systemImage: "pencil")
+                }
+                .accessibilityIdentifier("info-edit-data")
+            } header: {
+                Text("Book")
+            } footer: {
+                if book.userData != nil {
+                    Text("Some of this was edited by you. Edits sync to your other devices; the file is not changed.")
+                }
             }
 
             Section("Details") {
@@ -201,6 +210,64 @@ struct BookInfoView: View {
                 Text("Removing a book from this iPad keeps it in iCloud Drive.")
             }
         }
+    }
+
+    /// Everything known about the book (#75): the user's edits, the file's ComicInfo.xml, or
+    /// what its file name says. Empty fields are left out.
+    @ViewBuilder private func bookData(_ book: Book) -> some View {
+        let info = book.info
+        if let title = info.title, title != book.title { LabeledContent("Title", value: title) }
+        LabeledContent("Series", value: book.series)
+        if let number = book.number {
+            LabeledContent("Number", value: info.count.map { "\(number) of \($0)" } ?? number)
+        } else if let count = info.count {
+            LabeledContent("Books in Series", value: String(count))
+        }
+        if let volume = info.volume, volume != book.number { LabeledContent("Volume", value: volume) }
+        ForEach(BookData.Role.allCases) { role in
+            if let names = info[keyPath: role.keyPath], !names.isEmpty {
+                LabeledContent(names.count == 1 ? role.title : role.title + "s", value: names.joined(separator: ", "))
+            }
+        }
+        if let publisher = info.publisher {
+            LabeledContent("Publisher", value: info.imprint.map { "\(publisher) (\($0))" } ?? publisher)
+        }
+        if let released = Self.releaseText(info) { LabeledContent("Released", value: released) }
+        if let genres = info.genres, !genres.isEmpty { LabeledContent("Genre", value: genres.joined(separator: ", ")) }
+        if let tags = info.tags, !tags.isEmpty { LabeledContent("File Tags", value: tags.joined(separator: ", ")) }
+        if let language = info.language {
+            LabeledContent("Language", value: Locale.current.localizedString(forLanguageCode: language) ?? language)
+        }
+        if let rating = info.ageRating { LabeledContent("Age Rating", value: rating) }
+        if let isbn = info.isbn {
+            LabeledContent("ISBN") { Text(isbn).textSelection(.enabled) }
+        }
+        if let web = info.web, let url = URL(string: web), url.scheme?.hasPrefix("http") == true {
+            LabeledContent("Web") {
+                Link(url.host() ?? web, destination: url).foregroundStyle(.primary).underline()
+            }
+        }
+        if info.rightToLeft == true { LabeledContent("Reads", value: "Right to Left (Manga)") }
+        if let summary = info.summary {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Summary").foregroundStyle(.secondary).font(.subheadline)
+                Text(summary).textSelection(.enabled)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    /// "10 April 2005", "April 2005" or "2005".
+    static func releaseText(_ info: BookData) -> String? {
+        guard let year = info.year else { return nil }
+        var parts = DateComponents()
+        parts.year = year
+        parts.month = info.month ?? 1
+        parts.day = info.day ?? 1
+        guard let date = Calendar(identifier: .gregorian).date(from: parts) else { return String(year) }
+        if info.month == nil { return String(year) }
+        if info.day == nil { return date.formatted(.dateTime.month(.wide).year()) }
+        return date.formatted(date: .long, time: .omitted)
     }
 
     private func percent(_ book: Book) -> String {

@@ -11,15 +11,10 @@ struct CoverInfo: Equatable {
     var size = true
     var format = true
     var location = false
-
-    /// True when the name comes from inside the files, so it has to be read from them.
-    var needsFileMetadata: Bool {
-        isOn && name.needsFileMetadata
-    }
 }
 
 enum CoverInfoName: String, CaseIterable, Identifiable {
-    case none, fileName, title, author, publisher
+    case none, fileName, title, series, author, publisher
 
     var id: String { rawValue }
 
@@ -28,15 +23,9 @@ enum CoverInfoName: String, CaseIterable, Identifiable {
         case .none: return "None"
         case .fileName: return "File Name"
         case .title: return "Title"
+        case .series: return "Series"
         case .author: return "Author"
         case .publisher: return "Publisher"
-        }
-    }
-
-    var needsFileMetadata: Bool {
-        switch self {
-        case .title, .author, .publisher: return true
-        case .none, .fileName: return false
         }
     }
 
@@ -46,6 +35,7 @@ enum CoverInfoName: String, CaseIterable, Identifiable {
         case .none: return nil
         case .fileName: return (book.relativePath as NSString).lastPathComponent
         case .title: return book.metadataTitle ?? book.title
+        case .series: return book.number.map { "\(book.series) \($0)" } ?? book.series
         case .author: return book.author ?? "–"
         case .publisher: return book.publisher ?? "–"
         }

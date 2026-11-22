@@ -420,6 +420,24 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(tagsDone.waitForNonExistence(timeout: 5), "The tag editor did not close")
         XCTAssertTrue(done.exists, "Closing Tags ended Select mode")
 
+        // Edit Info… for the selected books (#76): fields that differ say Mixed.
+        actions.tap()
+        let editInfo = app.buttons["selection-edit-info"].firstMatch
+        XCTAssertTrue(editInfo.waitForExistence(timeout: 5), "No Edit Info… in the Actions menu")
+        editInfo.tap()
+        let dataSave = app.buttons["data-save"].firstMatch
+        XCTAssertTrue(dataSave.waitForExistence(timeout: 5), "The book data editor did not open")
+        sleep(1)
+        save(app, "22c-library-select-edit-info")
+        let publisher = app.textFields["data-publisher"].firstMatch
+        if publisher.waitForExistence(timeout: 3) {
+            publisher.tap()
+            publisher.typeText("Demo Press")
+        }
+        if dataSave.isEnabled { dataSave.tap() } else { app.buttons["Cancel"].firstMatch.tap() }
+        XCTAssertTrue(dataSave.waitForNonExistence(timeout: 5), "The book data editor did not close")
+        XCTAssertTrue(done.exists, "Closing Edit Info ended Select mode")
+
         actions.tap()
         // Earlier runs may have marked these books already.
         let favorite = app.buttons.matching(NSPredicate(format: "label IN %@", ["Favorite", "Remove from Favorites"])).firstMatch

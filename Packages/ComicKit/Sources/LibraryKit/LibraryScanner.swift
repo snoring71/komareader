@@ -88,6 +88,8 @@ public enum LibraryScanner {
             } else if PageFilter.isPage(path: name) {
                 imageCount += 1
                 if !isLocal(values) { hasCloudOnlyImages = true }
+            } else if BookData.isComicInfo(path: name) {
+                // A folder book's own metadata (#75), not something else in the folder.
             } else {
                 otherFiles += 1
             }

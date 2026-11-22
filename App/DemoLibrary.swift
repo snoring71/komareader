@@ -18,6 +18,9 @@ enum DemoLibrary {
             for volume in 1...volumes {
                 let folder = root.appendingPathComponent(name).appendingPathComponent("\(name) \(volume)")
                 try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                if let xml = comicInfo(series: name, volume: volume, of: volumes) {
+                    try? Data(xml.utf8).write(to: folder.appendingPathComponent("ComicInfo.xml"))
+                }
                 for page in 1...8 {
                     let wide = page == 6
                     let image = render(title: page == 1 ? "\(name)\nVol. \(volume)" : "\(page)", color: color, wide: wide, cover: page == 1)
@@ -28,6 +31,26 @@ enum DemoLibrary {
         makeMany(extraBooks, in: root.appendingPathComponent("More", isDirectory: true))
         seedOtherDevices(folderName: root.lastPathComponent)
         return root
+    }
+
+    /// ComicInfo.xml for some demo series, so Book Info, the authors and the editor have data (#75).
+    private static func comicInfo(series: String, volume: Int, of count: Int) -> String? {
+        switch series {
+        case "Starfall":
+            return """
+            <ComicInfo><Series>Starfall</Series><Number>\(volume)</Number><Count>\(count)</Count>
+            <Writer>Mira Okada</Writer><Penciller>Theo Lind</Penciller><Publisher>Lantern Press</Publisher>
+            <Year>\(2018 + volume)</Year><Month>3</Month><Genre>Science Fiction, Adventure</Genre>
+            <Summary>A courier crosses a falling city to deliver one last letter.</Summary><LanguageISO>en</LanguageISO></ComicInfo>
+            """
+        case "Paper Moon":
+            return """
+            <ComicInfo><Series>Paper Moon</Series><Number>\(volume)</Number><Writer>Aoi Mori</Writer>
+            <Publisher>Kumo Books</Publisher><Year>2021</Year><Manga>YesAndRightToLeft</Manga><LanguageISO>ja</LanguageISO></ComicInfo>
+            """
+        default:
+            return nil
+        }
     }
 
     /// Small two-page books, ten to a series, written from a few pre-rendered pages.

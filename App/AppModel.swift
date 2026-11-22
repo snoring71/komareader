@@ -81,13 +81,20 @@ final class AppModel {
     var tagEditor: TagEditorRequest?
     /// The book whose cover editor is showing, opened from the library's long-press menu.
     var coverEditor: CoverEditorRequest?
-    /// True while the library shows something read from the files themselves (author,
-    /// publisher, title), so books on this iPad have their metadata read in the background.
-    var wantsFileMetadata = false {
-        didSet { if wantsFileMetadata && !oldValue { readFileMetadata() } }
-    }
     @ObservationIgnored private var metadataTask: Task<Void, Never>?
-    @ObservationIgnored private var pendingMetadata: [String: FileMetadata] = [:]
+    @ObservationIgnored private var pendingMetadata: [String: BookData] = [:]
+    /// How file names are read (Settings › File Names, #77), kept on this device. A change
+    /// works out every book's data again.
+    var fileNameRules: FileNameRules = AppModel.loadFileNameRules() {
+        didSet {
+            guard fileNameRules != oldValue else { return }
+            if let data = try? JSONEncoder().encode(fileNameRules) { UserDefaults.standard.set(data, forKey: Self.fileNameRulesKey) }
+            applyFileNameRulesSoon()
+        }
+    }
+    @ObservationIgnored private var rulesTask: Task<Void, Never>?
+    /// The book data editor, from Book Info, Select mode or a series (#76).
+    var dataEditor: DataEditorRequest?
     @ObservationIgnored private var metadataFlushTask: Task<Void, Never>?
     /// Bumped when a book's cover changes, so the grid reloads its thumbnail.
     var coverRevision: [String: Int] = [:]
@@ -259,6 +266,13 @@ final class AppModel {
         case remove(String)
         /// Takes every tag off the books ("No Tags"). The tags stay in the library's tag list.
         case clear
+    }
+
+    struct DataEditorRequest: Identifiable {
+        let ids: Set<String>
+        /// Edit Series… shows only the fields a whole series shares.
+        var seriesName: String?
+        let id = UUID()
     }
 
     struct CoverEditorRequest: Identifiable {
@@ -484,6 +498,7 @@ final class AppModel {
         defer { if showProgress { isScanning = false } }
         let covers = covers
         let known = thumbnails
+        let rules = fileNameRules
         do {
             let (updated, staleCovers, found, tagList) = try await Task.detached(priority: .userInitiated) { () throws -> ([Book], [String], [String: URL], TagList) in
                 let scanned = LibraryScanner.scan(root: libraryURL)
@@ -495,7 +510,7 @@ final class AppModel {
                           made < edited else { return nil }
                     return record.bookId
                 }
-                let books = try index.apply(scan: scanned, records: records)
+                let books = try index.apply(scan: scanned, records: records, rules: rules)
                     .naturallySorted(by: \.relativePath)
                 // Thumbnails already on disk, looked up here rather than on the main thread.
                 var found: [String: URL] = [:]
@@ -689,6 +704,8 @@ final class AppModel {
         bookInfo = nil
         var options = record?.effectiveReaderOptions ?? ReaderOptions(updatedAt: .distantPast)
         if record == nil, let direction = current.direction { options.direction = ReaderOptions.Direction(rawValue: direction) }
+        // Right-to-left manga by its ComicInfo.xml, when the book has no direction of its own (#75).
+        if options.direction == nil, current.info.rightToLeft == true { options.direction = .rightToLeft }
         let intro = restoring ? nil : await coverIntro(for: current)
         // Something else may have opened in the meantime.
         if restoring, openBook != nil { return }
@@ -899,7 +916,9 @@ final class AppModel {
     /// The direction a book reads in: its own, else the default for books.
     func direction(of book: Book) -> ReaderOptions.Direction {
         let own = directionAfterReading?.id == book.id ? directionAfterReading?.direction : book.direction
-        return own.flatMap(ReaderOptions.Direction.init(rawValue:)) ?? readerDefaults.direction
+        if let own = own.flatMap(ReaderOptions.Direction.init(rawValue:)) { return own }
+        // A file that says it is right-to-left manga reads that way unless the book has its own (#75).
+        return book.info.rightToLeft == true ? .rightToLeft : readerDefaults.direction
     }
 
     /// Saves a book's own reader settings to its synced record.
@@ -1234,23 +1253,23 @@ final class AppModel {
 
     // MARK: File metadata
 
-    /// Reads the metadata of books on this iPad that have not had it read yet, one book at a
-    /// time in the background, while the library shows author, publisher or title. Never
-    /// downloads anything; books in iCloud get theirs when a cover is made or they are downloaded.
+    /// Reads the metadata (ComicInfo.xml, #75) of books on this iPad that have not had it read
+    /// yet, one book at a time in the background. Never downloads anything; books in iCloud get
+    /// theirs when a cover is made or they are downloaded. Waits while a book is open.
     func readFileMetadata() {
-        guard wantsFileMetadata, metadataTask == nil else { return }
+        guard metadataTask == nil else { return }
         let todo = books.filter { !$0.isMissing && $0.isDownloaded && !$0.metadataRead }
             .compactMap { book in fileURL(for: book).map { (id: book.id, url: $0, format: book.format) } }
         guard !todo.isEmpty else { return }
         metadataTask = Task { [weak self] in
             for item in todo {
-                // Stay out of the way of the reader, and stop if the overlay is turned off.
+                // Stay out of the way of the reader.
                 while self?.openBook != nil, !Task.isCancelled { try? await Task.sleep(for: .seconds(2)) }
-                guard let wanted = self?.wantsFileMetadata, wanted, !Task.isCancelled else { break }
-                let metadata = await Task.detached(priority: .utility) { () -> FileMetadata? in
+                guard self != nil, !Task.isCancelled else { break }
+                let metadata = await Task.detached(priority: .utility) { () -> BookData? in
                     // A book removed from the iPad meanwhile is left for later.
                     guard CloudFiles.isDownloaded(item.url) else { return nil }
-                    return MetadataReader.read(url: item.url, format: item.format) ?? FileMetadata()
+                    return MetadataReader.read(url: item.url, format: item.format) ?? BookData()
                 }.value
                 if let metadata { self?.noteFileMetadata([item.id: metadata]) }
             }
@@ -1259,12 +1278,12 @@ final class AppModel {
     }
 
     /// Collects metadata as it is read and puts it into `books` every few seconds, since each
-    /// change to `books` redraws the library.
-    private func noteFileMetadata(_ items: [String: FileMetadata]) {
+    /// change to `books` redraws the library (and a new series name regroups it).
+    private func noteFileMetadata(_ items: [String: BookData]) {
         pendingMetadata.merge(items) { _, new in new }
         guard metadataFlushTask == nil else { return }
         metadataFlushTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(6))
             self?.metadataFlushTask = nil
             self?.flushFileMetadata()
         }
@@ -1275,14 +1294,76 @@ final class AppModel {
         guard openBook == nil, !pendingMetadata.isEmpty else { return }
         let items = pendingMetadata
         pendingMetadata = [:]
-        let index = index
-        Task.detached(priority: .utility) { try? index?.saveMetadata(items) }
+        let index = index, rules = fileNameRules
+        Task.detached(priority: .utility) { try? index?.saveFileData(items, rules: rules) }
         updateBooks(Set(items.keys), save: false) { book in
-            guard let metadata = items[book.id] else { return }
-            book.author = metadata.author
-            book.publisher = metadata.publisher
-            book.metadataTitle = metadata.title
+            guard let data = items[book.id] else { return }
+            book.fileData = data.isEmpty ? nil : data
             book.metadataRead = true
+            book.refreshInfo(rules: rules)
+        }
+    }
+
+    // MARK: Book data
+
+    /// Changes the user's own data (#76) on one or many books, with one change to `books` and
+    /// one background pass over the records. `change` sets only the fields the user changed;
+    /// a field set to nil (or an empty list) goes back to what the file says.
+    func editBookData(_ ids: Set<String>, _ change: (inout BookData) -> Void) {
+        let rules = fileNameRules
+        let changed = updateBooks(ids) { book in
+            var data = book.userData ?? BookData()
+            change(&data)
+            // Cleaned the way the record keeps it, so the library shows what syncs.
+            let cleaned = BookRecord.Metadata(data).values
+            book.userData = cleaned.isEmpty ? nil : cleaned
+            book.refreshInfo(rules: rules)
+        }
+        let now = Date()
+        updateRecords(changed) { record, book in
+            record.metadata = .init(book.userData ?? BookData(), updatedAt: now)
+        }
+    }
+
+    /// Distinct values already in the library, for the editor's suggestions.
+    func knownValues(_ field: (Book) -> [String]) -> [String] {
+        var seen: [String: String] = [:]
+        for book in books where !book.isMissing {
+            for value in field(book) where !value.isEmpty { seen[value.lowercased()] = seen[value.lowercased()] ?? value }
+        }
+        return Array(seen.values).naturallySorted()
+    }
+
+    private static let fileNameRulesKey = "fileNameRules"
+
+    private static func loadFileNameRules() -> FileNameRules {
+        guard let data = UserDefaults.standard.data(forKey: fileNameRulesKey),
+              let rules = try? JSONDecoder().decode(FileNameRules.self, from: data) else { return .standard }
+        return rules
+    }
+
+    /// Works out every book's data again with the new file name rules, off the main thread,
+    /// after a short pause so a few quick changes run it once.
+    private func applyFileNameRulesSoon() {
+        rulesTask?.cancel()
+        rulesTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self, !Task.isCancelled else { return }
+            let rules = self.fileNameRules
+            let current = self.books
+            let updated = await Task.detached(priority: .userInitiated) { () -> [String: Book] in
+                var result: [String: Book] = [:]
+                for var book in current {
+                    let before = book
+                    book.refreshInfo(rules: rules)
+                    if book != before { result[book.id] = book }
+                }
+                return result
+            }.value
+            guard !Task.isCancelled, rules == self.fileNameRules else { return }
+            self.updateBooks(Set(updated.keys)) { book in
+                if let new = updated[book.id] { book.copyInfo(from: new) }
+            }
         }
     }
 
