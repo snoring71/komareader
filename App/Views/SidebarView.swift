@@ -142,12 +142,14 @@ struct SidebarView: View {
                 model.smartEditor = .init(listId: nil, filter: LibraryFilter(rules: [.init(.status, .isAnyOf, ["unread"])]))
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "plus").frame(width: 22)
+                    Image(systemName: "plus.circle").frame(width: 22)
                     Text("New Smart List…")
                     Spacer(minLength: 0)
                 }
                 .font(.subheadline)
-                .foregroundStyle(Color.secondary)
+                // The primary colour, like the other rows: secondary did not draw on the
+                // sidebar's glass, leaving an empty gap.
+                .foregroundStyle(Color.primary)
                 .padding(.horizontal, 18)
                 .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
                 .contentShape(Rectangle())
