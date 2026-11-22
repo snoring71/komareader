@@ -69,14 +69,50 @@ struct ReaderDefaultsView: View {
             }
 
             Section {
+                Toggle("Auto-Fix Scans", isOn: $defaults.autoFix)
+                slider("Brightness", value: $defaults.brightness, in: -1...1)
                 slider("Contrast", value: $defaults.contrast, in: -1...1)
-                slider("Sharpness", value: $defaults.sharpness, in: 0...1)
-                slider("Paper Grain", value: $defaults.paperGrain, in: 0...1)
-                slider("Paper Tone", value: $defaults.paperTint, in: 0...1)
+                slider("Gamma", value: $defaults.gamma, in: -1...1)
+                slider("Saturation", value: $defaults.saturation, in: -1...1)
+                Toggle("Black and White", isOn: $defaults.blackAndWhite)
             } header: {
                 Text("Image Adjustments")
             } footer: {
-                Text("Paper Grain lays a printed-paper texture over pages; Paper Tone warms white paper. Off by default.")
+                Text("Auto-Fix sets each page's white and black from the page itself, so yellowed paper turns white and faded ink black.")
+            }
+
+            Section {
+                slider("Sharpness", value: $defaults.sharpness, in: 0...1)
+                slider("Descreen", value: $defaults.descreen, in: 0...1)
+                Toggle("Sharper Scaling", isOn: $defaults.sharperScaling)
+                Toggle("Auto Trim Margins", isOn: $defaults.autoTrim)
+                Toggle("Keep Color Pages", isOn: $defaults.keepColorPages)
+            } header: {
+                Text("Scans")
+            } footer: {
+                Text("Descreen softens printing dots and JPEG blocks. Sharper Scaling resizes pages to the screen with Lanczos. Auto Trim cuts each page's plain border as it loads, unless the book has its own crop. Keep Color Pages leaves colour pages alone under Black and White, Auto-Fix and Sepia.")
+            }
+
+            Section {
+                Picker("Night Mode", selection: $defaults.nightMode) {
+                    ForEach(ReaderOptions.NightMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                Toggle("Only in Dark Mode", isOn: $defaults.nightOnlyInDark)
+                    .disabled(defaults.nightMode == .off)
+            } header: {
+                Text("Night")
+            }
+
+            Section {
+                Picker("Paper", selection: $defaults.paperStock) {
+                    ForEach(ReaderOptions.PaperStock.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                slider("Paper Grain", value: $defaults.paperGrain, in: 0...1)
+                slider("Paper Tone", value: $defaults.paperTint, in: 0...1)
+            } header: {
+                Text("Paper")
+            } footer: {
+                Text(defaults.paperStock.note + " Off by default.")
             }
 
             Section {

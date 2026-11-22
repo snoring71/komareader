@@ -246,8 +246,15 @@ final class ScreenshotTests: XCTestCase {
         let adjust = app.buttons["reader-bar-adjust"]
         if adjust.waitForExistence(timeout: 3) {
             adjust.tap()
+            // The panel has tabs (#115-#124): adjustments first, then paper.
+            let adjustTab = app.buttons["Adjust"]
+            if adjustTab.waitForExistence(timeout: 3) { adjustTab.tap() }
             let contrast = app.sliders["adjust-contrast"]
             if contrast.waitForExistence(timeout: 3) { contrast.adjust(toNormalizedSliderPosition: 0.85) }
+            sleep(1)
+            save(app, "16a-reader-adjust-tab")
+            let paperTab = app.buttons["Paper"]
+            if paperTab.waitForExistence(timeout: 3) { paperTab.tap() }
             let grain = app.sliders["adjust-grain"]
             if grain.waitForExistence(timeout: 3) { grain.adjust(toNormalizedSliderPosition: 0.7) }
             sleep(2)

@@ -8,6 +8,7 @@ struct ReaderScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.coverStyle) private var coverStyle
+    @Environment(\.colorScheme) private var colorScheme
     @State private var state: ReaderState
     @State private var scrubPage: Double = 0
     @State private var isScrubbing = false
@@ -107,6 +108,9 @@ struct ReaderScreen: View {
         .onChange(of: liveBook.direction) { _, direction in
             state.adoptDirection(direction.flatMap(ReaderOptions.Direction.init(rawValue:)))
         }
+        // Night modes can follow the system appearance (#118).
+        .onAppear { state.darkAppearance = colorScheme == .dark }
+        .onChange(of: colorScheme) { _, scheme in state.darkAppearance = scheme == .dark }
         .statusBarHidden(true)
         .persistentSystemOverlays(state.showChrome ? .automatic : .hidden)
         .onAppear {

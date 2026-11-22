@@ -136,9 +136,54 @@ public extension BookRecord {
         public var paperGrain: Double?
         /// A warm, aged-paper tint, from 0 (none) to 1.
         public var paperTint: Double?
+        /// Page brightness, from -1 (darker) through 0 to 1 (lighter).
+        public var brightness: Double?
+        /// Midtones, from -1 (darker) through 0 to 1 (lighter), leaving black and white alone.
+        public var gamma: Double?
+        /// Colour strength, from -1 (grey) through 0 to 1 (stronger).
+        public var saturation: Double?
+        /// Shows pages in shades of grey, for black-and-white scans with a colour cast.
+        public var blackAndWhite: Bool?
+        /// Sets each page's white point, black point and tint from the page itself, so
+        /// yellowed paper turns white and faded ink black.
+        public var autoFix: Bool?
+        /// A page mode for reading in the dark.
+        public var nightMode: NightMode?
+        /// Uses `nightMode` only while the system appearance is dark.
+        public var nightOnlyInDark: Bool?
+        /// Softens halftone dots and JPEG blocks, from 0 (none) to 1.
+        public var descreen: Double?
+        /// Resizes pages to the exact size on screen with Lanczos resampling.
+        public var sharperScaling: Bool?
+        /// Leaves colour pages in colour when a black-and-white fix (black and white, auto-fix's
+        /// tint removal, sepia) is on.
+        public var keepColorPages: Bool?
+        /// Which paper `paperGrain` draws.
+        public var paperStock: PaperStock?
+        /// Trims each page's blank border as it loads (a hand-set `crop` wins).
+        public var autoTrim: Bool?
         /// Only set per book; there is no default crop.
         public var crop: PageCrop?
         public var updatedAt: Date
+
+        public enum NightMode: String, Codable, CaseIterable, Sendable {
+            case off, sepia, dim, invert
+
+            /// A mode from a newer version reads as off, rather than failing the whole record.
+            public init(from decoder: Decoder) throws {
+                self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .off
+            }
+        }
+
+        public enum PaperStock: String, Codable, CaseIterable, Sendable {
+            /// The scanner-grey grain from #44.
+            case plain
+            case newsprint, cream, glossy
+
+            public init(from decoder: Decoder) throws {
+                self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .plain
+            }
+        }
 
         public init(updatedAt: Date = Date()) {
             self.updatedAt = updatedAt
@@ -149,6 +194,14 @@ public extension BookRecord {
             direction == nil && portraitLayout == nil && landscapeLayout == nil && fit == nil
                 && background == nil && bindingShadow == nil && splitDoublePages == nil && crop == nil
                 && contrast == nil && sharpness == nil && paperGrain == nil && paperTint == nil
+                && !hasLookExtras && autoTrim == nil
+        }
+
+        /// Whether any of the image settings added in phase 3 is set.
+        var hasLookExtras: Bool {
+            brightness != nil || gamma != nil || saturation != nil || blackAndWhite != nil || autoFix != nil
+                || nightMode != nil || nightOnlyInDark != nil || descreen != nil || sharperScaling != nil
+                || keepColorPages != nil || paperStock != nil
         }
     }
 

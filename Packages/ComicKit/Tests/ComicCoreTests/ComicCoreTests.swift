@@ -113,6 +113,31 @@ import Testing
         #expect(rtl == [.left, .right, .left])
     }
 
+    @Test func phaseThreeImageOptionsRoundTrip() throws {
+        var options = BookRecord.ReaderOptions(updatedAt: Date(timeIntervalSince1970: 60))
+        #expect(options.isEmpty)
+        options.autoFix = true
+        options.nightMode = .invert
+        options.paperStock = .newsprint
+        options.gamma = -0.3
+        options.autoTrim = true
+        #expect(!options.isEmpty)
+        let data = try RecordCoding.encoder().encode(options)
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(json.contains("\"nightMode\" : \"invert\""))
+        #expect(json.contains("\"paperStock\" : \"newsprint\""))
+        #expect(!json.contains("descreen"))
+        let decoded = try RecordCoding.decoder().decode(BookRecord.ReaderOptions.self, from: data)
+        #expect(decoded == options)
+        // A mode or paper from a newer version reads as off / plain instead of failing the record.
+        let newer = json.replacingOccurrences(of: "\"invert\"", with: "\"neon\"")
+            .replacingOccurrences(of: "\"newsprint\"", with: "\"vellum\"")
+        let lenient = try RecordCoding.decoder().decode(BookRecord.ReaderOptions.self, from: Data(newer.utf8))
+        #expect(lenient.nightMode == .off)
+        #expect(lenient.paperStock == .plain)
+        #expect(lenient.autoFix == true)
+    }
+
     @Test func readerOptionsRoundTripAndFallBack() throws {
         var record = BookRecord(bookId: "R", file: .init(path: "r.cbz", size: 1, modified: nil))
         record.readerSettings = .init(direction: .rightToLeft, updatedAt: Date(timeIntervalSince1970: 40))

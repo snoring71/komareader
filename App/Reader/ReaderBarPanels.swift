@@ -184,35 +184,239 @@ struct BackgroundPanel: View {
 
 struct AdjustmentsPanel: View {
     let state: ReaderState
+    /// Which group of adjustments shows. Kept for the session, so the panel reopens where it was.
+    @AppStorage("adjustmentsTab") private var tab: Tab = .adjust
+    /// The name being typed for a new look.
+    @State private var newLookName = ""
+    /// The look being renamed, and its new name.
+    @State private var renaming: UUID?
+    @State private var renameText = ""
+
+    enum Tab: String, CaseIterable {
+        case adjust, scan, night, paper, looks
+        var title: String {
+            switch self {
+            case .adjust: return "Adjust"
+            case .scan: return "Scan"
+            case .night: return "Night"
+            case .paper: return "Paper"
+            case .looks: return "Looks"
+            }
+        }
+    }
 
     var body: some View {
         let look = state.look
         BarPanel(title: "Image Adjustments") {
-            slider("Contrast", value: \.contrast, in: -1...1, shown: signedPercent(look.contrast))
-                .accessibilityIdentifier("adjust-contrast")
-            slider("Sharpness", value: \.sharpness, in: 0...1, shown: percent(look.sharpness))
-                .accessibilityIdentifier("adjust-sharpness")
-            Divider()
-            slider("Paper Grain", value: \.paperGrain, in: 0...1, shown: percent(look.paperGrain))
-                .accessibilityIdentifier("adjust-grain")
-            slider("Paper Tone", value: \.paperTint, in: 0...1, shown: percent(look.paperTint))
-                .accessibilityIdentifier("adjust-tint")
+            ChoiceBar<Tab>(Tab.allCases.map { ($0, $0.title) }, selection: $tab)
+                .accessibilityIdentifier("adjust-tabs")
+            switch tab {
+            case .adjust:
+                toggle("Auto-Fix Scans", value: \.autoFix, identifier: "adjust-autofix")
+                slider("Brightness", value: \.brightness, in: -1...1, shown: signedPercent(look.brightness))
+                    .accessibilityIdentifier("adjust-brightness")
+                slider("Contrast", value: \.contrast, in: -1...1, shown: signedPercent(look.contrast))
+                    .accessibilityIdentifier("adjust-contrast")
+                slider("Gamma", value: \.gamma, in: -1...1, shown: signedPercent(look.gamma))
+                    .accessibilityIdentifier("adjust-gamma")
+                slider("Saturation", value: \.saturation, in: -1...1, shown: signedPercent(look.saturation))
+                    .accessibilityIdentifier("adjust-saturation")
+                    .disabled(look.blackAndWhite)
+                toggle("Black and White", value: \.blackAndWhite, identifier: "adjust-mono")
+                note("Auto-Fix sets each page's white and black from the page itself, so yellowed paper turns white and faded ink black.")
+            case .scan:
+                slider("Sharpness", value: \.sharpness, in: 0...1, shown: percent(look.sharpness))
+                    .accessibilityIdentifier("adjust-sharpness")
+                slider("Descreen", value: \.descreen, in: 0...1, shown: percent(look.descreen))
+                    .accessibilityIdentifier("adjust-descreen")
+                toggle("Sharper Scaling", value: \.sharperScaling, identifier: "adjust-lanczos")
+                Toggle("Auto Trim Margins", isOn: setting(state, \.autoTrim) { $0.autoTrim = $1 })
+                    .font(.subheadline.weight(.medium))
+                    .accessibilityIdentifier("adjust-autotrim")
+                    .disabled(state.crop != nil)
+                toggle("Keep Color Pages", value: \.keepColorPages, identifier: "adjust-keep-color")
+                note(state.crop != nil
+                     ? "This book has its own crop, which Auto Trim leaves in place."
+                     : "Descreen softens printing dots and JPEG blocks. Sharper Scaling resizes pages with Lanczos. Keep Color Pages leaves colour pages alone under Black and White, Auto-Fix and Sepia.")
+            case .night:
+                PanelRow(title: "Night Mode") {
+                    ChoiceBar<PageLook.NightMode>(PageLook.NightMode.allCases.map { ($0, $0.title) }, selection: Binding(
+                        get: { state.look.nightMode },
+                        set: { mode in setLook { $0.nightMode = mode } }
+                    ))
+                    .accessibilityIdentifier("adjust-night")
+                }
+                toggle("Only in Dark Mode", value: \.nightOnlyInDark, identifier: "adjust-night-dark")
+                    .disabled(look.nightMode == .off)
+                note("Sepia warms the page, Dim greys white paper down, and Invert gives dark paper with light ink, keeping colours.")
+            case .paper:
+                PanelRow(title: "Paper") {
+                    ChoiceBar<PageLook.PaperStock>(PageLook.PaperStock.allCases.map { ($0, $0.title) }, selection: Binding(
+                        get: { state.look.paperStock },
+                        set: { stock in setLook { $0.paperStock = stock } }
+                    ))
+                    .accessibilityIdentifier("adjust-paper-stock")
+                }
+                slider("Paper Grain", value: \.paperGrain, in: 0...1, shown: percent(look.paperGrain))
+                    .accessibilityIdentifier("adjust-grain")
+                slider("Paper Tone", value: \.paperTint, in: 0...1, shown: percent(look.paperTint))
+                    .accessibilityIdentifier("adjust-tint")
+                note(look.paperStock.note)
+            case .looks:
+                looks
+            }
             HStack {
                 Text("Changes show as you drag. Select Text still reads the original page.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 12)
                 Button("Reset") {
-                    state.previewLook = PageLook()
+                    var plain = PageLook()
+                    plain.darkAppearance = state.darkAppearance
+                    state.previewLook = plain
                     state.commitLook()
                 }
                 .buttonStyle(.bordered)
+                .tint(.primary)
                 .disabled(look.isNone)
                 .accessibilityIdentifier("adjust-reset")
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-adjust-panel")
+    }
+
+    // MARK: Named looks (#123)
+
+    @ViewBuilder private var looks: some View {
+        let saved = state.defaults.namedLooks
+        if saved.isEmpty {
+            note("Save this book's adjustments as a look, then apply it to any other book in one tap.")
+        } else {
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(saved.enumerated()), id: \.element.id) { index, named in
+                        if index > 0 { Divider().padding(.leading, 12) }
+                        lookRow(named)
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+            .scrollBounceBehavior(.basedOnSize)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(PanelFill.color))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(PanelFill.edge))
+        }
+        HStack(spacing: 8) {
+            TextField("Name, e.g. 1980s tankobon", text: $newLookName)
+                .textFieldStyle(.roundedBorder)
+                .submitLabel(.done)
+                .onSubmit(saveLook)
+                .accessibilityIdentifier("adjust-look-name")
+            Button("Save", action: saveLook)
+                .buttonStyle(.bordered)
+                .tint(.primary)
+                .disabled(newLookName.trimmingCharacters(in: .whitespaces).isEmpty)
+                .accessibilityIdentifier("adjust-look-save")
+        }
+    }
+
+    private func lookRow(_ named: NamedLook) -> some View {
+        let applied = named.look(darkAppearance: state.darkAppearance) == state.look
+        return HStack(spacing: 10) {
+            if renaming == named.id {
+                TextField("Name", text: $renameText)
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.done)
+                    .onSubmit { finishRename(named) }
+                Button("Done") { finishRename(named) }
+                    .buttonStyle(.borderless)
+                    .tint(.primary)
+            } else {
+                Button {
+                    state.previewLook = named.look(darkAppearance: state.darkAppearance)
+                    state.commitLook()
+                } label: {
+                    HStack {
+                        Image(systemName: applied ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(applied ? Color.primary : Color.secondary)
+                        Text(named.name)
+                            .foregroundStyle(Color.primary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("adjust-look-\(named.name)")
+                Button {
+                    renameText = named.name
+                    renaming = named.id
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless)
+                .tint(.primary)
+                .accessibilityLabel("Rename \(named.name)")
+                Button {
+                    state.defaults.namedLooks.removeAll { $0.id == named.id }
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .tint(.primary)
+                .accessibilityLabel("Delete \(named.name)")
+            }
+        }
+        .font(.subheadline)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    private func saveLook() {
+        let name = newLookName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        let options = state.look.options
+        if let index = state.defaults.namedLooks.firstIndex(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) {
+            // The same name again replaces that look.
+            state.defaults.namedLooks[index].options = options
+        } else {
+            state.defaults.namedLooks.append(NamedLook(name: name, options: options))
+        }
+        newLookName = ""
+    }
+
+    private func finishRename(_ named: NamedLook) {
+        let name = renameText.trimmingCharacters(in: .whitespaces)
+        if !name.isEmpty, let index = state.defaults.namedLooks.firstIndex(where: { $0.id == named.id }) {
+            state.defaults.namedLooks[index].name = name
+        }
+        renaming = nil
+    }
+
+    // MARK: Controls
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Changes the look and saves it at once (for switches and choices).
+    private func setLook(_ edit: (inout PageLook) -> Void) {
+        var look = state.look
+        edit(&look)
+        state.previewLook = look
+        state.commitLook()
+    }
+
+    private func toggle(_ title: String, value: WritableKeyPath<PageLook, Bool>, identifier: String) -> some View {
+        Toggle(title, isOn: Binding(
+            get: { state.look[keyPath: value] },
+            set: { newValue in setLook { $0[keyPath: value] = newValue } }
+        ))
+        .font(.subheadline.weight(.medium))
+        .accessibilityIdentifier(identifier)
     }
 
     private func slider(_ title: String, value: WritableKeyPath<PageLook, Double>, in range: ClosedRange<Double>, shown: String) -> some View {
@@ -237,6 +441,37 @@ struct AdjustmentsPanel: View {
 
     private func signedPercent(_ value: Double) -> String {
         value == 0 ? "Off" : String(format: "%+d%%", Int((value * 100).rounded()))
+    }
+}
+
+extension PageLook.NightMode {
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .sepia: return "Sepia"
+        case .dim: return "Dim"
+        case .invert: return "Invert"
+        }
+    }
+}
+
+extension PageLook.PaperStock {
+    var title: String {
+        switch self {
+        case .plain: return "Plain"
+        case .newsprint: return "Newsprint"
+        case .cream: return "Cream"
+        case .glossy: return "Glossy"
+        }
+    }
+
+    var note: String {
+        switch self {
+        case .plain: return "Paper Grain lays a scanned-paper texture over pages; Paper Tone warms white paper."
+        case .newsprint: return "Newsprint: grey-yellow, coarse paper with uneven ink. Paper Grain sets how strong it is."
+        case .cream: return "Cream: warm, fine book paper. Paper Grain sets how strong it is."
+        case .glossy: return "Glossy: bright coated paper with rich colour and a soft sheen. Paper Grain sets how strong it is."
+        }
     }
 }
 
