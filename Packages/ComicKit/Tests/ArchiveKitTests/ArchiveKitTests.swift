@@ -242,8 +242,8 @@ import Testing
         #expect(info.writers == ["Kozue Amano"])
         #expect(info.publisher == "Mag Garden")
 
-        // An archive without ComicInfo.xml reads fine, with nothing in it.
-        #expect(MetadataReader.read(url: try fixture("sample.cbz"), format: .zip) == BookData())
+        // The sample archive's ComicInfo.xml has only a series, and every field is kept (#75).
+        #expect(MetadataReader.read(url: try fixture("sample.cbz"), format: .zip)?.series == "Sample")
 
         let bad = folder.appendingPathComponent("bad.cbz")
         try Data("not an archive".utf8).write(to: bad)
