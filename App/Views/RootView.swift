@@ -28,6 +28,8 @@ struct RootView: View {
                         Group {
                             switch model.selection ?? .all {
                             case .series: SeriesGridView()
+                            case .authors: SeriesGridView(kind: .authors)
+                            case .publishers: SeriesGridView(kind: .publishers)
                             case .folders: FolderBrowserView()
                             case let item: LibraryGridView(item: item)
                             }
@@ -70,9 +72,16 @@ struct RootView: View {
             await model.restoreReader(bookId: id)
             if model.openBook == nil { ReaderRestore.clear() }
         }
-        .fullScreenCover(item: $model.openBook) { open in
+        // One presentation for the whole time the reader is open: Read Now on a last page
+        // swaps the next book in without going back to the library (#83).
+        .fullScreenCover(item: Binding(
+            get: { model.openBook.map(ReaderPresentation.init) },
+            set: { if $0 == nil { model.openBook = nil } }
+        )) { presented in
+            let open = presented.open
             ReaderScreen(book: open.book, source: open.source, options: open.options, defaults: model.readerDefaults, handOff: open.handOff, intro: open.intro, bookmarks: open.bookmarks)
                 .toggleStyle(MonoToggleStyle())
+                .id(open.id)
         }
         .sheet(item: $model.bookInfo) { ref in
             BookInfoView(bookId: ref.id)
@@ -80,6 +89,13 @@ struct RootView: View {
         }
         .sheet(item: $model.tagEditor) { request in
             TagEditorView(bookIds: request.ids)
+        }
+        .sheet(item: $model.smartEditor) { request in
+            SmartListEditor(listId: request.listId, initial: request.filter)
+                .toggleStyle(MonoToggleStyle())
+        }
+        .sheet(item: $model.listPicker) { request in
+            ReadingListPicker(bookIds: request.ids)
         }
         .sheet(item: $model.dataEditor) { request in
             BookDataEditorView(bookIds: request.ids, seriesName: request.seriesName)
@@ -171,4 +187,10 @@ struct ResumeButton: View {
             .animation(.easeInOut(duration: 0.25), value: model.searchHistoryShown)
         }
     }
+}
+
+/// The reader's full-screen presentation, the same one whichever book is open in it.
+private struct ReaderPresentation: Identifiable {
+    let open: AppModel.OpenBook
+    var id: String { "reader" }
 }
