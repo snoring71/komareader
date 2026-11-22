@@ -259,8 +259,21 @@ final class ScreenshotTests: XCTestCase {
             if grain.waitForExistence(timeout: 3) { grain.adjust(toNormalizedSliderPosition: 0.7) }
             sleep(2)
             save(app, "16-reader-adjustments")
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
-            sleep(1)
+            // Compare: the adjusted page, with Done to go back.
+            let compare = app.buttons["adjust-compare"]
+            if compare.waitForExistence(timeout: 3), compare.isEnabled {
+                compare.tap()
+                let done = app.buttons["compare-done"]
+                if done.waitForExistence(timeout: 5) {
+                    sleep(2)
+                    save(app, "16b-reader-compare")
+                    done.tap()
+                    sleep(1)
+                }
+            } else {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+                sleep(1)
+            }
         }
         let more = app.buttons["reader-bar-more"]
         if more.waitForExistence(timeout: 3) {

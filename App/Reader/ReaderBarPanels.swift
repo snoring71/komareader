@@ -198,6 +198,8 @@ struct BackgroundPanel: View {
 
 struct AdjustmentsPanel: View {
     let state: ReaderState
+    /// Closes the panel (for Compare).
+    var close: () -> Void = {}
     /// Which group of adjustments shows. Kept for the session, so the panel reopens where it was.
     @AppStorage("adjustmentsTab") private var tab: Tab = .adjust
     /// The name being typed for a new look.
@@ -224,68 +226,31 @@ struct AdjustmentsPanel: View {
         BarPanel(title: "Image Adjustments") {
             ChoiceBar<Tab>(Tab.allCases.map { ($0, $0.title) }, selection: $tab)
                 .accessibilityIdentifier("adjust-tabs")
-            switch tab {
-            case .adjust:
-                toggle("Auto-Fix Scans", value: \.autoFix, identifier: "adjust-autofix")
-                slider("Brightness", value: \.brightness, in: -1...1, shown: signedPercent(look.brightness))
-                    .accessibilityIdentifier("adjust-brightness")
-                slider("Contrast", value: \.contrast, in: -1...1, shown: signedPercent(look.contrast))
-                    .accessibilityIdentifier("adjust-contrast")
-                slider("Gamma", value: \.gamma, in: -1...1, shown: signedPercent(look.gamma))
-                    .accessibilityIdentifier("adjust-gamma")
-                slider("Saturation", value: \.saturation, in: -1...1, shown: signedPercent(look.saturation))
-                    .accessibilityIdentifier("adjust-saturation")
-                    .disabled(look.blackAndWhite)
-                toggle("Black and White", value: \.blackAndWhite, identifier: "adjust-mono")
-                note("Auto-Fix sets each page's white and black from the page itself, so yellowed paper turns white and faded ink black.")
-            case .scan:
-                slider("Sharpness", value: \.sharpness, in: 0...1, shown: percent(look.sharpness))
-                    .accessibilityIdentifier("adjust-sharpness")
-                slider("Descreen", value: \.descreen, in: 0...1, shown: percent(look.descreen))
-                    .accessibilityIdentifier("adjust-descreen")
-                toggle("Sharper Scaling", value: \.sharperScaling, identifier: "adjust-lanczos")
-                if PageUpscaler.isSupported {
-                    toggle("Upscale Small Scans", value: \.upscale, identifier: "adjust-upscale")
+            // Every tab is laid out, and only the chosen one shows, so the panel keeps the
+            // height of its tallest tab: a popover that resized on each tab jumped and flashed.
+            ZStack(alignment: .topLeading) {
+                ForEach(Tab.allCases, id: \.self) { each in
+                    VStack(alignment: .leading, spacing: 16) {
+                        tabContent(each, look: look)
+                    }
+                    .opacity(each == tab ? 1 : 0)
+                    .allowsHitTesting(each == tab)
+                    .accessibilityHidden(each != tab)
                 }
-                Toggle("Auto Trim Margins", isOn: setting(state, \.autoTrim) { $0.autoTrim = $1 })
-                    .font(.subheadline.weight(.medium))
-                    .accessibilityIdentifier("adjust-autotrim")
-                    .disabled(state.crop != nil)
-                toggle("Keep Color Pages", value: \.keepColorPages, identifier: "adjust-keep-color")
-                note(state.crop != nil
-                     ? "This book has its own crop, which Auto Trim leaves in place."
-                     : "Descreen softens printing dots and JPEG blocks. Sharper Scaling resizes pages with Lanczos. Keep Color Pages leaves colour pages alone under Black and White, Auto-Fix and Sepia.")
-            case .night:
-                PanelRow(title: "Night Mode") {
-                    ChoiceBar<PageLook.NightMode>(PageLook.NightMode.allCases.map { ($0, $0.title) }, selection: Binding(
-                        get: { state.look.nightMode },
-                        set: { mode in setLook { $0.nightMode = mode } }
-                    ))
-                    .accessibilityIdentifier("adjust-night")
-                }
-                toggle("Only in Dark Mode", value: \.nightOnlyInDark, identifier: "adjust-night-dark")
-                    .disabled(look.nightMode == .off)
-                note("Sepia warms the page, Dim greys white paper down, and Invert gives dark paper with light ink, keeping colours.")
-            case .paper:
-                PanelRow(title: "Paper") {
-                    ChoiceBar<PageLook.PaperStock>(PageLook.PaperStock.allCases.map { ($0, $0.title) }, selection: Binding(
-                        get: { state.look.paperStock },
-                        set: { stock in setLook { $0.paperStock = stock } }
-                    ))
-                    .accessibilityIdentifier("adjust-paper-stock")
-                }
-                slider("Paper Grain", value: \.paperGrain, in: 0...1, shown: percent(look.paperGrain))
-                    .accessibilityIdentifier("adjust-grain")
-                slider("Paper Tone", value: \.paperTint, in: 0...1, shown: percent(look.paperTint))
-                    .accessibilityIdentifier("adjust-tint")
-                note(look.paperStock.note)
-            case .looks:
-                looks
             }
+            .animation(nil, value: tab)
             HStack {
-                Text("Changes show as you drag. Select Text still reads the original page.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                // Shows the page with and without the adjustments (press and hold).
+                Button {
+                    close()
+                    state.comparing = true
+                } label: {
+                    Label("Compare", systemImage: "square.split.2x1")
+                }
+                .buttonStyle(.bordered)
+                .tint(.primary)
+                .disabled(look.isNone)
+                .accessibilityIdentifier("adjust-compare")
                 Spacer(minLength: 12)
                 Button("Reset") {
                     var plain = PageLook()
@@ -298,9 +263,73 @@ struct AdjustmentsPanel: View {
                 .disabled(look.isNone)
                 .accessibilityIdentifier("adjust-reset")
             }
+            Text("Changes show as you drag. Select Text still reads the original page.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-adjust-panel")
+    }
+
+    @ViewBuilder private func tabContent(_ tab: Tab, look: PageLook) -> some View {
+        switch tab {
+        case .adjust:
+            toggle("Auto-Fix Scans", value: \.autoFix, identifier: "adjust-autofix")
+            slider("Brightness", value: \.brightness, in: -1...1, shown: signedPercent(look.brightness))
+                .accessibilityIdentifier("adjust-brightness")
+            slider("Contrast", value: \.contrast, in: -1...1, shown: signedPercent(look.contrast))
+                .accessibilityIdentifier("adjust-contrast")
+            slider("Gamma", value: \.gamma, in: -1...1, shown: signedPercent(look.gamma))
+                .accessibilityIdentifier("adjust-gamma")
+            slider("Saturation", value: \.saturation, in: -1...1, shown: signedPercent(look.saturation))
+                .accessibilityIdentifier("adjust-saturation")
+                .disabled(look.blackAndWhite)
+            toggle("Black and White", value: \.blackAndWhite, identifier: "adjust-mono")
+            note("Auto-Fix sets each page's white and black from the page itself, so yellowed paper turns white and faded ink black.")
+        case .scan:
+            slider("Sharpness", value: \.sharpness, in: 0...1, shown: percent(look.sharpness))
+                .accessibilityIdentifier("adjust-sharpness")
+            slider("Descreen", value: \.descreen, in: 0...1, shown: percent(look.descreen))
+                .accessibilityIdentifier("adjust-descreen")
+            toggle("Sharper Scaling", value: \.sharperScaling, identifier: "adjust-lanczos")
+            if PageUpscaler.isSupported {
+                toggle("Upscale Small Scans", value: \.upscale, identifier: "adjust-upscale")
+            }
+            Toggle("Auto Trim Margins", isOn: setting(state, \.autoTrim) { $0.autoTrim = $1 })
+                .font(.subheadline.weight(.medium))
+                .accessibilityIdentifier("adjust-autotrim")
+                .disabled(state.crop != nil)
+            toggle("Keep Color Pages", value: \.keepColorPages, identifier: "adjust-keep-color")
+            note(state.crop != nil
+                 ? "This book has its own crop, which Auto Trim leaves in place."
+                 : "Descreen softens printing dots and JPEG blocks. Sharper Scaling resizes pages with Lanczos. Keep Color Pages leaves colour pages alone under Black and White, Auto-Fix and Sepia.")
+        case .night:
+            PanelRow(title: "Night Mode") {
+                ChoiceBar<PageLook.NightMode>(PageLook.NightMode.allCases.map { ($0, $0.title) }, selection: Binding(
+                    get: { state.look.nightMode },
+                    set: { mode in setLook { $0.nightMode = mode } }
+                ))
+                .accessibilityIdentifier("adjust-night")
+            }
+            toggle("Only in Dark Mode", value: \.nightOnlyInDark, identifier: "adjust-night-dark")
+                .disabled(look.nightMode == .off)
+            note("Sepia warms the page, Dim greys white paper down, and Invert gives dark paper with light ink, keeping colours.")
+        case .paper:
+            PanelRow(title: "Paper") {
+                ChoiceBar<PageLook.PaperStock>(PageLook.PaperStock.allCases.map { ($0, $0.title) }, selection: Binding(
+                    get: { state.look.paperStock },
+                    set: { stock in setLook { $0.paperStock = stock } }
+                ))
+                .accessibilityIdentifier("adjust-paper-stock")
+            }
+            slider("Paper Grain", value: \.paperGrain, in: 0...1, shown: percent(look.paperGrain))
+                .accessibilityIdentifier("adjust-grain")
+            slider("Paper Tone", value: \.paperTint, in: 0...1, shown: percent(look.paperTint))
+                .accessibilityIdentifier("adjust-tint")
+            note(look.paperStock.note)
+        case .looks:
+            looks
+        }
     }
 
     // MARK: Named looks (#123)

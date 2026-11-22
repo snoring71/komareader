@@ -172,6 +172,9 @@ final class ReaderState {
         previewLook = nil
     }
 
+    /// The Compare view is showing: the pages with and without their adjustments.
+    var comparing = false
+
     /// Set by a swipe up on the page: the reader closes.
     var closeRequested = false
     /// Set when the pager has turned back from the first page to the cover: the reader's
