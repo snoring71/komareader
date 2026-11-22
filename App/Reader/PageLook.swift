@@ -35,6 +35,8 @@ struct PageLook: Equatable, Sendable {
     /// Colour pages keep their colour under a black-and-white fix (#122).
     var keepColorPages = true
     var paperStock: PaperStock = .plain
+    /// Small scans at twice their resolution (#121).
+    var upscale = false
     /// Whether the system appearance is dark now, for `nightOnlyInDark`. Not saved.
     var darkAppearance = false
 
@@ -48,7 +50,7 @@ struct PageLook: Equatable, Sendable {
         PageAdjustments(contrast: contrast, sharpness: sharpness, tint: paperTint, grain: paperGrain,
                         brightness: brightness, gamma: gamma, saturation: saturation, mono: blackAndWhite,
                         autoFix: autoFix, night: activeNightMode, descreen: descreen,
-                        keepColor: keepColorPages, stock: paperStock)
+                        keepColor: keepColorPages, stock: paperStock, upscale: upscale)
     }
 
     var isNone: Bool { adjustments.isNone && !sharperScaling }
@@ -71,6 +73,7 @@ struct PageLook: Equatable, Sendable {
         options.sharperScaling = sharperScaling
         options.keepColorPages = keepColorPages
         options.paperStock = paperStock
+        options.upscale = upscale
         return options
     }
 
@@ -91,6 +94,7 @@ struct PageLook: Equatable, Sendable {
         sharperScaling = options.sharperScaling ?? base.sharperScaling
         keepColorPages = options.keepColorPages ?? base.keepColorPages
         paperStock = options.paperStock ?? base.paperStock
+        upscale = options.upscale ?? base.upscale
         darkAppearance = base.darkAppearance
     }
 
@@ -113,6 +117,7 @@ struct PageLook: Equatable, Sendable {
         if sharperScaling != saved.sharperScaling { options.sharperScaling = sharperScaling }
         if keepColorPages != saved.keepColorPages { options.keepColorPages = keepColorPages }
         if paperStock != saved.paperStock { options.paperStock = paperStock }
+        if upscale != saved.upscale { options.upscale = upscale }
     }
 
     /// Clears every image setting from `options`, so the book follows the defaults for them.
@@ -132,6 +137,7 @@ struct PageLook: Equatable, Sendable {
         options.sharperScaling = nil
         options.keepColorPages = nil
         options.paperStock = nil
+        options.upscale = nil
     }
 }
 
@@ -150,11 +156,12 @@ struct PageAdjustments: Hashable, Sendable {
     var descreen: Double = 0
     var keepColor = true
     var stock: PageLook.PaperStock = .plain
+    var upscale = false
 
     var isNone: Bool {
         abs(contrast) < 0.005 && sharpness < 0.005 && tint < 0.005 && grain < 0.005
             && abs(brightness) < 0.005 && abs(gamma) < 0.005 && abs(saturation) < 0.005
-            && !mono && !autoFix && night == .off && descreen < 0.005
+            && !mono && !autoFix && night == .off && descreen < 0.005 && !upscale
     }
 
     /// A fix that drains colour, which colour pages are spared when `keepColor` is on.
@@ -163,7 +170,7 @@ struct PageAdjustments: Hashable, Sendable {
     /// Identifies the result in the page cache (to two decimals, as the sliders step).
     var key: String {
         String(format: "%.2f|%.2f|%.2f|%.2f|%.2f|%.2f|%.2f|%.2f", contrast, sharpness, tint, grain, brightness, gamma, saturation, descreen)
-            + "|\(mono ? 1 : 0)\(autoFix ? 1 : 0)\(keepColor ? 1 : 0)|\(night.rawValue)|\(stock.rawValue)"
+            + "|\(mono ? 1 : 0)\(autoFix ? 1 : 0)\(keepColor ? 1 : 0)\(upscale ? 1 : 0)|\(night.rawValue)|\(stock.rawValue)"
     }
 }
 
@@ -241,8 +248,13 @@ enum PageFilter {
     static func apply(_ adjustments: PageAdjustments, to image: CGImage, seed: Int = 0) -> CGImage? {
         guard !adjustments.isNone else { return nil }
         let input = CIImage(cgImage: image)
-        let extent = input.extent
+        var extent = input.extent
         var output = input
+        // Small scans first get twice the pixels, so every later step works at the new size.
+        if adjustments.upscale, let larger = PageUpscaler.upscale(input, context: context) {
+            output = larger
+            extent = larger.extent
+        }
         let unit = max(extent.width, extent.height) / 2400
 
         // A quick look at the page, when a fix depends on it.

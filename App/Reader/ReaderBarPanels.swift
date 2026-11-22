@@ -230,6 +230,9 @@ struct AdjustmentsPanel: View {
                 slider("Descreen", value: \.descreen, in: 0...1, shown: percent(look.descreen))
                     .accessibilityIdentifier("adjust-descreen")
                 toggle("Sharper Scaling", value: \.sharperScaling, identifier: "adjust-lanczos")
+                if PageUpscaler.isSupported {
+                    toggle("Upscale Small Scans", value: \.upscale, identifier: "adjust-upscale")
+                }
                 Toggle("Auto Trim Margins", isOn: setting(state, \.autoTrim) { $0.autoTrim = $1 })
                     .font(.subheadline.weight(.medium))
                     .accessibilityIdentifier("adjust-autotrim")

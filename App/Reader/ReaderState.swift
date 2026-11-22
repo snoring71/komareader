@@ -214,6 +214,7 @@ final class ReaderState {
         resolved.sharperScaling = look.sharperScaling
         resolved.keepColorPages = look.keepColorPages
         resolved.paperStock = look.paperStock
+        resolved.upscale = look.upscale
         resolved.autoTrim = autoTrim
         return resolved
     }

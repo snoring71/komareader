@@ -121,7 +121,8 @@ copies tag by tag, keeping whichever entry has the later `updatedAt`.
   paper colour), each 0 for none to 1; `brightness`, `gamma` and `saturation` (-1 to 1, 0
   unchanged); `blackAndWhite`, `autoFix` (white point, black point and tint set from each page),
   `sharperScaling` (Lanczos resizing), `keepColorPages` (colour pages skip black-and-white fixes)
-  and `autoTrim` (trim each page's plain border), each `true` or `false`; `descreen` (0 for none
+  `upscale` (double the resolution of small scans) and `autoTrim` (trim each page's plain
+  border), each `true` or `false`; `descreen` (0 for none
   to 1); `nightMode` (`off`, `sepia`, `dim` or `invert`) and `nightOnlyInDark` (`true` to use it
   only while the system appearance is dark); `paperStock` (`plain`, `newsprint`, `cream` or
   `glossy`, the paper `paperGrain` draws); and `crop`. Readers should treat an unknown

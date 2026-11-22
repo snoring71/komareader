@@ -35,6 +35,7 @@ final class ReaderDefaults {
     var keepColorPages: Bool { didSet { save() } }
     var paperStock: ReaderOptions.PaperStock { didSet { save() } }
     var autoTrim: Bool { didSet { save() } }
+    var upscale: Bool { didSet { save() } }
 
     /// How pages are drawn for a book that sets nothing itself.
     var look: PageLook {
@@ -55,6 +56,7 @@ final class ReaderDefaults {
             look.sharperScaling = sharperScaling
             look.keepColorPages = keepColorPages
             look.paperStock = paperStock
+            look.upscale = upscale
             return look
         }
         set { adopt(newValue.options) }
@@ -101,6 +103,7 @@ final class ReaderDefaults {
         var keepColorPages: Bool?
         var paperStock: ReaderOptions.PaperStock?
         var autoTrim: Bool?
+        var upscale: Bool?
     }
 
     init() {
@@ -129,6 +132,7 @@ final class ReaderDefaults {
             keepColorPages = stored.keepColorPages ?? true
             paperStock = stored.paperStock ?? .plain
             autoTrim = stored.autoTrim ?? false
+            upscale = stored.upscale ?? false
             return
         }
         // Start from what the reader last used before defaults existed (version 0.1 kept one
@@ -163,6 +167,7 @@ final class ReaderDefaults {
         keepColorPages = true
         paperStock = .plain
         autoTrim = false
+        upscale = false
     }
 
     private func save() {
@@ -172,7 +177,7 @@ final class ReaderDefaults {
                             brightness: brightness, gamma: gamma, saturation: saturation, blackAndWhite: blackAndWhite,
                             autoFix: autoFix, nightMode: nightMode, nightOnlyInDark: nightOnlyInDark, descreen: descreen,
                             sharperScaling: sharperScaling, keepColorPages: keepColorPages, paperStock: paperStock,
-                            autoTrim: autoTrim)
+                            autoTrim: autoTrim, upscale: upscale)
         if let data = try? JSONEncoder().encode(stored) { UserDefaults.standard.set(data, forKey: Self.key) }
     }
 
@@ -202,6 +207,7 @@ final class ReaderDefaults {
         if let value = options.keepColorPages { keepColorPages = value }
         if let value = options.paperStock { paperStock = value }
         if let value = options.autoTrim { autoTrim = value }
+        if let value = options.upscale { upscale = value }
     }
 }
 
