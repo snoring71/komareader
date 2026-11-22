@@ -165,6 +165,10 @@ struct ResumeButton: View {
             .buttonBorderShape(.capsule)
             .padding(24)
             .accessibilityIdentifier("resume-button")
+            // Out of the way of the search history box, which it would cover (#109).
+            .opacity(model.searchHistoryShown ? 0 : 1)
+            .allowsHitTesting(!model.searchHistoryShown)
+            .animation(.easeInOut(duration: 0.25), value: model.searchHistoryShown)
         }
     }
 }
