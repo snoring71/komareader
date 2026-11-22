@@ -97,7 +97,7 @@ struct FolderBrowserView: View {
             }
         }
         .navigationTitle("Folders")
-        .searchable(text: $search, prompt: "Search folders")
+        .searchableWithHistory(text: $search, prompt: "Search folders", list: "folders")
         .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, sortOptions: LibraryGridView.SortOrder.forGroups, sortsByName: true, showTitles: $showTitles) }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
