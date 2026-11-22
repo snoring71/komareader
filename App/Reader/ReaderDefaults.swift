@@ -37,6 +37,7 @@ final class ReaderDefaults {
     var autoTrim: Bool { didSet { save() } }
     var pageTurn: ReaderOptions.PageTurn { didSet { save() } }
     var pageEdges: Bool { didSet { save() } }
+    var upscale: Bool { didSet { save() } }
 
     /// How pages are drawn for a book that sets nothing itself.
     var look: PageLook {
@@ -57,6 +58,7 @@ final class ReaderDefaults {
             look.sharperScaling = sharperScaling
             look.keepColorPages = keepColorPages
             look.paperStock = paperStock
+            look.upscale = upscale
             return look
         }
         set { adopt(newValue.options) }
@@ -105,6 +107,7 @@ final class ReaderDefaults {
         var autoTrim: Bool?
         var pageTurn: ReaderOptions.PageTurn?
         var pageEdges: Bool?
+        var upscale: Bool?
     }
 
     init() {
@@ -135,6 +138,7 @@ final class ReaderDefaults {
             autoTrim = stored.autoTrim ?? false
             pageTurn = stored.pageTurn ?? .slide
             pageEdges = stored.pageEdges ?? false
+            upscale = stored.upscale ?? false
             return
         }
         // Start from what the reader last used before defaults existed (version 0.1 kept one
@@ -171,6 +175,7 @@ final class ReaderDefaults {
         autoTrim = false
         pageTurn = .slide
         pageEdges = false
+        upscale = false
     }
 
     private func save() {
@@ -180,7 +185,7 @@ final class ReaderDefaults {
                             brightness: brightness, gamma: gamma, saturation: saturation, blackAndWhite: blackAndWhite,
                             autoFix: autoFix, nightMode: nightMode, nightOnlyInDark: nightOnlyInDark, descreen: descreen,
                             sharperScaling: sharperScaling, keepColorPages: keepColorPages, paperStock: paperStock,
-                            autoTrim: autoTrim, pageTurn: pageTurn, pageEdges: pageEdges)
+                            autoTrim: autoTrim, pageTurn: pageTurn, pageEdges: pageEdges, upscale: upscale)
         if let data = try? JSONEncoder().encode(stored) { UserDefaults.standard.set(data, forKey: Self.key) }
     }
 
@@ -212,6 +217,7 @@ final class ReaderDefaults {
         if let value = options.autoTrim { autoTrim = value }
         if let value = options.pageTurn { pageTurn = value }
         if let value = options.pageEdges { pageEdges = value }
+        if let value = options.upscale { upscale = value }
     }
 }
 

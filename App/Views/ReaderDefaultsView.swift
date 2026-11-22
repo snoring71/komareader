@@ -89,12 +89,15 @@ struct ReaderDefaultsView: View {
                 slider("Sharpness", value: $defaults.sharpness, in: 0...1)
                 slider("Descreen", value: $defaults.descreen, in: 0...1)
                 Toggle("Sharper Scaling", isOn: $defaults.sharperScaling)
+                if PageUpscaler.isSupported {
+                    Toggle("Upscale Small Scans", isOn: $defaults.upscale)
+                }
                 Toggle("Auto Trim Margins", isOn: $defaults.autoTrim)
                 Toggle("Keep Color Pages", isOn: $defaults.keepColorPages)
             } header: {
                 Text("Scans")
             } footer: {
-                Text("Descreen softens printing dots and JPEG blocks. Sharper Scaling resizes pages to the screen with Lanczos. Auto Trim cuts each page's plain border as it loads, unless the book has its own crop. Keep Color Pages leaves colour pages alone under Black and White, Auto-Fix and Sepia.")
+                Text("Descreen softens printing dots and JPEG blocks. Sharper Scaling resizes pages to the screen with Lanczos. Upscale Small Scans doubles the resolution of pages under 1,800 pixels (a trial). Auto Trim cuts each page's plain border as it loads, unless the book has its own crop. Keep Color Pages leaves colour pages alone under Black and White, Auto-Fix and Sepia.")
             }
 
             Section {

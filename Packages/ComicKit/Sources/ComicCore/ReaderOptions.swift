@@ -158,6 +158,8 @@ public extension BookRecord {
         /// Leaves colour pages in colour when a black-and-white fix (black and white, auto-fix's
         /// tint removal, sepia) is on.
         public var keepColorPages: Bool?
+        /// Doubles the resolution of small scans on the GPU (#121).
+        public var upscale: Bool?
         /// Which paper `paperGrain` draws.
         public var paperStock: PaperStock?
         /// Trims each page's blank border as it loads (a hand-set `crop` wins).
@@ -213,7 +215,7 @@ public extension BookRecord {
         var hasLookExtras: Bool {
             brightness != nil || gamma != nil || saturation != nil || blackAndWhite != nil || autoFix != nil
                 || nightMode != nil || nightOnlyInDark != nil || descreen != nil || sharperScaling != nil
-                || keepColorPages != nil || paperStock != nil
+                || keepColorPages != nil || paperStock != nil || upscale != nil
         }
     }
 
