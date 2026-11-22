@@ -11,6 +11,8 @@ struct CoverInfo: Equatable {
     var size = true
     var format = true
     var location = false
+    /// Small stars for rated books (#84).
+    var rating = false
 }
 
 enum CoverInfoName: String, CaseIterable, Identifiable {
@@ -53,6 +55,7 @@ extension SettingsKeys {
     static let coverInfoSize = "library.coverInfo.size"
     static let coverInfoFormat = "library.coverInfo.format"
     static let coverInfoLocation = "library.coverInfo.location"
+    static let coverInfoRating = "library.coverInfo.rating"
 }
 
 /// The Cover Info settings, as stored, for the views that change them.
@@ -63,9 +66,10 @@ struct CoverInfoSettings: DynamicProperty {
     @AppStorage(SettingsKeys.coverInfoSize) var size = true
     @AppStorage(SettingsKeys.coverInfoFormat) var format = true
     @AppStorage(SettingsKeys.coverInfoLocation) var location = false
+    @AppStorage(SettingsKeys.coverInfoRating) var rating = false
 
     var value: CoverInfo {
-        CoverInfo(isOn: isOn, name: name, pages: pages, size: size, format: format, location: location)
+        CoverInfo(isOn: isOn, name: name, pages: pages, size: size, format: format, location: location, rating: rating)
     }
 }
 
@@ -81,6 +85,7 @@ struct CoverInfoFieldControls: View {
         Toggle("File Size", isOn: settings.$size)
         Toggle("Format", isOn: settings.$format)
         Toggle("Location", isOn: settings.$location)
+        Toggle("Rating", isOn: settings.$rating)
     }
 }
 
@@ -166,6 +171,7 @@ struct CoverInfoOverlay: View {
         if info.pages, let pages = book.pageCount { parts.append(pages == 1 ? "1 page" : "\(pages) pages") }
         if info.size, let size = book.size { parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) }
         if info.format { parts.append(book.format.displayName) }
+        if info.rating, let rating = book.rating { parts.append(String(repeating: "★", count: rating)) }
         return parts
     }
 }

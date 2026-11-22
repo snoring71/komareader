@@ -1,3 +1,4 @@
+import ComicCore
 import LibraryKit
 import SwiftUI
 
@@ -6,6 +7,9 @@ struct SidebarView: View {
     @State private var renaming: String?
     @State private var newName = ""
     @State private var deleting: String?
+    /// A reading list being renamed or deleted (#83).
+    @State private var renamingList: String?
+    @State private var deletingList: String?
     @Environment(\.sidebarToggle) private var sidebarToggle
 
     var body: some View {
@@ -20,7 +24,11 @@ struct SidebarView: View {
                     SidebarSection(nil) {
                         row(.all, count: counts[.all])
                         row(.continueReading, count: counts[.continueReading])
+                        row(.upNext, count: counts[.upNext])
                         row(.series, count: model.catalog.series.count)
+                        // Less the "Unknown" group, which is not a name (#78).
+                        row(.authors, count: model.catalog.authors.filter { !$0.name.isEmpty }.count)
+                        row(.publishers, count: model.catalog.publishers.filter { !$0.name.isEmpty }.count)
                         row(.folders, count: max(0, model.catalog.folders.count - 1)) // less the library folder itself
                         row(.downloaded, count: counts[.downloaded])
                     }
@@ -43,20 +51,9 @@ struct SidebarView: View {
                         row(.bookmarked, count: counts[.bookmarked])
                         if let missing = counts[.missing] { row(.missing, count: missing) }
                     }
-                    if !model.summary.tags.isEmpty {
-                        SidebarSection("Tags") {
-                            ForEach(model.summary.tags) { tag in
-                                row(.tag(tag.name), count: tag.count)
-                                    .contextMenu {
-                                        Button("Rename…", systemImage: "pencil") {
-                                            newName = tag.name
-                                            renaming = tag.name
-                                        }
-                                        Button("Delete Tag", systemImage: "trash", role: .destructive) { deleting = tag.name }
-                                    }
-                            }
-                        }
-                    }
+                    readingListsSection
+                    smartListsSection
+                    tagsSection
                 }
                 .padding(.bottom, 24)
             }
@@ -69,10 +66,113 @@ struct SidebarView: View {
         } message: {
             Text("The tag is renamed on every book that has it.")
         }
+        .alert("Rename Reading List", isPresented: Binding(get: { renamingList != nil }, set: { if !$0 { renamingList = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") { if let id = renamingList { model.renameList(id, to: newName) } }
+        }
+        .confirmationDialog(deletingList.map { "Delete the list “\(SidebarItem.readingList($0).title)”?" } ?? "",
+                            isPresented: Binding(get: { deletingList != nil }, set: { if !$0 { deletingList = nil } }), titleVisibility: .visible) {
+            Button("Delete List", role: .destructive) { if let id = deletingList { model.deleteList(id) } }
+        } message: {
+            Text("The list is deleted on all your devices. The books in it are not.")
+        }
         .confirmationDialog(deleting.map { "Delete the tag “\($0)”?" } ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
             Button("Delete Tag", role: .destructive) { if let tag = deleting { model.deleteTag(tag) } }
         } message: {
             Text("The tag is removed from every book. The books are not deleted.")
+        }
+    }
+
+    /// Reading lists (#83), in the user's order.
+    @ViewBuilder private var readingListsSection: some View {
+        let lists = model.readingLists
+        if !lists.isEmpty {
+            SidebarSection("Reading Lists") {
+                ForEach(Array(lists.enumerated()), id: \.element.id) { offset, list in
+                    let item = SidebarItem.readingList(list.id)
+                    row(item, count: list.bookIds?.count ?? 0)
+                        .contextMenu {
+                            Button("Rename…", systemImage: "pencil") {
+                                newName = list.name
+                                renamingList = list.id
+                            }
+                            if offset > 0 {
+                                Button("Move Up", systemImage: "arrow.up") { model.moveList(list.id, by: -1) }
+                            }
+                            if offset < lists.count - 1 {
+                                Button("Move Down", systemImage: "arrow.down") { model.moveList(list.id, by: 1) }
+                            }
+                            let pinned = model.isPinned(item)
+                            Button(pinned ? "Unpin from Sidebar" : "Pin to Sidebar", systemImage: pinned ? "pin.slash" : "pin") {
+                                model.setPinned(item, !pinned)
+                            }
+                            Button("Delete List", systemImage: "trash", role: .destructive) { deletingList = list.id }
+                        }
+                }
+            }
+        }
+    }
+
+    /// Smart lists (#82), always shown so New Smart List… is there to tap.
+    @ViewBuilder private var smartListsSection: some View {
+        let smart = model.smartLists
+        SidebarSection("Smart Lists") {
+            ForEach(Array(smart.enumerated()), id: \.element.id) { offset, list in
+                let item = SidebarItem.smartList(list.id)
+                row(item, count: model.smartCounts[list.id])
+                    .contextMenu {
+                        Button("Edit…", systemImage: "pencil") {
+                            model.smartEditor = .init(listId: list.id, filter: list.filter ?? LibraryFilter())
+                        }
+                        if offset > 0 {
+                            Button("Move Up", systemImage: "arrow.up") { model.moveList(list.id, by: -1) }
+                        }
+                        if offset < smart.count - 1 {
+                            Button("Move Down", systemImage: "arrow.down") { model.moveList(list.id, by: 1) }
+                        }
+                        let pinned = model.isPinned(item)
+                        Button(pinned ? "Unpin from Sidebar" : "Pin to Sidebar", systemImage: pinned ? "pin.slash" : "pin") {
+                            model.setPinned(item, !pinned)
+                        }
+                        Button("Delete List", systemImage: "trash", role: .destructive) { deletingList = list.id }
+                    }
+            }
+            Button {
+                model.smartEditor = .init(listId: nil, filter: LibraryFilter(rules: [.init(.status, .isAnyOf, ["unread"])]))
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle").frame(width: 22)
+                    Text("New Smart List…")
+                    Spacer(minLength: 0)
+                }
+                .font(.subheadline)
+                // The primary colour, like the other rows: secondary did not draw on the
+                // sidebar's glass, leaving an empty gap.
+                .foregroundStyle(Color.primary)
+                .padding(.horizontal, 18)
+                .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("sidebar-new-smart-list")
+        }
+    }
+
+    @ViewBuilder private var tagsSection: some View {
+        if !model.summary.tags.isEmpty {
+            SidebarSection("Tags") {
+                ForEach(model.summary.tags) { tag in
+                    row(.tag(tag.name), count: tag.count)
+                        .contextMenu {
+                            Button("Rename…", systemImage: "pencil") {
+                                newName = tag.name
+                                renaming = tag.name
+                            }
+                            Button("Delete Tag", systemImage: "trash", role: .destructive) { deleting = tag.name }
+                        }
+                }
+            }
         }
     }
 
@@ -82,6 +182,12 @@ struct SidebarView: View {
         case .folder(let path): return model.catalog.folders[path]?.count
         case .seriesNamed(let name):
             return model.catalog.series.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.books.count
+        case .author(let name):
+            return model.catalog.authors.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.books.count
+        case .publisher(let name):
+            return model.catalog.publishers.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.books.count
+        case .readingList(let id): return model.lists.list(id)?.bookIds?.count
+        case .smartList(let id): return model.smartCounts[id]
         default: return nil
         }
     }

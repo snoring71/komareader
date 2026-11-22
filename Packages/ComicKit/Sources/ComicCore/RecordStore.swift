@@ -268,6 +268,38 @@ public final class RecordStore: @unchecked Sendable {
         return list
     }
 
+    // MARK: Lists
+
+    public var listsURL: URL { root.appendingPathComponent("lists.json") }
+
+    /// The library's reading and smart lists (#82, #83), with any iCloud conflict versions folded in.
+    public func readLists() -> LibraryLists {
+        let decoder = RecordCoding.decoder()
+        var lists = Self.coordinatedRead(listsURL).flatMap { try? decoder.decode(LibraryLists.self, from: $0) } ?? LibraryLists()
+        if let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: listsURL), !conflicts.isEmpty {
+            for version in conflicts {
+                if let data = try? Data(contentsOf: version.url), let other = try? decoder.decode(LibraryLists.self, from: data) {
+                    lists = lists.merged(with: other)
+                }
+            }
+            if (try? Self.coordinatedWrite(try RecordCoding.encoder().encode(lists), to: listsURL)) != nil {
+                for version in conflicts { version.isResolved = true }
+                try? NSFileVersion.removeOtherVersionsOfItem(at: listsURL)
+            }
+        }
+        return lists
+    }
+
+    /// Reads the lists, applies `change` and writes them back. Changes touch only their own
+    /// lists, each with a new date, so edits from other devices are kept.
+    @discardableResult
+    public func updateLists(_ change: (inout LibraryLists) -> Void) throws -> LibraryLists {
+        var lists = readLists()
+        change(&lists)
+        try Self.coordinatedWrite(try RecordCoding.encoder().encode(lists), to: listsURL)
+        return lists
+    }
+
     // MARK: File coordination
 
     static func coordinatedRead(_ url: URL) -> Data? {

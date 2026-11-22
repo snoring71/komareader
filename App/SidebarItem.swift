@@ -4,10 +4,25 @@ import SwiftUI
 
 enum SidebarItem: Hashable {
     case all, continueReading, series, folders, downloaded, unread, reading, read, favorites, bookmarked, missing
+    /// Browse by author and by publisher (#78).
+    case authors, publishers
     /// The books directly in a folder (subfolders are shown above them).
     case folder(String)
     case seriesNamed(String)
     case tag(String)
+    /// One author's or publisher's books (#78). An empty name is the books with none.
+    case author(String)
+    case publisher(String)
+    /// A reading list, by its id (#83).
+    case readingList(String)
+    /// A smart list, by its id (#82).
+    case smartList(String)
+    /// The next volume of each series in progress (#85).
+    case upNext
+
+    /// Reading list names by id, kept up to date by the model, so a list's row and title can
+    /// show its current name while the item itself (and pins of it) keep only the id.
+    nonisolated(unsafe) static var listNames: [String: String] = [:]
 
     /// A string for saving the item between launches.
     var storageKey: String {
@@ -15,6 +30,10 @@ enum SidebarItem: Hashable {
         case .folder(let path): return "folder:" + path
         case .seriesNamed(let name): return "series:" + name
         case .tag(let name): return "tag:" + name
+        case .author(let name): return "author:" + name
+        case .publisher(let name): return "publisher:" + name
+        case .readingList(let id): return "list:" + id
+        case .smartList(let id): return "smart:" + id
         default: return "\(self)"
         }
     }
@@ -26,6 +45,14 @@ enum SidebarItem: Hashable {
             self = .seriesNamed(String(key.dropFirst("series:".count)))
         } else if key.hasPrefix("tag:") {
             self = .tag(String(key.dropFirst("tag:".count)))
+        } else if key.hasPrefix("author:") {
+            self = .author(String(key.dropFirst("author:".count)))
+        } else if key.hasPrefix("publisher:") {
+            self = .publisher(String(key.dropFirst("publisher:".count)))
+        } else if key.hasPrefix("list:") {
+            self = .readingList(String(key.dropFirst("list:".count)))
+        } else if key.hasPrefix("smart:") {
+            self = .smartList(String(key.dropFirst("smart:".count)))
         } else if let item = Self.plain.first(where: { "\($0)" == key }) {
             self = item
         } else {
@@ -36,12 +63,12 @@ enum SidebarItem: Hashable {
     /// Folders and series can be pinned to the sidebar (#72).
     var isPinnable: Bool {
         switch self {
-        case .folder, .seriesNamed: return true
+        case .folder, .seriesNamed, .author, .publisher, .readingList, .smartList: return true
         default: return false
         }
     }
 
-    private static let plain: [SidebarItem] = [.all, .continueReading, .series, .folders, .downloaded, .unread, .reading, .read, .favorites, .bookmarked, .missing]
+    private static let plain: [SidebarItem] = [.all, .continueReading, .series, .folders, .downloaded, .unread, .reading, .read, .favorites, .bookmarked, .missing, .authors, .publishers, .upNext]
 
     var title: String {
         switch self {
@@ -59,6 +86,13 @@ enum SidebarItem: Hashable {
         case .missing: return "Missing Files"
         case .folder(let path): return (path as NSString).lastPathComponent
         case .tag(let name): return name
+        case .authors: return "Authors"
+        case .publishers: return "Publishers"
+        case .author(let name): return name.isEmpty ? "Unknown Author" : name
+        case .publisher(let name): return name.isEmpty ? "Unknown Publisher" : name
+        case .readingList(let id): return Self.listNames[id] ?? "Reading List"
+        case .smartList(let id): return Self.listNames[id] ?? "Smart List"
+        case .upNext: return "Up Next"
         }
     }
 
@@ -78,6 +112,11 @@ enum SidebarItem: Hashable {
         case .missing: return "questionmark.folder"
         case .folder: return "folder"
         case .tag: return "tag"
+        case .authors, .author: return "person.2"
+        case .publishers, .publisher: return "building.columns"
+        case .readingList: return "list.number"
+        case .smartList: return "line.3.horizontal.decrease.circle"
+        case .upNext: return "forward.end"
         }
     }
 
@@ -96,6 +135,15 @@ enum SidebarItem: Hashable {
         case .missing: return book.isMissing
         case .folder(let path): return !book.isMissing && book.folder == path
         case .tag(let name): return !book.isMissing && book.tags.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+        case .authors, .publishers: return !book.isMissing
+        case .author(let name):
+            guard !book.isMissing else { return false }
+            return name.isEmpty ? book.authors.isEmpty : book.authors.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+        case .publisher(let name):
+            guard !book.isMissing else { return false }
+            return name.isEmpty ? book.publisher == nil : book.publisher?.caseInsensitiveCompare(name) == .orderedSame
+        // These lists' books come from the model (`listBooks`, `smartListBooks`, `upNext`).
+        case .readingList, .smartList, .upNext: return false
         }
     }
 }
@@ -158,6 +206,38 @@ struct SeriesGroup: Identifiable, Hashable {
             return SeriesGroup(name: first.series, books: sorted)
         }
         .naturallySorted(by: \.name)
+    }
+
+    /// Books grouped by author (a book with several is under each) or by publisher, for the
+    /// Authors and Publishers views (#78). Books with none are in a last group named "".
+    static func groups(from books: [Book], by names: (Book) -> [String]) -> [SeriesGroup] {
+        var grouped: [String: [Book]] = [:]
+        var spelling: [String: String] = [:]
+        for book in books where !book.isMissing {
+            let keys = names(book)
+            if keys.isEmpty {
+                grouped["", default: []].append(book)
+                continue
+            }
+            for name in keys {
+                let key = name.lowercased()
+                grouped[key, default: []].append(book)
+                if spelling[key] == nil { spelling[key] = name }
+            }
+        }
+        let unknown = grouped.removeValue(forKey: "")
+        var result = grouped.map { key, members in
+            SeriesGroup(name: spelling[key] ?? key, books: members.sorted(by: Self.bySeries))
+        }
+        .naturallySorted(by: \.name)
+        if let unknown { result.append(SeriesGroup(name: "", books: unknown.sorted(by: Self.bySeries))) }
+        return result
+    }
+
+    /// By series, then volume order within a series.
+    static func bySeries(_ a: Book, _ b: Book) -> Bool {
+        if a.series.caseInsensitiveCompare(b.series) != .orderedSame { return a.series.naturalLess(than: b.series) }
+        return readingOrder(a, b)
     }
 
     /// Volume order: by number when both have one, else by title.
