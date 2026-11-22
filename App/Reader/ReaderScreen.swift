@@ -129,6 +129,22 @@ struct ReaderScreen: View {
                     return page
                 }
             }
+            // After the last page: the next book where this one was opened from (#83).
+            if let next = model.nextBook(after: bookId) {
+                let style = coverStyle
+                let coverURL = model.thumbnails[next.book.id], revision = model.coverRevision[next.book.id] ?? 0
+                state.makeEndPage = { [weak readerState] in
+                    let page = UIHostingController(rootView: AnyView(
+                        NextBookPage(next: next, coverURL: coverURL, coverRevision: revision,
+                                     onBack: { readerState?.leaveEndPage() })
+                            .environment(\.coverStyle, style)
+                            .environment(appModel)
+                    ))
+                    page.safeAreaRegions = []
+                    page.view.backgroundColor = .clear
+                    return page
+                }
+            }
             state.onOptionsChange = { [weak appModel] options in
                 appModel?.saveReaderOptions(bookId: bookId, options: options)
             }

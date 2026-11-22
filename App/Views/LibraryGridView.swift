@@ -10,7 +10,10 @@ struct LibraryGridView: View {
     /// The search text the grid filters by; follows `search` after a short pause in typing.
     @State private var appliedSearch = ""
     @State private var showSettings = false
-    @AppStorage("sortOrder") private var sort: SortOrder = .title
+    /// The sort, kept for each list (All Books, a folder, a series, a tag…, #79).
+    @AppStorage private var sort: SortOrder
+    /// "asc" or "desc"; empty is the order's own direction.
+    @AppStorage private var sortDirection: String
     @AppStorage("coverSize") private var coverSize: Double = 150
     @AppStorage(TitleGrid.books.key) private var showTitles = true
     /// The size while a pinch is in progress; saved to `coverSize` when it ends.
@@ -21,6 +24,10 @@ struct LibraryGridView: View {
     @State private var selection: Set<String>?
     @State private var confirmDeleteAll = false
     @State private var selectionConfirm: SelectionConfirm?
+    @State private var reordering = false
+    /// The filter bar's filter (#80): kept while the app runs, cleared with another sidebar row.
+    @State private var filter = LibraryFilter()
+    @State private var showFilter = false
     @Environment(\.coverInfo) private var coverInfo
     /// The first book on screen and whether the grid is scrolled down, so turning Cover Info
     /// on or off (which changes the height of every cell) keeps the same books in view.
@@ -35,8 +42,22 @@ struct LibraryGridView: View {
         var scrolledDown = false
     }
 
+    init(item: SidebarItem) {
+        self.item = item
+        // Lists sorted before sorts were kept per list start from the one sort there was.
+        let shared = SortOrder(rawValue: UserDefaults.standard.string(forKey: "sortOrder") ?? "") ?? .title
+        var fallback = shared
+        if case .readingList = item { fallback = .listOrder }
+        _sort = AppStorage(wrappedValue: fallback, "sortOrder." + item.storageKey)
+        _sortDirection = AppStorage(wrappedValue: "", "sortDirection." + item.storageKey)
+    }
+
     enum SortOrder: String, CaseIterable, Identifiable {
-        case title = "Title", recentlyAdded = "Recently Added", recentlyRead = "Recently Read"
+        case title = "Title", author = "Author", releaseYear = "Release Year"
+        case recentlyAdded = "Recently Added", recentlyRead = "Recently Read", dateFinished = "Date Finished"
+        case fileSize = "File Size", pageCount = "Page Count", rating = "Rating"
+        /// A reading list's own order (#83).
+        case listOrder = "List Order"
         var id: String { rawValue }
 
         /// The menu's word for it. Folders and series have names, not titles (#99, #100); the
@@ -44,6 +65,36 @@ struct LibraryGridView: View {
         func label(byName: Bool) -> String {
             self == .title && byName ? "Name" : rawValue
         }
+
+        /// The direction the order goes in unless the user turns it round: A to Z, oldest year
+        /// first, newest date first, biggest first, best rated first.
+        var ascendingByDefault: Bool {
+            switch self {
+            case .title, .author, .releaseYear, .listOrder: return true
+            case .recentlyAdded, .recentlyRead, .dateFinished, .fileSize, .pageCount, .rating: return false
+            }
+        }
+
+        /// The letter index shows for orders by name.
+        var hasLetterIndex: Bool { self == .title || self == .author }
+
+        static let forBooks: [SortOrder] = [.title, .author, .releaseYear, .recentlyAdded, .recentlyRead, .dateFinished, .fileSize, .pageCount, .rating]
+        static let forLists: [SortOrder] = [.listOrder] + forBooks
+        /// Folders, series, authors and publishers.
+        static let forGroups: [SortOrder] = [.title, .recentlyAdded, .recentlyRead]
+    }
+
+    private var ascending: Bool {
+        switch sortDirection {
+        case "asc": return true
+        case "desc": return false
+        default: return sort.ascendingByDefault
+        }
+    }
+
+    private var sortOptions: [SortOrder] {
+        if case .readingList = item { return SortOrder.forLists }
+        return SortOrder.forBooks
     }
 
     static let sizeRange: ClosedRange<Double> = 90...300
@@ -51,18 +102,18 @@ struct LibraryGridView: View {
     private var size: Double { pinchSize ?? coverSize }
 
     private var visibleBooks: [Book] {
-        let search = appliedSearch
-        var books = model.books.filter(item.includes)
-        if !search.isEmpty {
+        // A typed search may hold field prefixes (#81); it and the filter bar are one filter.
+        let active = filter.combined(with: LibraryFilter.parse(appliedSearch))
+        var books = baseBooks
+        if !active.isEmpty {
             // Kana, kanji and romaji all find Japanese titles (#106).
-            let query = SearchQuery(search)
-            let model = model
             _ = model.searchKeysRevision
-            books = books.filter { book in
-                query.matches(model.searchKey(book.title)) || query.matches(model.searchKey(book.folder))
-                    || query.matches(model.searchKey(book.series)) || book.tags.contains { query.matches(model.searchKey($0)) }
-            }
+            let now = Date()
+            let text = model.textMatcher(active.text)
+            books = books.filter { active.matches($0, now: now, matchesText: text) }
         }
+        if item == .upNext { return books }
+        if case .smartList(let id) = item, model.lists.list(id)?.sort != nil { return books }
         if case .seriesNamed = item {
             return books.sorted(by: SeriesGroup.readingOrder)
         }
@@ -70,15 +121,68 @@ struct LibraryGridView: View {
             // The book read last comes first, whatever the sort menu says.
             return books.sorted { ($0.lastReadAt ?? .distantPast) > ($1.lastReadAt ?? .distantPast) }
         }
+        return Self.sorted(books, by: sort, ascending: ascending, model: model)
+    }
+
+    /// The books in this list before search and sorting. A reading list keeps its own order
+    /// and its missing books (#83).
+    private var baseBooks: [Book] {
+        switch item {
+        case .readingList(let id): return model.listBooks(id)
+        case .smartList(let id): return model.smartListBooks(id, fallback: (sort, ascending))
+        case .upNext: return model.upNext.compactMap { model.book(id: $0) }
+        default: return model.books.filter(item.includes)
+        }
+    }
+
+    /// Books in a sort order (#79). Books without the value sorted by go last either way, in
+    /// title order; ties are in title order too.
+    static func sorted(_ books: [Book], by sort: SortOrder, ascending: Bool, model: AppModel) -> [Book] {
+        // The natural-order ranks are worked out once per library change, so ties and title
+        // order are integer compares.
+        let rank = model.catalog.titleRank
+        func byTitle(_ a: Book, _ b: Book) -> Bool { (rank[a.id] ?? .max) < (rank[b.id] ?? .max) }
+        func by<T: Comparable>(_ value: (Book) -> T?) -> [Book] {
+            let keyed = books.map { (book: $0, key: value($0)) }
+            return keyed.sorted { a, b in
+                switch (a.key, b.key) {
+                case let (x?, y?): return x == y ? byTitle(a.book, b.book) : (ascending ? x < y : x > y)
+                case (_?, nil): return true
+                case (nil, _?): return false
+                case (nil, nil): return byTitle(a.book, b.book)
+                }
+            }.map(\.book)
+        }
         switch sort {
         case .title:
-            // The natural-order ranks are worked out once per library change, so this is an integer compare.
-            let rank = model.catalog.titleRank
-            books.sort { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
-        case .recentlyAdded: books.sort { $0.addedAt > $1.addedAt }
-        case .recentlyRead: books.sort { ($0.lastReadAt ?? .distantPast) > ($1.lastReadAt ?? .distantPast) }
+            let ordered = books.sorted(by: byTitle)
+            return ascending ? ordered : ordered.reversed()
+        case .listOrder:
+            return ascending ? books : books.reversed()
+        case .author:
+            // By the first author's name in natural order, then by series and volume.
+            let keys = Dictionary(books.compactMap { book in book.authors.first.map { (book.id, NaturalSortKey($0)) } }, uniquingKeysWith: { a, _ in a })
+            let keyed = books.map { (book: $0, key: keys[$0.id]) }
+            return keyed.sorted { a, b in
+                switch (a.key, b.key) {
+                case let (x?, y?):
+                    if x == y { return SeriesGroup.bySeries(a.book, b.book) }
+                    return ascending ? x < y : y < x
+                case (_?, nil): return true
+                case (nil, _?): return false
+                case (nil, nil): return byTitle(a.book, b.book)
+                }
+            }.map(\.book)
+        case .releaseYear:
+            // Year, then month and day where known.
+            return by { book in book.info.year.map { $0 * 10_000 + (book.info.month ?? 0) * 100 + (book.info.day ?? 0) } }
+        case .recentlyAdded: return by { $0.addedAt }
+        case .recentlyRead: return by { $0.lastReadAt }
+        case .dateFinished: return by { $0.finished ? $0.lastReadAt : nil }
+        case .fileSize: return by { $0.size }
+        case .pageCount: return by { $0.pageCount }
+        case .rating: return by { $0.rating }
         }
-        return books
     }
 
     /// A letter of the index and the first book filed under it, which the index scrolls to.
@@ -91,11 +195,13 @@ struct LibraryGridView: View {
     /// equal cells: a lazy grid split into sections has to guess the height of the sections it
     /// has not drawn yet, and the scroll bar jumped each time a guess was corrected.
     private func letterAnchors(_ books: [Book]) -> [LetterAnchor]? {
-        guard sort == .title, appliedSearch.isEmpty, books.count > 24, showsSort else { return nil }
+        guard sort.hasLetterIndex, appliedSearch.isEmpty, books.count > 24, showsSort else { return nil }
         var seen: Set<String> = []
         var anchors: [LetterAnchor] = []
         for book in books {
-            let key = model.catalog.indexKey[book.id] ?? IndexKey.of(book.title)
+            let key = sort == .author
+                ? (book.authors.first.map(IndexKey.of) ?? "#")
+                : (model.catalog.indexKey[book.id] ?? IndexKey.of(book.title))
             if seen.insert(key).inserted { anchors.append(LetterAnchor(key: key, bookId: book.id)) }
         }
         return anchors.count > 1 ? anchors : nil
@@ -119,10 +225,15 @@ struct LibraryGridView: View {
     var body: some View {
         let books = visibleBooks
         let letters = letterAnchors(books)
-        let continueReading = item == .all && search.isEmpty ? continueReading : []
+        let continueReading = item == .all && search.isEmpty && filter.isEmpty ? continueReading : []
+        // The next unread volume of each series in progress; ones part-way through are
+        // already in Continue Reading (#85).
+        let upNext = item == .all && search.isEmpty && filter.isEmpty
+            ? model.upNext.compactMap { model.book(id: $0) }.filter { $0.status == .unread } : []
         let subfolders = subfolders
         let listKey = item.storageKey
         let _ = (visible.books = books)
+        let _ = (visible.listName = { if case .readingList = item { return item.title } else { return nil } }())
         ScrollViewReader { proxy in
             ScrollView {
               // Explicit spacing, so the gaps below are exactly what they say.
@@ -162,6 +273,30 @@ struct LibraryGridView: View {
                     }
                     .padding(.top, 8)
 
+                }
+                if !upNext.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Up Next").font(.title3.bold())
+                            .padding(.horizontal)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 16) {
+                                ForEach(upNext.prefix(12)) { book in
+                                    BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }, place: "upnext") { toggle(book.id) }
+                                        .frame(width: size)
+                                        .environment(\.coverInfo, CoverInfo())
+                                        .id("upnext-\(book.id)")
+                                }
+                            }
+                            .padding(.bottom, 14)
+                        }
+                        .contentMargins(.leading, 16, for: .scrollContent)
+                        .contentMargins(.trailing, letters == nil ? 16 : EdgeFade.trailingRoom, for: .scrollContent)
+                        .scrollClipDisabled()
+                        .modifier(EdgeFade(isOn: letters != nil))
+                    }
+                    .padding(.top, continueReading.isEmpty ? 8 : 18)
+                }
+                if !continueReading.isEmpty || !upNext.isEmpty {
                     // Where the full list starts (#58). Plain views above the grid, not a
                     // section in it, so the grid stays one flat run of equal cells.
                     VStack(alignment: .leading, spacing: 0) {
@@ -190,6 +325,10 @@ struct LibraryGridView: View {
                     // the cells it had already made, and a tap in Select mode opened the book.
                     ForEach(books) { book in
                         BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }) { toggle(book.id) }
+                            // The grid's order, for what the book's last page offers next (#83).
+                            .environment(\.gridOrder, visible)
+                            // A reading list keeps a book whose file went missing, dimmed (#83).
+                            .opacity(isList && book.isMissing ? 0.4 : 1)
                             .transition(.opacity.combined(with: .scale(scale: 0.85)))
                     }
                 }
@@ -201,7 +340,7 @@ struct LibraryGridView: View {
                 .padding(.horizontal)
                 .padding(.bottom)
                 // Under the All Books heading, the same 10 pt gap as under Continue Reading's.
-                .padding(.top, continueReading.isEmpty ? 16 : 10)
+                .padding(.top, continueReading.isEmpty && upNext.isEmpty ? 16 : 10)
                 .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index
               }
               // Long-press menus for every tile on the page, Continue Reading included (#71).
@@ -258,6 +397,8 @@ struct LibraryGridView: View {
                     ContentUnavailableView("No Downloaded Books", systemImage: "arrow.down.circle", description: Text("Books that are downloaded to this iPad appear here. Long-press a book and choose Download to keep it on this iPad."))
                 } else if case .tag(let name) = item {
                     ContentUnavailableView("No Books Tagged “\(name)”", systemImage: "tag", description: Text("Long-press a book and choose Tags… to add this tag. The tag stays until you delete it from the sidebar."))
+                } else if case .readingList = item {
+                    ContentUnavailableView("No Books in This List", systemImage: "list.number", description: Text("Long-press a book and choose Add to Reading List…, or select several books and add them from the Actions menu."))
                 } else if item == .bookmarked {
                     ContentUnavailableView("No Bookmarked Books", systemImage: "bookmark", description: Text("Books with a bookmarked page appear here. To bookmark a page, tap the bookmark button in the reader."))
                 } else {
@@ -266,7 +407,18 @@ struct LibraryGridView: View {
             }
         }
         .navigationTitle(selectionTitle ?? item.title)
+        // The active filters as chips (#80), and typed field searches (#81).
+        .safeAreaInset(edge: .top, spacing: 0) {
+            let typed = LibraryFilter.parse(appliedSearch)
+            if !filter.isEmpty || !typed.isEmpty {
+                FilterChips(filter: $filter, typed: typed) {
+                    model.smartEditor = .init(listId: nil, filter: filter.combined(with: typed))
+                }
+                .background(.bar)
+            }
+        }
         .searchableWithHistory(text: $search, prompt: "Search books", list: "books")
+        .searchSuggestions { SearchFieldSuggestions(search: $search) }
         .task(id: search) {
             // Filtering thousands of books on every keystroke makes typing lag, so wait for a pause.
             // Not before the first results, though: the grid is hidden until they are in.
@@ -277,8 +429,27 @@ struct LibraryGridView: View {
             if let selection {
                 SelectionToolbar(item: item, selection: selection, visible: books.map(\.id), setSelection: { self.selection = $0 }, confirm: $selectionConfirm)
             } else {
-                LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: showsSort, showTitles: $showTitles) {
+                LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, showsSort: showsSort,
+                               sortOptions: sortOptions, sortAscending: Binding(
+                                   get: { ascending },
+                                   set: { sortDirection = $0 == sort.ascendingByDefault ? "" : ($0 ? "asc" : "desc") }),
+                               showTitles: $showTitles) {
                     selection = []
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showFilter = true
+                    } label: {
+                        Label("Filter", systemImage: filter.isEmpty ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                    }
+                    .accessibilityIdentifier("library-filter")
+                    .popover(isPresented: $showFilter) { FilterPanel(filter: $filter) }
+                }
+                if case .readingList = item, !books.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Reorder…", systemImage: "arrow.up.arrow.down") { reordering = true }
+                            .accessibilityIdentifier("list-reorder")
+                    }
                 }
                 if item == .missing, !books.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
@@ -314,6 +485,9 @@ struct LibraryGridView: View {
             Text(kind.message)
         }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
+        .sheet(isPresented: $reordering) {
+            if case .readingList(let id) = item { ReadingListOrderView(listId: id) }
+        }
     }
 
     /// After a change to the height of every cell (Cover Info, Show Titles), scrolls back to
@@ -322,6 +496,11 @@ struct LibraryGridView: View {
     private func keepPlace(_ proxy: ScrollViewProxy) {
         guard scrollSpot.scrolledDown, let id = scrollSpot.firstVisible else { return }
         Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
+    }
+
+    private var isList: Bool {
+        if case .readingList = item { return true }
+        return false
     }
 
     private var selectionTitle: String? {
@@ -338,7 +517,9 @@ struct LibraryGridView: View {
     /// Series list in volume order and Continue Reading by last read, so no sort menu.
     private var showsSort: Bool {
         if case .seriesNamed = item { return false }
-        return item != .continueReading
+        // A smart list with its own sort keeps it (#82).
+        if case .smartList(let id) = item, model.lists.list(id)?.sort != nil { return false }
+        return item != .continueReading && item != .upNext
     }
 
     private var pinchGesture: some Gesture {
@@ -360,7 +541,14 @@ struct LibraryGridView: View {
 
 /// The books on screen, kept outside SwiftUI's state so scrolling does not redraw the grid.
 @MainActor
+extension EnvironmentValues {
+    /// The grid a book cell is in (#83); nil in the Continue Reading and Up Next rows.
+    @Entry var gridOrder: VisibleBooks?
+}
+
 final class VisibleBooks {
+    /// Set on a reading list's grid, for the reader's "Next in …" (#83).
+    var listName: String?
     /// Visible book ids, in grid order.
     var ids: [String] = []
     /// The book to keep in view during a pinch.
@@ -389,6 +577,10 @@ struct LibraryToolbar: ToolbarContent {
     @Binding var coverSize: Double
     @Binding var showSettings: Bool
     var showsSort = true
+    /// The orders the Sort By menu offers.
+    var sortOptions = LibraryGridView.SortOrder.forGroups
+    /// Ascending or descending (#79); nil where the list has no such choice.
+    var sortAscending: Binding<Bool>?
     /// Sort By says Name rather than Title (folders, series).
     var sortsByName = false
     /// The grid's Show Titles setting; nil where there is none.
@@ -423,9 +615,25 @@ struct LibraryToolbar: ToolbarContent {
                         .accessibilityIdentifier("library-select")
                 }
                 if showsSort {
-                    Picker("Sort By", selection: $sort) {
-                        ForEach(LibraryGridView.SortOrder.allCases) { Text($0.label(byName: sortsByName)).tag($0) }
+                    // Its own submenu, so the many orders don't crowd this menu.
+                    Menu {
+                        Picker("Sort By", selection: $sort) {
+                            ForEach(sortOptions) { Text($0.label(byName: sortsByName)).tag($0) }
+                        }
+                        .pickerStyle(.inline)
+                        if let sortAscending {
+                            Picker("Order", selection: sortAscending) {
+                                Text("Ascending").tag(true)
+                                Text("Descending").tag(false)
+                            }
+                            .pickerStyle(.inline)
+                            .accessibilityIdentifier("library-sort-direction")
+                        }
+                    } label: {
+                        Label("Sort By", systemImage: "arrow.up.arrow.down")
+                        Text(sort.label(byName: sortsByName))
                     }
+                    .accessibilityIdentifier("library-sort")
                 }
                 Section("Cover Size (or pinch the grid)") {
                     // The menu stays open, so a few taps step through the sizes (#98).
@@ -538,13 +746,56 @@ struct LetterIndex: View {
     }
 }
 
-/// Series as stacks of covers; each opens a grid of that series' books in volume order.
+/// Series as stacks of covers; each opens a grid of that series' books in volume order. The
+/// same grid shows authors and publishers (#78), each a stack of their first covers.
 struct SeriesGridView: View {
+    enum Kind {
+        case series, authors, publishers
+
+        var item: SidebarItem {
+            switch self {
+            case .series: return .series
+            case .authors: return .authors
+            case .publishers: return .publishers
+            }
+        }
+
+        func item(for name: String) -> SidebarItem {
+            switch self {
+            case .series: return .seriesNamed(name)
+            case .authors: return .author(name)
+            case .publishers: return .publisher(name)
+            }
+        }
+
+        var prefix: String {
+            switch self {
+            case .series: return "series"
+            case .authors: return "author"
+            case .publishers: return "publisher"
+            }
+        }
+    }
+
     @Environment(AppModel.self) private var model
+    var kind: Kind = .series
     @State private var search = ""
     @State private var showSettings = false
-    /// Its own sort, apart from the books' and folders' (#100).
-    @AppStorage("seriesSortOrder") private var sort: LibraryGridView.SortOrder = .title
+    /// Its own sort, apart from the books' and folders' (#100), one for each kind.
+    @AppStorage private var sort: LibraryGridView.SortOrder
+
+    init(kind: Kind = .series) {
+        self.kind = kind
+        _sort = AppStorage(wrappedValue: .title, kind == .series ? "seriesSortOrder" : "\(kind.prefix)SortOrder")
+    }
+
+    private func allGroups(_ model: AppModel) -> [SeriesGroup] {
+        switch kind {
+        case .series: return model.catalog.series
+        case .authors: return model.catalog.authors
+        case .publishers: return model.catalog.publishers
+        }
+    }
     @AppStorage("coverSize") private var coverSize: Double = 150
     @AppStorage(TitleGrid.series.key) private var showTitles = true
     @Environment(\.coverStyle) private var style
@@ -557,20 +808,20 @@ struct SeriesGridView: View {
         let model = model
         let query = SearchQuery(search)
         let _ = query.isEmpty ? 0 : model.searchKeysRevision
-        let groups = sorted(model.catalog.series.filter { query.isEmpty || query.matches(model.searchKey($0.name)) })
+        let groups = sorted(allGroups(model).filter { query.isEmpty || query.matches(model.searchKey($0.name)) })
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
                     ScrollTopMarker()
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: coverSize, maximum: coverSize * 1.35), spacing: 20, alignment: .top)], spacing: 24) {
                         ForEach(groups) { group in
-                            let item = SidebarItem.seriesNamed(group.name)
-                            let liftID = "series:\(group.name)"
+                            let item = kind.item(for: group.name)
+                            let liftID = "\(kind.prefix):\(group.name)"
                             NavigationLink(value: item) {
                                 SeriesCell(group: group, liftID: liftID)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityIdentifier("series-\(group.name)")
+                            .accessibilityIdentifier("\(kind.prefix)-\(group.name.isEmpty ? "Unknown" : group.name)")
                             // Pin to Sidebar, as for folders (#72), with the same lift as books (#71).
                             .liftMenu(id: liftID, menu: { LiftMenuItems.group(item, model: model) },
                                       preview: seriesPreview(group),
@@ -582,36 +833,41 @@ struct SeriesGridView: View {
                     .liftMenuHost()
                 }
             }
-            .remembersScroll(keeper, item: .series, ids: groups.map(\.id), isFiltered: !search.isEmpty,
+            .remembersScroll(keeper, item: kind.item, ids: groups.map(\.id), isFiltered: !search.isEmpty,
                              proxy: proxy, clearSearch: { search = "" })
         }
         .environment(\.showTitles, showTitles)
         .overlay {
             if groups.isEmpty && !model.isScanning {
                 if search.isEmpty {
-                    ContentUnavailableView("No Series", systemImage: "square.stack")
+                    switch kind {
+                    case .series: ContentUnavailableView("No Series", systemImage: "square.stack")
+                    case .authors: ContentUnavailableView("No Authors", systemImage: "person.2", description: Text("Authors come from each book's ComicInfo.xml, its file name, or your edits in Book Info."))
+                    case .publishers: ContentUnavailableView("No Publishers", systemImage: "building.columns", description: Text("Publishers come from each book's ComicInfo.xml, its file name, or your edits in Book Info."))
+                    }
                 } else {
                     ContentUnavailableView.search(text: search)
                 }
             }
         }
-        .navigationTitle("Series")
-        .searchableWithHistory(text: $search, prompt: "Search series", list: "series")
-        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, sortsByName: true, showTitles: $showTitles) }
+        .navigationTitle(kind.item.title)
+        .searchableWithHistory(text: $search, prompt: kind == .series ? "Search series" : kind == .authors ? "Search authors" : "Search publishers",
+                               list: kind == .series ? "series" : kind == .authors ? "authors" : "publishers")
+        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, sortOptions: LibraryGridView.SortOrder.forGroups, sortsByName: true, showTitles: $showTitles) }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
 
     /// The catalog keeps series by name; the other orders go by each series' newest book.
     private func sorted(_ groups: [SeriesGroup]) -> [SeriesGroup] {
         switch sort {
-        case .title:
-            return groups
         case .recentlyAdded:
             let latest = Dictionary(groups.map { ($0.id, $0.books.map(\.addedAt).max() ?? .distantPast) }, uniquingKeysWith: max)
             return groups.sorted { (latest[$0.id] ?? .distantPast) > (latest[$1.id] ?? .distantPast) }
         case .recentlyRead:
             let latest = Dictionary(groups.map { ($0.id, $0.books.compactMap(\.lastReadAt).max() ?? .distantPast) }, uniquingKeysWith: max)
             return groups.sorted { (latest[$0.id] ?? .distantPast) > (latest[$1.id] ?? .distantPast) }
+        default:
+            return groups
         }
     }
 
@@ -645,12 +901,20 @@ struct SeriesCell: View {
             SeriesStack(group: group, liftID: liftID)
                 .modifier(LiftPart(liftID: liftID))
             if showTitles {
-                Text(group.name)
+                Text(group.name.isEmpty ? "Unknown" : group.name)
                     .font(.footnote.weight(.medium))
                     .lineLimit(2, reservesSpace: true)
-                Text(group.books.count == 1 ? "1 book" : "\(group.books.count) books")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(group.books.count == 1 ? "1 book" : "\(group.books.count) books")
+                    // The average of the rated volumes (#84).
+                    if let average = model.averageRating(of: group) {
+                        Text("·")
+                        Image(systemName: "star.fill").imageScale(.small)
+                        Text(average.formatted(.number.precision(.fractionLength(0...1))))
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
         }
         .contentShape(Rectangle())
@@ -689,6 +953,7 @@ struct BookCell: View {
     @Environment(\.libraryIconSize) private var iconSize
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.liftMenu) private var liftMenu
+    @Environment(\.gridOrder) private var gridOrder
     let book: Book
     /// Set in Select mode: whether the book is picked. A tap then picks or unpicks it.
     var isSelected: Bool?
@@ -707,6 +972,8 @@ struct BookCell: View {
             } else if liftMenu?.ignoresTap(on: liftID) == true {
                 // The end of a long press that opened the menu, not a tap.
             } else {
+                // Where it was opened from, so its last page can offer the next book (#83).
+                model.readingContext = gridOrder.map { AppModel.ReadingContext(listName: $0.listName, ids: $0.books.map(\.id)) }
                 Task { await model.activate(book) }
             }
         } label: {
@@ -807,11 +1074,13 @@ enum BookMenu {
             info,
             Item.action("Edit Info…", "pencil") { model.dataEditor = .init(ids: [book.id]) },
             Item.action("Tags…", "tag") { model.tagEditor = .init(ids: [book.id]) },
+            Item.action("Add to Reading List…", "text.badge.plus") { model.listPicker = .init(ids: [book.id]) },
         ] + pinMenu(book, model: model)
         var marks: [UIMenuElement] = [
             Item.action(book.favorite ? "Remove from Favorites" : "Favorite", book.favorite ? "heart.slash" : "heart") {
                 model.setFavorite(book, !book.favorite)
             },
+            ratingMenu(book, model: model),
         ]
         // Bookmarks are pages now (#96); a book bookmarked the old way can still drop it.
         if book.bookmarked {
@@ -826,6 +1095,10 @@ enum BookMenu {
             reading.append(Item.action("Mark as Unread", "circle") { model.setFinished(book, false) })
         }
         reading.append(directionMenu(book, model: model))
+        // Hides the series from Up Next until a volume of it is read again (#85).
+        if model.upNext.contains(book.id) {
+            reading.append(Item.action("Not Interested", "hand.thumbsdown") { model.hideFromUpNext(series: book.series) })
+        }
         let file: UIMenuElement
         if book.isDownloaded {
             file = Item.action("Remove from iPad", "icloud.and.arrow.up") { model.removeDownload(book) }
@@ -836,6 +1109,22 @@ enum BookMenu {
             Item.section(top), Item.section(marks), Item.section(reading), Item.section([file]),
             coverMenu(book, model: model, confirmRegenerate: confirmRegenerate),
         ])
+    }
+
+    /// Rating ▸ one to five stars, with the current one checked, and No Rating (#84).
+    private static func ratingMenu(_ book: Book, model: AppModel) -> UIMenu {
+        var items: [UIMenuElement] = (1...5).reversed().map { stars in
+            let action = LiftMenuItems.action(String(repeating: "★", count: stars) + String(repeating: "☆", count: 5 - stars), "star") {
+                model.setRating([book.id], stars)
+            }
+            action.state = book.rating == stars ? .on : .off
+            action.accessibilityLabel = stars == 1 ? "1 star" : "\(stars) stars"
+            return action
+        }
+        if book.rating != nil {
+            items.append(LiftMenuItems.action("No Rating", "star.slash") { model.setRating([book.id], nil) })
+        }
+        return UIMenu(title: "Rating", image: UIImage(systemName: book.rating == nil ? "star" : "star.fill"), children: items)
     }
 
     /// Reading Direction, with the book's current one checked (#91).
@@ -1148,6 +1437,19 @@ struct SelectionToolbar: ToolbarContent {
                 // Fields that differ show as Mixed; only what you change is written (#76).
                 Button("Edit Info…", systemImage: "pencil") { model.dataEditor = .init(ids: ids) }
                     .accessibilityIdentifier("selection-edit-info")
+                // In the order they are on screen (#83).
+                Button("Add to Reading List…", systemImage: "text.badge.plus") {
+                    model.listPicker = .init(ids: visible.filter(ids.contains))
+                }
+                .accessibilityIdentifier("selection-add-to-list")
+                if case .readingList(let listId) = item {
+                    Button("Remove from List", systemImage: "minus.circle") {
+                        finish {
+                            let kept = (model.lists.list(listId)?.bookIds ?? []).filter { !ids.contains($0) }
+                            model.setListBooks(listId, kept)
+                        }
+                    }
+                }
             }
             Section {
                 Button(allFavorite ? "Remove from Favorites" : "Favorite", systemImage: allFavorite ? "heart.slash" : "heart") {
@@ -1157,6 +1459,18 @@ struct SelectionToolbar: ToolbarContent {
                 if books.contains(where: \.bookmarked) {
                     Button("Remove Bookmark", systemImage: "bookmark.slash") { finish { model.setBookmarked(ids, false) } }
                 }
+                Menu("Rating", systemImage: "star") {
+                    ForEach((1...5).reversed(), id: \.self) { stars in
+                        Button(String(repeating: "★", count: stars) + String(repeating: "☆", count: 5 - stars)) {
+                            finish { model.setRating(ids, stars) }
+                        }
+                        .accessibilityLabel(stars == 1 ? "1 star" : "\(stars) stars")
+                    }
+                    if books.contains(where: { $0.rating != nil }) {
+                        Button("No Rating", systemImage: "star.slash") { finish { model.setRating(ids, nil) } }
+                    }
+                }
+                .accessibilityIdentifier("selection-rating")
             }
             Section {
                 if allRead {

@@ -48,6 +48,9 @@ public struct Book: Codable, FetchableRecord, PersistableRecord, Identifiable, H
     /// says (#77). Worked out by `refreshInfo`.
     public var info = BookData()
 
+    /// One to five stars, from the synced record (#84).
+    public var rating: Int?
+
     /// The authors the library files the book under (#78).
     public var authors: [String] { info.authors }
 
@@ -192,6 +195,11 @@ public final class LibraryIndex: @unchecked Sendable {
             }
             // Read every file's metadata again, now that all of it is kept.
             try db.execute(sql: "UPDATE book SET metadataRead = 0")
+        }
+        // Star ratings (#84), named for its issue and guarded like the others.
+        migrator.registerMigration("ratings-84") { db in
+            guard try !db.columns(in: "book").contains(where: { $0.name.lowercased() == "rating" }) else { return }
+            try db.alter(table: "book") { t in t.add(column: "rating", .integer) }
         }
         return migrator
     }
@@ -403,6 +411,9 @@ public final class LibraryIndex: @unchecked Sendable {
         }
         if let bookmarks = record.pageBookmarks {
             book.pageBookmarks = bookmarks.pages
+        }
+        if let rating = record.rating {
+            book.rating = rating.value
         }
         // The user's edits; `refreshInfo` puts them on top of the file's data.
         if let metadata = record.metadata {

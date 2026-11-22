@@ -118,6 +118,11 @@ struct BookInfoView: View {
                     Label("Favorite", systemImage: "heart")
                 }
                 .accessibilityIdentifier("info-favorite")
+                LabeledContent {
+                    StarRating(value: book.rating) { model.setRating([book.id], $0) }
+                } label: {
+                    Label("Rating", systemImage: "star")
+                }
                 // Bookmarks are pages now (#96); a book bookmarked the old way can still drop it.
                 if book.bookmarked {
                     Button("Remove Bookmark", systemImage: "bookmark.slash") { model.setBookmarked(book, false) }
