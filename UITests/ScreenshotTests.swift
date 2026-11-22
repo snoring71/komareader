@@ -482,7 +482,10 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(target.waitForExistence(timeout: 5), "Clearing the search did not go back")
         sleep(1)
         save(app, "28-scroll-after-search")
-        XCTAssertTrue(target.isHittable, "Clearing the search did not go back to the same spot")
+        // On screen, not hittable: the keyboard is still up after clearing, and the grid runs
+        // under it (#109), so a book in the bottom rows can be behind it at the same spot.
+        XCTAssertTrue(target.frame.minY > 0 && target.frame.maxY < app.frame.maxY,
+                      "Clearing the search did not go back to the same spot")
     }
 
     /// Picks a sidebar row by its label.
