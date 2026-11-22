@@ -27,6 +27,9 @@ final class AppModel {
     @ObservationIgnored private var downloadQueueTask: Task<Void, Never>?
     var isScanning = false
     var errorMessage: String?
+    /// The search history box is open (#109); the Resume button fades out so it doesn't cover it.
+    var searchHistoryShown = false
+
     var openBook: OpenBook? {
         didSet {
             let reading = openBook != nil
