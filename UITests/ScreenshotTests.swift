@@ -537,8 +537,12 @@ final class ScreenshotTests: XCTestCase {
         sleep(2)
         readNext.tap()
         // The finished book closes and the next one opens on its cover.
-        XCTAssertTrue(app.descendants(matching: .any)["reader-cover-intro"].firstMatch.waitForExistence(timeout: 20),
-                      "Read Now did not open the next book")
+        let nextCover = app.descendants(matching: .any)["reader-cover-intro"].firstMatch
+        XCTAssertTrue(nextCover.waitForExistence(timeout: 20), "Read Now did not open the next book")
+        sleep(1)
+        // Close the reader, or the next test's launch reopens this book over the library.
+        nextCover.swipeUp()
+        XCTAssertTrue(app.buttons["book-Starfall 1"].firstMatch.waitForExistence(timeout: 10), "The reader did not close")
     }
 
     /// Each library view keeps its scroll position when the user goes to another view and
