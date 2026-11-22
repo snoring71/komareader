@@ -86,15 +86,6 @@ struct RootView: View {
         .sheet(item: $model.listPicker) { request in
             ReadingListPicker(bookIds: request.ids)
         }
-        .alert(model.nextInList.map { "Up next in \($0.listName)" } ?? "", isPresented: Binding(
-            get: { model.nextInList != nil },
-            set: { if !$0 { model.nextInList = nil } }
-        ), presenting: model.nextInList) { next in
-            Button("Read “\(next.book.title)”") { Task { await model.activate(next.book) } }
-            Button("Not Now", role: .cancel) {}
-        } message: { next in
-            Text(next.book.isDownloaded ? "You finished a book in this reading list." : "You finished a book in this reading list. The next one is downloaded first.")
-        }
         .sheet(item: $model.dataEditor) { request in
             BookDataEditorView(bookIds: request.ids, seriesName: request.seriesName)
                 .toggleStyle(MonoToggleStyle())

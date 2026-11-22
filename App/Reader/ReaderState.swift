@@ -171,6 +171,14 @@ final class ReaderState {
     /// Makes the page the pager slides in before the first one: the cover, as the reader
     /// shows it. Nil when the book has no cover.
     @ObservationIgnored var makeCoverPage: (() -> UIViewController)?
+    /// Bumped by a tap forward on the last page when there is a next book (#83): the pager
+    /// turns on to the page that offers it.
+    private(set) var turnToEnd = 0
+    /// Makes the page after the last one, offering the next book. Nil when there is none.
+    @ObservationIgnored var makeEndPage: (() -> UIViewController)?
+    /// Bumped by Not Now on that page: the pager turns back to the last page.
+    private(set) var backFromEnd = 0
+    func leaveEndPage() { backFromEnd += 1 }
 
     /// Whether the book sets anything itself (other than its crop, which has no default).
     var hasOwnSettings: Bool {
@@ -381,7 +389,14 @@ final class ReaderState {
         pageDidChange()
     }
 
-    func next() { show(spread: currentSpread + 1) }
+    /// The next page, or from the last one the page offering the next book (#83).
+    func next() {
+        if currentSpread >= spreads.count - 1, !spreads.isEmpty, makeEndPage != nil {
+            turnToEnd += 1
+        } else {
+            show(spread: currentSpread + 1)
+        }
+    }
 
     /// The previous page, or the cover from the first one.
     private func back() {

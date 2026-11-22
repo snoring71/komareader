@@ -39,7 +39,12 @@ final class AppModel {
             if !reading {
                 applyReadingProgress()
                 flushFileMetadata()
-                if let closed = oldValue?.book.id { offerNextInList(after: closed) }
+                // Read Next on the reader's last page: the reader has closed, so the finished
+                // book's progress is in; now the next one opens (#83).
+                if let next = pendingNext {
+                    pendingNext = nil
+                    Task { await activate(next) }
+                }
             }
         }
     }
@@ -78,8 +83,12 @@ final class AppModel {
     }
     /// The books Add to Reading List… is adding (#83).
     var listPicker: ListPickerRequest?
-    /// Offered when a book in a reading list is finished: the list's next book (#83).
-    var nextInList: NextInList?
+    /// Where the open book was opened from, so its last page can offer what comes next: the
+    /// grid's books in order, and the reading list's name when it is one (#83). Nil for a
+    /// book opened elsewhere (Continue Reading, Resume), which falls back to its series.
+    @ObservationIgnored var readingContext: ReadingContext?
+    /// Read Next was picked on the last page: opened once the reader has closed.
+    @ObservationIgnored private var pendingNext: Book?
     /// Folders and series pinned to the sidebar on this device, in the order they were pinned
     /// (#72). Saved as `SidebarItem.storageKey`s.
     var pinned: [SidebarItem] = AppModel.loadPinned() {
@@ -292,10 +301,16 @@ final class AppModel {
         let id = UUID()
     }
 
-    struct NextInList: Identifiable {
-        let listName: String
+    struct ReadingContext {
+        var listName: String?
+        var ids: [String]
+    }
+
+    /// What the reader's last page offers (#83).
+    struct NextBook {
         let book: Book
-        var id: String { book.id }
+        /// "Next in Holiday", "Next in Starfall" or "Up Next".
+        let heading: String
     }
 
     struct DataEditorRequest: Identifiable {
@@ -1119,14 +1134,33 @@ final class AppModel {
         Task.detached(priority: .utility) { _ = try? store.updateLists(change) }
     }
 
-    /// When the reader closes on a finished book while a reading list holding it is on screen,
-    /// offers the list's next book (#83).
-    private func offerNextInList(after bookId: String) {
-        guard case .readingList(let id) = libraryPath.last ?? selection, let list = lists.list(id),
-              book(id: bookId)?.finished == true, let ids = list.bookIds,
-              let at = ids.firstIndex(of: bookId) else { return }
-        let next = ids[(at + 1)...].lazy.compactMap { self.book(id: $0) }.first { !$0.isMissing }
-        if let next { nextInList = NextInList(listName: list.name, book: next) }
+    /// The book after `bookId` where it was opened from: the next one in that grid or reading
+    /// list, whatever series it is in, else the next volume of its own series (#83).
+    func nextBook(after bookId: String) -> NextBook? {
+        guard let current = book(id: bookId) else { return nil }
+        if let context = readingContext, let at = context.ids.firstIndex(of: bookId) {
+            guard let next = context.ids[(at + 1)...].lazy.compactMap({ self.book(id: $0) })
+                .first(where: { !$0.isMissing && $0.id != bookId }) else { return nil }
+            return NextBook(book: next, heading: heading(for: next, after: current, listName: context.listName))
+        }
+        let key = current.series.lowercased()
+        guard let group = catalog.series.first(where: { $0.name.lowercased() == key }),
+              let at = group.books.firstIndex(where: { $0.id == bookId }),
+              let next = group.books[(at + 1)...].first(where: { !$0.isMissing }) else { return nil }
+        return NextBook(book: next, heading: heading(for: next, after: current, listName: nil))
+    }
+
+    private func heading(for next: Book, after current: Book, listName: String?) -> String {
+        if let listName { return "Next in \(listName)" }
+        if !next.series.isEmpty, next.series.caseInsensitiveCompare(current.series) == .orderedSame {
+            return "Next in \(next.series)"
+        }
+        return "Up Next"
+    }
+
+    /// Read Next on the reader's last page (#83): opens `book` once the reader has closed.
+    func readNext(_ book: Book) {
+        pendingNext = book
     }
 
     // MARK: Tags
