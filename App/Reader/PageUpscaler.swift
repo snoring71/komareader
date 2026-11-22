@@ -1,6 +1,9 @@
 import CoreImage
 import Metal
+// MetalFX is in the device SDK but not the simulator's, so the simulator builds without it.
+#if canImport(MetalFX)
 import MetalFX
+#endif
 
 /// Doubles the resolution of small scans on the GPU (#121), with Apple's MetalFX spatial
 /// scaler: an edge-aware upscaler built into the system, so there is no model to license or
@@ -15,6 +18,7 @@ enum PageUpscaler {
     private static let queue = device?.makeCommandQueue()
     private static let lock = NSLock()
 
+    #if canImport(MetalFX)
     /// Whether this device can upscale at all.
     static var isSupported: Bool {
         guard let device else { return false }
@@ -65,4 +69,9 @@ enum PageUpscaler {
             return result.transformed(by: CGAffineTransform(translationX: extent.minX * 2, y: extent.minY * 2))
         }
     }
+    #else
+    static var isSupported: Bool { false }
+
+    static func upscale(_ image: CIImage, context: CIContext) -> CIImage? { nil }
+    #endif
 }
