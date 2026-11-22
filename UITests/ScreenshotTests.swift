@@ -495,10 +495,14 @@ final class ScreenshotTests: XCTestCase {
         let newList = app.buttons["list-new"].firstMatch
         XCTAssertTrue(newList.waitForExistence(timeout: 5), "The reading list picker did not open")
         newList.tap()
-        let name = app.textFields["list-name"].firstMatch
+        // An alert's text field does not always carry its identifier, so find it in the alert.
+        let alert = app.alerts["New Reading List"].firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "No New Reading List alert")
+        let name = alert.textFields.firstMatch
         XCTAssertTrue(name.waitForExistence(timeout: 5), "No name field for the new list")
+        name.tap()
         name.typeText("Holiday")
-        app.buttons["Create"].firstMatch.tap()
+        alert.buttons["Create"].firstMatch.tap()
         XCTAssertTrue(newList.waitForNonExistence(timeout: 5), "The picker did not close")
         if done.exists { done.tap() }
 
