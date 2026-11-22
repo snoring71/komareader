@@ -1187,17 +1187,36 @@ final class AppModel {
         return "Up Next"
     }
 
+    /// The book Read Now is waiting on while it downloads; Not Now clears it (#83).
+    @ObservationIgnored private var nextToOpen: String?
+
+    /// Not Now on the last page: a download already started carries on, but the book no
+    /// longer opens by itself when it is in.
+    func cancelNextInReader() {
+        nextToOpen = nil
+    }
+
     /// Read Now on the reader's last page (#83): opens `book` in the reader in place of the
     /// finished one, downloading it first if it is only in iCloud. The reader stays open.
     func readNextInReader(_ book: Book) async {
         var book = self.book(id: book.id) ?? book
+        nextToOpen = book.id
         if !book.isDownloaded {
-            await download(book)
+            if downloading.contains(book.id) || queuedDownloads.contains(book.id) {
+                // Already on its way (asked for earlier, then Not Now): wait for it.
+                while downloading.contains(book.id) || queuedDownloads.contains(book.id) {
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+            } else {
+                await download(book)
+            }
             guard let fresh = self.book(id: book.id), fresh.isDownloaded else { return }
             book = fresh
         }
-        // Closed while it downloaded: leave it for the library.
-        guard openBook != nil else { return }
+        // Not Now while it downloaded, or the reader closed: the download is kept, but the
+        // book waits for Read Now.
+        guard nextToOpen == book.id, openBook != nil else { return }
+        nextToOpen = nil
         // The finished book's progress goes into the library before the next one takes over.
         applyReadingProgress()
         await open(book)

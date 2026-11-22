@@ -44,7 +44,7 @@ struct NextBookPage: View {
                 // Side by side, so the card fits the short screen.
                 HStack(spacing: 32) {
                     cover
-                    details(width: max(coverWidth * 1.2, 260), alignment: .leading)
+                    details(width: max(coverWidth * 1.3, 340), alignment: .leading)
                 }
             } else {
                 VStack(spacing: 22) {
@@ -88,45 +88,53 @@ struct NextBookPage: View {
         .frame(maxWidth: width, alignment: Alignment(horizontal: alignment, vertical: .center))
     }
 
-    @ViewBuilder private var actions: some View {
+    private var actions: some View {
         let id = next.book.id
-        let downloading = waiting || model.downloading.contains(id) || model.queuedDownloads.contains(id)
-        if downloading {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    if model.downloadProgress[id] == nil { ProgressView().controlSize(.small) }
-                    Text("Downloading…").font(.subheadline.weight(.medium))
-                }
-                if let progress = model.downloadProgress[id] {
-                    ProgressView(value: progress)
-                        .tint(.white)
-                        .frame(width: 200)
-                }
-                Button("Not Now", action: onBack)
-                    .buttonStyle(.glass)
-                    .accessibilityIdentifier("next-book-back")
-            }
-            .accessibilityIdentifier("next-book-downloading")
-        } else {
-            HStack(spacing: 12) {
-                Button("Not Now", action: onBack)
-                    .buttonStyle(.glass)
-                    .accessibilityIdentifier("next-book-back")
-                Button {
-                    let book = model.book(id: id) ?? next.book
-                    if !book.isDownloaded { waiting = true }
-                    Task {
-                        await model.readNextInReader(book)
-                        waiting = false
+        let book = model.book(id: id) ?? next.book
+        let downloading = model.downloading.contains(id) || model.queuedDownloads.contains(id)
+        return VStack(alignment: .leading, spacing: 14) {
+            if downloading {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        if model.downloadProgress[id] == nil { ProgressView().controlSize(.small) }
+                        Text("Downloading…").font(.subheadline.weight(.medium))
                     }
-                } label: {
-                    // Inverse text on the black or white accent glass (#55).
-                    Text((model.book(id: id) ?? next.book).isDownloaded ? "Read Now" : "Download and Read")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(Color.onAccent)
+                    if let progress = model.downloadProgress[id] {
+                        ProgressView(value: progress)
+                            .tint(.white)
+                            .frame(width: 200)
+                    }
                 }
-                .buttonStyle(.glassProminent)
-                .accessibilityIdentifier("next-book-read")
+                .accessibilityIdentifier("next-book-downloading")
+            }
+            HStack(spacing: 12) {
+                Button("Not Now") {
+                    // A download goes on, but the book no longer opens by itself.
+                    model.cancelNextInReader()
+                    waiting = false
+                    onBack()
+                }
+                .buttonStyle(.glass)
+                .accessibilityIdentifier("next-book-back")
+                // Once asked for, it opens by itself when it is in.
+                if !waiting {
+                    Button {
+                        if !book.isDownloaded { waiting = true }
+                        Task {
+                            await model.readNextInReader(book)
+                            waiting = false
+                        }
+                    } label: {
+                        // Inverse text on the black or white accent glass (#55).
+                        Text(book.isDownloaded ? "Read Now" : downloading ? "Read When Ready" : "Download & Read")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Color.onAccent)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    .buttonStyle(.glassProminent)
+                    .accessibilityIdentifier("next-book-read")
+                }
             }
             .controlSize(.large)
         }
