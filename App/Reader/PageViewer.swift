@@ -139,10 +139,14 @@ struct PageViewer: UIViewControllerRepresentable {
             let forward = target >= displayedSpread
             // Next comes from the right in left-to-right books, from the left in manga.
             let direction: UIPageViewController.NavigationDirection = (forward != state.rightToLeft) ? .forward : .reverse
+            let onEndPage = controller.viewControllers?.first is EndPageController && target == displayedSpread
             displayedSpread = target
             layoutVersion = state.layoutVersion
             rightToLeft = state.rightToLeft
             pageController = controller
+            // The page offering the next book stays through a turn of the iPad (a new layout):
+            // its card lays itself out again for the new size (#83).
+            if onEndPage, !animated { return }
             guard state.spreads.indices.contains(target) else { return }
             let page = makeController(target)
             controller.setViewControllers([page], direction: direction, animated: animated)
