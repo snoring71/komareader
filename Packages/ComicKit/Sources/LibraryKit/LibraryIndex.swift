@@ -295,7 +295,11 @@ public final class LibraryIndex: @unchecked Sendable {
 
             for found in scan {
                 var book: Book
+                // The row as the index holds it, so a book nothing changed for is not written
+                // again: every rescan used to rewrite every row.
+                var stored: Book?
                 if var current = byPath[found.relativePath] {
+                    stored = current
                     // This device gave the book its own id before another device's record for the
                     // same file arrived (or duplicates were folded into another id). Take the
                     // synced id so both devices share progress and settings from now on.
@@ -309,8 +313,10 @@ public final class LibraryIndex: @unchecked Sendable {
                     }
                     book = current
                 } else if let record = recordByPath[found.relativePath], !seen.contains(record.bookId) {
-                    book = try Book.fetchOne(db, key: record.bookId) ?? Self.newBook(id: record.bookId, from: found, now: now)
+                    stored = try Book.fetchOne(db, key: record.bookId)
+                    book = stored ?? Self.newBook(id: record.bookId, from: found, now: now)
                 } else if let moved = existing.first(where: { $0.isMissing && !seen.contains($0.id) && $0.size == found.size && found.size != nil && $0.title == found.title && recordById[$0.id]?.isRemoved != true }) {
+                    stored = moved
                     book = moved
                 } else {
                     // The same id another device works out for this path, so records written
@@ -333,7 +339,7 @@ public final class LibraryIndex: @unchecked Sendable {
                 book.isMissing = false
                 if let record = recordById[book.id] { Self.applyRecord(record, to: &book) }
                 book.refreshInfo(rules: rules)
-                try book.save(db)
+                if !Self.sameRow(book, stored) { try book.save(db) }
                 byPath[found.relativePath] = book
                 seen.insert(book.id)
             }
@@ -348,6 +354,24 @@ public final class LibraryIndex: @unchecked Sendable {
             }
             return try Book.fetchAll(db)
         }
+    }
+
+    /// Whether saving `book` would leave `stored` as it is. The index keeps dates to the
+    /// millisecond, so a date read back from it is a fraction off the file's own.
+    static func sameRow(_ book: Book, _ stored: Book?) -> Bool {
+        guard let stored else { return false }
+        // Within a millisecond counts as the same date.
+        func close(_ a: Date?, _ b: Date?) -> Bool {
+            guard let a, let b else { return a == nil && b == nil }
+            return abs(a.timeIntervalSince(b)) < 0.001
+        }
+        guard close(book.modified, stored.modified), close(book.lastReadAt, stored.lastReadAt),
+              close(book.addedAt, stored.addedAt) else { return false }
+        var same = book
+        same.modified = stored.modified
+        same.lastReadAt = stored.lastReadAt
+        same.addedAt = stored.addedAt
+        return same == stored
     }
 
     /// Copies synced progress and settings into a row.

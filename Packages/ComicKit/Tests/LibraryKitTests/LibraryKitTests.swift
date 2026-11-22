@@ -34,6 +34,24 @@ import Testing
         #expect(books.first?.folder == "ARIA")
     }
 
+    /// A rescan that finds nothing new writes nothing: every rescan used to rewrite every row.
+    @Test func unchangedRescanWritesNoRows() throws {
+        let index = try LibraryIndex()
+        let modified = Date(timeIntervalSince1970: 1_700_000_000.123456)
+        let book = ScannedBook(url: URL(fileURLWithPath: "/lib/Saga 1.cbz"), relativePath: "Saga 1.cbz", format: .zip, size: 9, modified: modified, isDownloaded: true)
+        var record = BookRecord(bookId: StableID.book(path: "Saga 1.cbz"), file: .init(path: "Saga 1.cbz", size: 9, modified: modified))
+        record.progress["ipad-x"] = .init(page: 3, pageCount: 20, finished: false, updatedAt: Date(timeIntervalSince1970: 1_700_000_100.987654))
+        _ = try index.apply(scan: [book], records: [record])
+        let before = try index.db.read { $0.totalChangesCount }
+        let again = try index.apply(scan: [book], records: [record])
+        #expect(try index.db.read { $0.totalChangesCount } == before)
+        #expect(again.first?.currentPage == 3)
+        // A real change is still written.
+        var downloaded = book
+        downloaded.isDownloaded = false
+        #expect(try index.apply(scan: [downloaded], records: [record]).first?.isDownloaded == false)
+    }
+
     @Test func indexKeepsIdsAcrossRescansAndMoves() throws {
         let index = try LibraryIndex()
         let book = ScannedBook(url: URL(fileURLWithPath: "/lib/a/Saga 1.cbz"), relativePath: "a/Saga 1.cbz", format: .zip, size: 99, modified: nil, isDownloaded: true)

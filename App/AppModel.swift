@@ -360,10 +360,7 @@ final class AppModel {
             self.index = index
             let covers = CoverService(store: store, thumbnailDirectory: cacheRoot.appendingPathComponent("Thumbnails/\(store.info.libraryId)", isDirectory: true))
             await covers.setHandler { [weak self] id, url in
-                Task { @MainActor in
-                    self?.thumbnails[id] = url
-                    self?.coverRevision[id, default: 0] += 1
-                }
+                Task { @MainActor in self?.noteCoverReady(id, url) }
             }
             await covers.setMetadataHandler { [weak self] id, metadata in
                 Task { @MainActor in self?.noteFileMetadata([id: metadata]) }
@@ -419,6 +416,32 @@ final class AppModel {
         case .tag(let name): return summary.tags.contains { $0.id == name.lowercased() }
         case .missing: return summary.counts[.missing] != nil
         default: return true
+        }
+    }
+
+    /// Covers made since the grid last heard, put into `thumbnails` a few times a second.
+    /// Every cell on screen reads `thumbnails`, so changing it once per finished cover redrew
+    /// the whole visible library for each one while a big library's covers were being made.
+    @ObservationIgnored private var readyCovers: [String: URL] = [:]
+    @ObservationIgnored private var readyCoversTask: Task<Void, Never>?
+
+    private func noteCoverReady(_ id: String, _ url: URL) {
+        readyCovers[id] = url
+        guard readyCoversTask == nil else { return }
+        readyCoversTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self else { return }
+            self.readyCoversTask = nil
+            let ready = self.readyCovers
+            self.readyCovers = [:]
+            var thumbs = self.thumbnails
+            var revisions = self.coverRevision
+            for (id, url) in ready {
+                thumbs[id] = url
+                revisions[id, default: 0] += 1
+            }
+            self.thumbnails = thumbs
+            self.coverRevision = revisions
         }
     }
 
@@ -1212,6 +1235,7 @@ final class AppModel {
         var revisions = coverRevision
         for book in targets {
             thumbs[book.id] = nil
+            readyCovers[book.id] = nil
             revisions[book.id, default: 0] += 1
         }
         thumbnails = thumbs
@@ -1375,6 +1399,7 @@ final class AppModel {
     private func refreshCover(_ book: Book) async {
         await covers?.invalidate(bookId: book.id)
         thumbnails[book.id] = nil
+        readyCovers[book.id] = nil
         coverRevision[book.id, default: 0] += 1
         requestCover(for: book, urgent: true)
     }

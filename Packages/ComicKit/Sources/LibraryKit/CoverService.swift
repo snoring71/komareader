@@ -109,12 +109,15 @@ public actor CoverService {
         } else {
             needsCloud = !book.isDownloaded && store.existingCoverURL(bookId: book.id) == nil
         }
+        // Only a book queued already can be in a queue: searching them for every new book made
+        // queueing a whole library's covers take time that grew with the square of its size.
+        let queued = jobs[book.id] != nil
         jobs[book.id] = Job(book: book, fileURL: fileURL, needsCloud: needsCloud)
         if needsCloud {
-            pendingCloud.removeAll { $0 == book.id }
+            if queued { pendingCloud.removeAll { $0 == book.id } }
             if urgent { pendingCloud.insert(book.id, at: 0) } else { pendingCloud.append(book.id) }
         } else {
-            pendingLocal.removeAll { $0 == book.id }
+            if queued { pendingLocal.removeAll { $0 == book.id } }
             if urgent { pendingLocal.insert(book.id, at: 0) } else { pendingLocal.append(book.id) }
         }
         pump()
@@ -184,9 +187,10 @@ public actor CoverService {
             defer { if !wasDownloaded { try? CloudFiles.evict(fileURL) } }
 
             // Decoded larger than the cover, so the margin check still sees a one-pixel white edge.
-            let page = try await BookSourceFactory.firstPageImage(url: fileURL, format: book.format, maxPixelSize: analysisHeight)
-            // While the file is here (a book in iCloud is removed again below), read its metadata too.
-            let metadata = book.metadataRead ? nil : MetadataReader.read(url: fileURL, format: book.format)
+            // While the file is here (a book in iCloud is removed again below), read its metadata
+            // too, in the same pass over the archive where it can.
+            let (page, metadata) = try await BookSourceFactory.firstPage(url: fileURL, format: book.format, maxPixelSize: analysisHeight,
+                                                                         wantsMetadata: !book.metadataRead)
             guard let jpeg = try coverJPEG(page) else { return (nil, metadata) }
             try store.writeCover(jpeg, bookId: book.id)
             let shown = autoCrop(page, book: book, store: store) ?? jpeg
