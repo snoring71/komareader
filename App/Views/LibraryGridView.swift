@@ -800,6 +800,7 @@ enum BookMenu {
         }
         let top: [UIMenuElement] = [
             info,
+            Item.action("Edit Info…", "pencil") { model.dataEditor = .init(ids: [book.id]) },
             Item.action("Tags…", "tag") { model.tagEditor = .init(ids: [book.id]) },
         ] + pinMenu(book, model: model)
         var marks: [UIMenuElement] = [
@@ -1139,6 +1140,9 @@ struct SelectionToolbar: ToolbarContent {
                 // Keeps the selection when the sheet closes, so another action can follow (#64).
                 Button("Tags…", systemImage: "tag") { model.tagEditor = .init(ids: ids) }
                     .accessibilityIdentifier("selection-tags")
+                // Fields that differ show as Mixed; only what you change is written (#76).
+                Button("Edit Info…", systemImage: "pencil") { model.dataEditor = .init(ids: ids) }
+                    .accessibilityIdentifier("selection-edit-info")
             }
             Section {
                 Button(allFavorite ? "Remove from Favorites" : "Favorite", systemImage: allFavorite ? "heart.slash" : "heart") {

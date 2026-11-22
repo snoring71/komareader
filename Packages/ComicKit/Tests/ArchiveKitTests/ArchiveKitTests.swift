@@ -239,11 +239,11 @@ import Testing
         try Data("<ComicInfo><Writer>Kozue Amano</Writer><Publisher>Mag Garden</Publisher></ComicInfo>".utf8)
             .write(to: folder.appendingPathComponent("ComicInfo.xml"))
         let info = try #require(MetadataReader.read(url: folder, format: .folder))
-        #expect(info.author == "Kozue Amano")
+        #expect(info.writers == ["Kozue Amano"])
         #expect(info.publisher == "Mag Garden")
 
         // An archive without ComicInfo.xml reads fine, with nothing in it.
-        #expect(MetadataReader.read(url: try fixture("sample.cbz"), format: .zip) == FileMetadata())
+        #expect(MetadataReader.read(url: try fixture("sample.cbz"), format: .zip) == BookData())
 
         let bad = folder.appendingPathComponent("bad.cbz")
         try Data("not an archive".utf8).write(to: bad)

@@ -81,6 +81,10 @@ struct RootView: View {
         .sheet(item: $model.tagEditor) { request in
             TagEditorView(bookIds: request.ids)
         }
+        .sheet(item: $model.dataEditor) { request in
+            BookDataEditorView(bookIds: request.ids, seriesName: request.seriesName)
+                .toggleStyle(MonoToggleStyle())
+        }
         .fullScreenCover(item: $model.coverEditor) { request in
             CoverEditorView(book: request.book, initialEdit: request.initialEdit)
         }
@@ -94,9 +98,6 @@ struct RootView: View {
         }
         .environment(\.coverStyle, CoverStyle(shape: coverShape, shadowStrength: coverShadow, shadowDirection: shadowDirection, roundedCorners: roundedCorners))
         .environment(\.coverInfo, coverInfo.value)
-        .onChange(of: coverInfo.value.needsFileMetadata, initial: true) { _, needed in
-            model.wantsFileMetadata = needed
-        }
     }
 }
 

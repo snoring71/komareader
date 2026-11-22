@@ -431,7 +431,14 @@ enum LiftMenuItems {
         if books.contains(where: \.isDownloaded) {
             file.append(action("Remove All from iPad", "icloud.and.arrow.up") { model.removeDownloads(ids) })
         }
-        return UIMenu(title: "", children: [section([pin]), section(reading), section(file)])
+        var top: [UIMenuElement] = [pin]
+        if case .seriesNamed(let name) = item {
+            // Series name, author, publisher and genre on every volume (#76).
+            top.append(action("Edit Series…", "pencil", identifier: "group-edit-series") {
+                model.dataEditor = .init(ids: ids, seriesName: name)
+            })
+        }
+        return UIMenu(title: "", children: [section(top), section(reading), section(file)])
     }
 }
 

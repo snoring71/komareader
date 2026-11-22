@@ -80,6 +80,14 @@ copies tag by tag, keeping whichever entry has the later `updatedAt`.
   means the user went back to the default cover; there is then no `.custom.jpg`.
   An app making a book's first cover may trim plain white, black or grey margins and save
   that trim as a `cover` of page 0 (plus its `.custom.jpg`).
+- `metadata` holds the user's own edits to the book's data. Every field is optional except
+  `writers` (always written, possibly empty, for version 0.1): `series`, `number`, `volume`,
+  `title`, `count` (books in the series), `summary`, `year`, `month`, `day`, the creator lists
+  `writers`, `pencillers`, `inkers`, `colorists`, `letterers`, `coverArtists`, `editors`,
+  `translators`, and `publisher`, `imprint`, `genres` (a list), `language` (an ISO code),
+  `ageRating`, `isbn` and `web`. A missing field, `null` or an empty list means "not edited":
+  show what the file's ComicInfo.xml says, else what the file name says. Comic files are never
+  changed. Apps ignore keys they do not know, so new fields keep `schema` at 1.
 - `flags` holds the user's Favorite and Bookmarked marks.
 - `tags` holds the user's own tags for the book, in the user's spelling. Tags are matched
   ignoring case, and a book lists each tag once. Renaming or deleting a tag rewrites `tags`

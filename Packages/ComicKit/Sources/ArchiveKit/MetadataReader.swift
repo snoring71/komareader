@@ -2,10 +2,10 @@ import ComicCore
 import Foundation
 import PDFKit
 
-/// Reads a book file's own metadata (title, author, publisher), for books on the device.
+/// Reads a book file's own metadata (ComicInfo.xml, or a PDF's title and author), for books on the device.
 public enum MetadataReader {
     /// Nil if the file could not be read. A file with no metadata gives an empty result.
-    public static func read(url: URL, format: BookFormat) -> FileMetadata? {
+    public static func read(url: URL, format: BookFormat) -> BookData? {
         switch format {
         case .pdf:
             guard let document = PDFDocument(url: url) else { return nil }
@@ -15,24 +15,27 @@ public enum MetadataReader {
                 return text
             }
             // PDFs have no publisher field; the app that made the file is not one.
-            return FileMetadata(title: value(.titleAttribute), author: value(.authorAttribute))
+            var info = BookData()
+            info.title = value(.titleAttribute)
+            info.writers = BookData.names(value(.authorAttribute))
+            return info
         case .folder:
             let contents = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
-            guard let info = contents.first(where: { FileMetadata.isComicInfo(path: $0.lastPathComponent) }) else { return FileMetadata() }
+            guard let info = contents.first(where: { BookData.isComicInfo(path: $0.lastPathComponent) }) else { return BookData() }
             guard let data = try? Data(contentsOf: info) else { return nil }
-            return FileMetadata.comicInfo(data) ?? FileMetadata()
+            return BookData.comicInfo(data) ?? BookData()
         case .zip, .rar, .sevenZip, .tar, .epub:
             var data: Data?
             do {
                 try LibArchive.forEachEntry(in: url) { path, reader in
-                    guard FileMetadata.isComicInfo(path: path) else { return .next }
+                    guard BookData.isComicInfo(path: path) else { return .next }
                     data = try reader.readAll()
                     return .stop
                 }
             } catch {
                 return nil
             }
-            return data.flatMap(FileMetadata.comicInfo) ?? FileMetadata()
+            return data.flatMap(BookData.comicInfo) ?? BookData()
         }
     }
 }

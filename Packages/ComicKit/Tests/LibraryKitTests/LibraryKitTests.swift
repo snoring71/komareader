@@ -285,7 +285,9 @@ import Testing
         let index = try LibraryIndex(url: url)
         let scanned = ScannedBook(url: URL(fileURLWithPath: "/lib/a.cbz"), relativePath: "a.cbz", format: .zip, size: 1, modified: nil, isDownloaded: true)
         let id = try #require(try index.apply(scan: [scanned], records: []).first?.id)
-        try index.saveMetadata([id: FileMetadata(author: "W")])
+        var written = BookData()
+        written.writers = ["W"]
+        try index.saveFileData([id: written])
         #expect(try index.book(id: id)?.author == "W")
         let columns = try index.db.read { db in try db.columns(in: "book").map(\.name) }
         #expect(columns.contains("tags"))
@@ -297,10 +299,18 @@ import Testing
         let id = try #require(try index.apply(scan: [book], records: []).first?.id)
         #expect(try index.book(id: id)?.metadataRead == false)
 
-        try index.saveMetadata([id: FileMetadata(title: "T", author: "W", publisher: "P")])
+        var data = BookData()
+        data.title = "T"
+        data.writers = ["W", "X"]
+        data.publisher = "P"
+        data.series = "From File"
+        try index.saveFileData([id: data])
         let saved = try #require(try index.apply(scan: [book], records: []).first)
         #expect(saved.metadataRead)
-        #expect(saved.author == "W" && saved.publisher == "P" && saved.metadataTitle == "T")
+        #expect(saved.author == "W, X" && saved.publisher == "P" && saved.metadataTitle == "T")
+        #expect(saved.authors == ["W", "X"])
+        // The file's series wins over the one worked out from the file name.
+        #expect(saved.series == "From File")
 
         book.modified = Date(timeIntervalSince1970: 5_000)
         #expect(try index.apply(scan: [book], records: []).first?.metadataRead == false)

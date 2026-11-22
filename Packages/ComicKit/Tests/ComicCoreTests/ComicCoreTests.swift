@@ -271,20 +271,105 @@ import Testing
           <Pages><Page Image="0" Type="FrontCover"/></Pages>
         </ComicInfo>
         """
-        let info = try #require(FileMetadata.comicInfo(Data(xml.utf8)))
+        let info = try #require(BookData.comicInfo(Data(xml.utf8)))
         #expect(info.title == "The Long Way")
-        #expect(info.author == "Brian K. Vaughan")
+        #expect(info.series == "Saga")
+        #expect(info.writers == ["Brian K. Vaughan"])
+        #expect(info.authors == ["Brian K. Vaughan"])
+        #expect(info.pencillers == ["Fiona Staples"])
         #expect(info.publisher == "Image Comics")
 
         // No writer: the penciller is the author. Empty fields count as missing.
-        let art = try #require(FileMetadata.comicInfo(Data("<ComicInfo><Writer></Writer><Penciller>Kozue Amano</Penciller></ComicInfo>".utf8)))
-        #expect(art.author == "Kozue Amano")
+        let art = try #require(BookData.comicInfo(Data("<ComicInfo><Writer></Writer><Penciller>Kozue Amano</Penciller></ComicInfo>".utf8)))
+        #expect(art.authors == ["Kozue Amano"])
         #expect(art.title == nil && art.publisher == nil)
 
-        #expect(FileMetadata.comicInfo(Data("<html><Title>x</Title></html>".utf8)) == nil)
-        #expect(FileMetadata.comicInfo(Data("not xml".utf8)) == nil)
-        #expect(FileMetadata.isComicInfo(path: "Vol 1/comicinfo.XML"))
-        #expect(!FileMetadata.isComicInfo(path: "__MACOSX/Vol 1/ComicInfo.xml"))
+        #expect(BookData.comicInfo(Data("<html><Title>x</Title></html>".utf8)) == nil)
+        #expect(BookData.comicInfo(Data("not xml".utf8)) == nil)
+        #expect(BookData.isComicInfo(path: "Vol 1/comicinfo.XML"))
+        #expect(!BookData.isComicInfo(path: "__MACOSX/Vol 1/ComicInfo.xml"))
+    }
+
+    @Test func readsEveryComicInfoField() throws {
+        let xml = """
+        <ComicInfo>
+          <Title>Undine</Title><Series>ARIA</Series><Number>007</Number><Volume>7</Volume><Count>12</Count>
+          <Summary>Akari's days in Neo-Venezia.</Summary>
+          <Year>2005</Year><Month>4</Month><Day>10</Day>
+          <Writer>天野こずえ</Writer><Penciller>天野こずえ</Penciller><Inker>A</Inker><Colorist>B, C</Colorist>
+          <Letterer>D</Letterer><CoverArtist>E</CoverArtist><Editor>F</Editor><Translator>G</Translator>
+          <Publisher>マッグガーデン</Publisher><Imprint>Blade Comics</Imprint>
+          <Genre>Slice of Life, Sci-Fi</Genre><Tags>Venice; Gondola</Tags>
+          <LanguageISO>ja</LanguageISO><AgeRating>Everyone</AgeRating><GTIN>9784861272000</GTIN>
+          <Web>https://example.com/aria</Web><Manga>YesAndRightToLeft</Manga>
+        </ComicInfo>
+        """
+        let info = try #require(BookData.comicInfo(Data(xml.utf8)))
+        #expect(info.number == "7" && info.volume == "7" && info.count == 12)
+        #expect(info.summary == "Akari's days in Neo-Venezia.")
+        #expect(info.year == 2005 && info.month == 4 && info.day == 10)
+        #expect(info.colorists == ["B", "C"])
+        #expect(info.coverArtists == ["E"] && info.editors == ["F"] && info.translators == ["G"])
+        #expect(info.imprint == "Blade Comics")
+        #expect(info.genres == ["Slice of Life", "Sci-Fi"])
+        #expect(info.tags == ["Venice", "Gondola"])
+        #expect(info.language == "ja" && info.ageRating == "Everyone" && info.isbn == "9784861272000")
+        #expect(info.web == "https://example.com/aria")
+        #expect(info.rightToLeft == true)
+        #expect(info.creators.first?.role == .writer)
+
+        // ComicRack's "no volume" and "Unknown" rating are no value; plain manga is not right to left.
+        let plain = try #require(BookData.comicInfo(Data("<ComicInfo><Volume>-1</Volume><AgeRating>Unknown</AgeRating><Manga>Yes</Manga></ComicInfo>".utf8)))
+        #expect(plain.volume == nil && plain.ageRating == nil && plain.rightToLeft == nil)
+    }
+
+    @Test func editsWinOverTheFileAndTheFileOverTheName() {
+        var name = BookData()
+        name.series = "ARIA"
+        name.number = "7"
+        name.writers = ["From Name"]
+        var file = BookData()
+        file.series = "ARIA The Masterpiece"
+        file.publisher = "Mag Garden"
+        file.year = 2005
+        file.month = 4
+        var edit = BookData()
+        edit.publisher = "  "
+        edit.writers = []
+        edit.year = 2010
+        let merged = edit.overlaid(on: file.overlaid(on: name))
+        #expect(merged.series == "ARIA The Masterpiece")
+        #expect(merged.number == "7")
+        #expect(merged.writers == ["From Name"])
+        // Blank text and empty lists are no edit.
+        #expect(merged.publisher == "Mag Garden")
+        // A date is taken whole: the edit's year has no month.
+        #expect(merged.year == 2010 && merged.month == nil)
+    }
+
+    @Test func metadataEditsRoundTripAndStayReadableByOlderVersions() throws {
+        var values = BookData()
+        values.series = "ARIA"
+        values.pencillers = ["Kozue Amano"]
+        values.genres = ["Sci-Fi"]
+        values.summary = "Hi"
+        let record = { () -> BookRecord in
+            var r = BookRecord(bookId: "A", file: .init(path: "a.cbz", size: 1, modified: nil))
+            r.metadata = .init(values, updatedAt: Date(timeIntervalSince1970: 1_000))
+            return r
+        }()
+        let data = try RecordCoding.encoder().encode(record)
+        let json = String(decoding: data, as: UTF8.self)
+        // Version 0.1 requires "writers".
+        #expect(json.contains("\"writers\" : ["))
+        let back = try RecordCoding.decoder().decode(BookRecord.self, from: data)
+        #expect(back.metadata?.values == values)
+
+        // A record written before the new fields existed still reads.
+        let old = #"{"schema":1,"bookId":"B","file":{"path":"b.cbz"},"progress":{},"metadata":{"series":"S","writers":[],"updatedAt":"2026-01-01T00:00:00.000Z"}}"#
+        let decoded = try RecordCoding.decoder().decode(BookRecord.self, from: Data(old.utf8))
+        #expect(decoded.metadata?.values.series == "S")
+        #expect(decoded.metadata?.values.writers == nil)
     }
 
     @Test func removedRecordsStayRemovedUntilUsedAgain() throws {
@@ -346,6 +431,66 @@ import Testing
     ])
     func parsesSeriesAndNumber(title: String, series: String, number: String) {
         #expect(SeriesName.parse(title) == .init(series: series, number: number))
+    }
+
+    @Test func readsAuthorsVolumesYearsAndPublishersFromFileNames() {
+        let aria = FileNameReader.read("[天野こずえ] ARIA 第07巻")
+        #expect(aria.writers == ["天野こずえ"] && aria.series == "ARIA" && aria.number == "7")
+
+        let general = FileNameReader.read("(一般コミック) [あずまきよひこ] よつばと! v01")
+        #expect(general.writers == ["あずまきよひこ"] && general.series == "よつばと!" && general.number == "1")
+
+        let pair = FileNameReader.read("[原作 太郎×作画 花子] タイトル 第3巻")
+        #expect(pair.writers == ["原作 太郎", "作画 花子"])
+
+        let complete = FileNameReader.read("ARIA 全12巻 第03巻")
+        #expect(complete.count == 12 && complete.number == "3" && complete.series == "ARIA")
+
+        let western = FileNameReader.read("Saga v03 (2019) (Image Comics)")
+        #expect(western.year == 2019 && western.publisher == "Image Comics" && western.number == "3")
+
+        // A release note after the year is not a publisher.
+        let digital = FileNameReader.read("Saga 001 (2012) (Digital) (Zone-Empire)")
+        #expect(digital.year == 2012 && digital.publisher == nil && digital.series == "Saga")
+
+        // Full-width brackets count too.
+        #expect(FileNameReader.read("［天野こずえ］ ARIA 第０２巻").writers == ["天野こずえ"])
+
+        // A name that is only brackets keeps them as the series.
+        #expect(FileNameReader.read("[Group] [Title]").writers == nil)
+    }
+
+    @Test func theFolderNamesTheSeriesWhenTheFileDoesNot() {
+        let only = FileNameReader.read("第07巻", folder: "Manga/[天野こずえ] ARIA")
+        #expect(only.series == "ARIA" && only.number == "7" && only.writers == ["天野こずえ"])
+        #expect(FileNameReader.read("v02", folder: "Berserk").series == "Berserk")
+        // "1984" is a title, not volume 1984 of the folder's series.
+        #expect(FileNameReader.read("1984", folder: "Orwell").series == "1984")
+    }
+
+    @Test func rulesCanBeTurnedOffAndReordered() throws {
+        var rules = FileNameRules.standard
+        rules.rules = rules.rules.map { rule in
+            var rule = rule
+            if rule.kind == .leadingAuthor { rule.isOn = false }
+            return rule
+        }
+        let off = FileNameReader.read("[天野こずえ] ARIA 第07巻", rules: rules)
+        #expect(off.writers == nil && off.series == "ARIA")
+
+        // The trailing number first: "Vol 2 03" is number 3, not 2.
+        var trailingFirst = FileNameRules.standard
+        let moved = trailingFirst.rules.remove(at: try #require(trailingFirst.rules.firstIndex { $0.kind == .trailingNumber }))
+        trailingFirst.rules.insert(moved, at: 0)
+        #expect(FileNameReader.read("Title Vol 2 03", rules: trailingFirst).number == "3")
+        #expect(FileNameReader.read("Title Vol 2 03").number == "2")
+
+        // Saved rules from an older version get any new kinds, switched on.
+        let saved = #"{"rules":[{"kind":"westernVolume","isOn":false}]}"#
+        let decoded = try JSONDecoder().decode(FileNameRules.self, from: Data(saved.utf8))
+        #expect(decoded.rules.count == FileNameRules.Kind.allCases.count)
+        #expect(decoded.rules.first?.kind == .westernVolume && !decoded.isOn(.westernVolume))
+        #expect(decoded.isOn(.japaneseVolume))
     }
 
     @Test func titlesWithoutANumberAreTheirOwnSeries() {
