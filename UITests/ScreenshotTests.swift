@@ -515,6 +515,23 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.buttons["book-Starfall 2"].firstMatch.waitForExistence(timeout: 10), "The list's books did not show")
         sleep(1)
         save(app, "26b-reading-list")
+
+        // On from the last page of a book in the list: its next book, on a glass card (#83).
+        app.buttons["book-Starfall 1"].firstMatch.tap()
+        XCTAssertTrue(app.otherElements["reader-page"].firstMatch.waitForExistence(timeout: 20), "Reader did not open")
+        sleep(2)
+        let readNext = app.buttons["next-book-read"].firstMatch
+        for _ in 0..<24 where !readNext.exists {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+            usleep(700_000)
+        }
+        XCTAssertTrue(readNext.waitForExistence(timeout: 5), "No next book after the last page")
+        sleep(1)
+        save(app, "26c-reader-next-book")
+        readNext.tap()
+        // The finished book closes and the next one opens on its cover.
+        XCTAssertTrue(app.descendants(matching: .any)["reader-cover-intro"].firstMatch.waitForExistence(timeout: 20),
+                      "Read Now did not open the next book")
     }
 
     /// Each library view keeps its scroll position when the user goes to another view and

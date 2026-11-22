@@ -43,6 +43,16 @@ struct PageViewer: UIViewControllerRepresentable {
             coordinator.turnToCover = turnToCover
             coordinator.showCoverPage(in: controller)
         }
+        let turnToEnd = state.turnToEnd
+        if turnToEnd != coordinator.turnToEnd {
+            coordinator.turnToEnd = turnToEnd
+            coordinator.showEndPage(in: controller)
+        }
+        let backFromEnd = state.backFromEnd
+        if backFromEnd != coordinator.backFromEnd {
+            coordinator.backFromEnd = backFromEnd
+            coordinator.leaveEndPage(in: controller)
+        }
         let look = state.look
         if look != coordinator.look {
             coordinator.look = look
@@ -66,6 +76,8 @@ struct PageViewer: UIViewControllerRepresentable {
         var textRetry = 0
         var look = PageLook()
         var turnToCover = 0
+        var turnToEnd = 0
+        var backFromEnd = 0
         private weak var pageController: UIPageViewController?
         /// Every spread made and still alive (on screen, or kept ready beside it), so a new
         /// look reaches the neighbours too.
@@ -86,6 +98,25 @@ struct PageViewer: UIViewControllerRepresentable {
                 guard let self, let controller, finished else { return }
                 self.coverPageShown(in: controller)
             }
+        }
+
+        /// A tap forward on the last page: the page offering the next book turns in (#83).
+        func showEndPage(in controller: UIPageViewController) {
+            guard let end = state.makeEndPage?() else { return }
+            let direction: UIPageViewController.NavigationDirection = state.rightToLeft ? .reverse : .forward
+            controller.setViewControllers([EndPageController(end)], direction: direction, animated: true) { [weak self] finished in
+                if finished { self?.state.showChrome = false }
+            }
+        }
+
+        /// Not Now on that page: back to the last page.
+        func leaveEndPage(in controller: UIPageViewController) {
+            guard controller.viewControllers?.first is EndPageController, state.spreads.indices.contains(displayedSpread) else { return }
+            let direction: UIPageViewController.NavigationDirection = state.rightToLeft ? .forward : .reverse
+            let page = makeController(displayedSpread)
+            controller.setViewControllers([page], direction: direction, animated: true)
+            followBackground(of: page)
+            becameCurrent(page)
         }
 
         /// The cover page is on screen: the reader's cover takes over (it looks the same, and
@@ -178,8 +209,18 @@ struct PageViewer: UIViewControllerRepresentable {
         }
 
         private func neighbour(of controller: UIViewController, step: Int) -> UIViewController? {
+            // Back from the next-book page is the last page; there is nothing beyond it.
+            if controller is EndPageController {
+                let last = state.spreads.count - 1
+                guard (state.rightToLeft ? -step : step) < 0, state.spreads.indices.contains(last) else { return nil }
+                return makeController(last)
+            }
             guard let current = controller as? SpreadViewController else { return nil }
             let target = current.spreadIndex + (state.rightToLeft ? -step : step)
+            // On from the last page: the next book, when there is one (#83).
+            if target == state.spreads.count, let end = state.makeEndPage?() {
+                return EndPageController(end)
+            }
             // Back from the first page: the cover slides in, like turning back to it in a book.
             if target == -1, let cover = state.makeCoverPage?() {
                 cover.view.accessibilityIdentifier = "reader-cover-page"
@@ -208,6 +249,10 @@ struct PageViewer: UIViewControllerRepresentable {
                 coverPageShown(in: pvc)
                 return
             }
+            if pvc.viewControllers?.first is EndPageController {
+                if state.showChrome { state.showChrome = false }
+                return
+            }
             guard let current = pvc.viewControllers?.first as? SpreadViewController else { return }
             displayedSpread = current.spreadIndex
             state.show(spread: current.spreadIndex)
@@ -232,6 +277,28 @@ final class CoverPageController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        addChild(content)
+        content.view.frame = view.bounds
+        content.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(content.view)
+        content.didMove(toParent: self)
+    }
+}
+
+/// The page after the last one, offering the next book (#83), holding `NextBookPage`.
+final class EndPageController: UIViewController {
+    private let content: UIViewController
+
+    init(_ content: UIViewController) {
+        self.content = content
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.accessibilityIdentifier = "reader-end-page"
         addChild(content)
         content.view.frame = view.bounds
         content.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]

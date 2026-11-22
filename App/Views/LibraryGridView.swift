@@ -233,6 +233,7 @@ struct LibraryGridView: View {
         let subfolders = subfolders
         let listKey = item.storageKey
         let _ = (visible.books = books)
+        let _ = (visible.listName = { if case .readingList = item { return item.title } else { return nil } }())
         ScrollViewReader { proxy in
             ScrollView {
               // Explicit spacing, so the gaps below are exactly what they say.
@@ -324,6 +325,8 @@ struct LibraryGridView: View {
                     // the cells it had already made, and a tap in Select mode opened the book.
                     ForEach(books) { book in
                         BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }) { toggle(book.id) }
+                            // The grid's order, for what the book's last page offers next (#83).
+                            .environment(\.gridOrder, visible)
                             // A reading list keeps a book whose file went missing, dimmed (#83).
                             .opacity(isList && book.isMissing ? 0.4 : 1)
                             .transition(.opacity.combined(with: .scale(scale: 0.85)))
@@ -538,7 +541,14 @@ struct LibraryGridView: View {
 
 /// The books on screen, kept outside SwiftUI's state so scrolling does not redraw the grid.
 @MainActor
+extension EnvironmentValues {
+    /// The grid a book cell is in (#83); nil in the Continue Reading and Up Next rows.
+    @Entry var gridOrder: VisibleBooks?
+}
+
 final class VisibleBooks {
+    /// Set on a reading list's grid, for the reader's "Next in …" (#83).
+    var listName: String?
     /// Visible book ids, in grid order.
     var ids: [String] = []
     /// The book to keep in view during a pinch.
@@ -605,16 +615,25 @@ struct LibraryToolbar: ToolbarContent {
                         .accessibilityIdentifier("library-select")
                 }
                 if showsSort {
-                    Picker("Sort By", selection: $sort) {
-                        ForEach(sortOptions) { Text($0.label(byName: sortsByName)).tag($0) }
-                    }
-                    if let sortAscending {
-                        Picker("Order", selection: sortAscending) {
-                            Text("Ascending").tag(true)
-                            Text("Descending").tag(false)
+                    // Its own submenu, so the many orders don't crowd this menu.
+                    Menu {
+                        Picker("Sort By", selection: $sort) {
+                            ForEach(sortOptions) { Text($0.label(byName: sortsByName)).tag($0) }
                         }
-                        .accessibilityIdentifier("library-sort-direction")
+                        .pickerStyle(.inline)
+                        if let sortAscending {
+                            Picker("Order", selection: sortAscending) {
+                                Text("Ascending").tag(true)
+                                Text("Descending").tag(false)
+                            }
+                            .pickerStyle(.inline)
+                            .accessibilityIdentifier("library-sort-direction")
+                        }
+                    } label: {
+                        Label("Sort By", systemImage: "arrow.up.arrow.down")
+                        Text(sort.label(byName: sortsByName))
                     }
+                    .accessibilityIdentifier("library-sort")
                 }
                 Section("Cover Size (or pinch the grid)") {
                     // The menu stays open, so a few taps step through the sizes (#98).
@@ -934,6 +953,7 @@ struct BookCell: View {
     @Environment(\.libraryIconSize) private var iconSize
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.liftMenu) private var liftMenu
+    @Environment(\.gridOrder) private var gridOrder
     let book: Book
     /// Set in Select mode: whether the book is picked. A tap then picks or unpicks it.
     var isSelected: Bool?
@@ -952,6 +972,8 @@ struct BookCell: View {
             } else if liftMenu?.ignoresTap(on: liftID) == true {
                 // The end of a long press that opened the menu, not a tap.
             } else {
+                // Where it was opened from, so its last page can offer the next book (#83).
+                model.readingContext = gridOrder.map { AppModel.ReadingContext(listName: $0.listName, ids: $0.books.map(\.id)) }
                 Task { await model.activate(book) }
             }
         } label: {
