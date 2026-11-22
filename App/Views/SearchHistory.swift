@@ -123,6 +123,11 @@ final class SearchHistoryPanel {
     fileprivate var remove: (String) -> Void = { _ in }
     /// The top of the on-screen keyboard in window points, or nil when there is none.
     fileprivate var keyboardTop: CGFloat?
+    /// The status bar's height in the box's window.
+    fileprivate var topInset: CGFloat {
+        // The tallest in the scene: the app's own window always has the status bar inset.
+        window?.windowScene?.windows.map(\.safeAreaInsets.top).max() ?? 24
+    }
     /// Where the box is, in window points; touches elsewhere pass through to the app.
     @ObservationIgnored fileprivate var boxFrame: CGRect = .zero
     @ObservationIgnored private var window: PanelWindow?
@@ -188,15 +193,18 @@ final class SearchHistoryPanel {
 private struct SearchHistoryBox: View {
     let panel: SearchHistoryPanel
 
-    /// Below the search field in the toolbar: the status bar plus the toolbar row.
-    private static let belowToolbar: CGFloat = 54
+    /// From the bottom of the status bar to just under the search field in the toolbar, as in
+    /// the placement Zach approved (#109).
+    private static let belowToolbar: CGFloat = 70
     /// Space kept between the box and the top of the keyboard.
     private static let keyboardGap: CGFloat = 24
     private static let rowHeight: CGFloat = 45
 
     var body: some View {
         GeometryReader { proxy in
-            let top = proxy.safeAreaInsets.top + Self.belowToolbar
+            // The window's own inset, not the proxy's: the proxy ignores the safe area, so its
+            // inset is zero and the box sat on top of the search field.
+            let top = panel.topInset + Self.belowToolbar
             let height = proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom
             let bottom = min(height, panel.keyboardTop ?? .infinity) - Self.keyboardGap
             ZStack(alignment: .topTrailing) {
