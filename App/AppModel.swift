@@ -22,6 +22,8 @@ final class AppModel {
     private(set) var catalog = Catalog()
     var thumbnails: [String: URL] = [:]
     var downloading: Set<String> = []
+    /// How far along each download is, 0…1, where it can be told (#83).
+    var downloadProgress: [String: Double] = [:]
     /// Books waiting their turn to download: a download of many books fetches one at a time.
     var queuedDownloads: [String] = []
     @ObservationIgnored private var downloadQueueTask: Task<Void, Never>?
@@ -69,6 +71,18 @@ final class AppModel {
     private(set) var summary = Summary()
     /// The library's synced tag list (`tags.json`), which keeps tags that have no books.
     @ObservationIgnored private var tagList = TagList()
+    /// The library's reading and smart lists (`lists.json`, #82, #83).
+    private(set) var lists = LibraryLists() {
+        didSet {
+            SidebarItem.listNames = Dictionary(lists.lists.values.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+        }
+    }
+    /// The books Add to Reading List… is adding (#83).
+    var listPicker: ListPickerRequest?
+    /// Where the open book was opened from, so its last page can offer what comes next: the
+    /// grid's books in order, and the reading list's name when it is one (#83). Nil for a
+    /// book opened elsewhere (Continue Reading, Resume), which falls back to its series.
+    @ObservationIgnored var readingContext: ReadingContext?
     /// Folders and series pinned to the sidebar on this device, in the order they were pinned
     /// (#72). Saved as `SidebarItem.storageKey`s.
     var pinned: [SidebarItem] = AppModel.loadPinned() {
@@ -107,6 +121,9 @@ final class AppModel {
         /// The letter each book is filed under in the index.
         var indexKey: [String: String] = [:]
         var series: [SeriesGroup] = []
+        /// Books by author and by publisher (#78), "Unknown" last.
+        var authors: [SeriesGroup] = []
+        var publishers: [SeriesGroup] = []
         /// Every folder that holds books, by path. The library folder itself is "".
         var folders: [String: FolderInfo] = [:]
         /// Where each book is in `books`.
@@ -136,7 +153,8 @@ final class AppModel {
         updateSummary()
         defer { updateSearchKeys() }
         let structural = old.count != books.count || zip(old, books).contains { a, b in
-            a.id != b.id || a.title != b.title || a.series != b.series || a.number != b.number || a.isMissing != b.isMissing || a.relativePath != b.relativePath
+            a.id != b.id || a.title != b.title || a.series != b.series || a.number != b.number || a.isMissing != b.isMissing
+                || a.relativePath != b.relativePath || a.author != b.author || a.publisher != b.publisher
         }
         guard structural else { return }
         var catalog = Catalog()
@@ -157,6 +175,8 @@ final class AppModel {
             catalog.indexKey[book.id] = IndexKey.of(book.title)
         }
         catalog.series = SeriesGroup.groups(from: books)
+        catalog.authors = SeriesGroup.groups(from: books) { $0.authors }
+        catalog.publishers = SeriesGroup.groups(from: books) { $0.publisher.map { [$0] } ?? [] }
         catalog.folders = FolderInfo.tree(from: books, titleRank: catalog.titleRank)
         for (i, book) in books.enumerated() { catalog.position[book.id] = i }
         self.catalog = catalog
@@ -189,6 +209,8 @@ final class AppModel {
         }
         for folder in catalog.folders.values { add(folder.name) }
         for group in catalog.series { add(group.name) }
+        for group in catalog.authors { add(group.name) }
+        for group in catalog.publishers { add(group.name) }
         guard !missing.isEmpty else { return }
         searchKeysInProgress.formUnion(missing)
         let strings = Array(missing)
@@ -266,6 +288,23 @@ final class AppModel {
         case remove(String)
         /// Takes every tag off the books ("No Tags"). The tags stay in the library's tag list.
         case clear
+    }
+
+    struct ListPickerRequest: Identifiable {
+        let ids: [String]
+        let id = UUID()
+    }
+
+    struct ReadingContext {
+        var listName: String?
+        var ids: [String]
+    }
+
+    /// What the reader's last page offers (#83).
+    struct NextBook {
+        let book: Book
+        /// "Next in Holiday", "Next in Starfall" or "Up Next".
+        let heading: String
     }
 
     struct DataEditorRequest: Identifiable {
@@ -375,10 +414,11 @@ final class AppModel {
             self.covers = covers
             // The cached book list and the covers already made, read in one go off the main
             // thread, so the library shows with its covers before the rescan finishes.
-            let (cached, thumbs, tagList) = await Task.detached(priority: .userInitiated) {
-                ((try? index.allBooks()) ?? [], covers.existingThumbnails(), store.readTagList())
+            let (cached, thumbs, tagList, lists) = await Task.detached(priority: .userInitiated) {
+                ((try? index.allBooks()) ?? [], covers.existingThumbnails(), store.readTagList(), store.readLists())
             }.value
             self.tagList = tagList
+            self.lists = lists
             self.thumbnails = thumbs
             self.books = cached
             restorePosition()
@@ -417,6 +457,9 @@ final class AppModel {
         case .folder(let path): return catalog.folders[path] != nil
         case .seriesNamed(let name): return catalog.series.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
         case .tag(let name): return summary.tags.contains { $0.id == name.lowercased() }
+        case .author(let name): return catalog.authors.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        case .publisher(let name): return catalog.publishers.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        case .readingList(let id): return lists.list(id) != nil
         case .missing: return summary.counts[.missing] != nil
         default: return true
         }
@@ -500,7 +543,7 @@ final class AppModel {
         let known = thumbnails
         let rules = fileNameRules
         do {
-            let (updated, staleCovers, found, tagList) = try await Task.detached(priority: .userInitiated) { () throws -> ([Book], [String], [String: URL], TagList) in
+            let (updated, staleCovers, found, tagList, lists) = try await Task.detached(priority: .userInitiated) { () throws -> ([Book], [String], [String: URL], TagList, LibraryLists) in
                 let scanned = LibraryScanner.scan(root: libraryURL)
                 let records = store.consolidatedRecords()
                 // Covers edited on another device since this device made its thumbnail.
@@ -517,8 +560,10 @@ final class AppModel {
                 for book in books where known[book.id] == nil {
                     if let thumb = covers?.existingThumbnail(bookId: book.id) { found[book.id] = thumb }
                 }
-                return (books, stale, found, store.readTagList())
+                return (books, stale, found, store.readTagList(), store.readLists())
             }.value
+            // Lists made, changed or deleted on another device.
+            if lists != self.lists { self.lists = lists }
             // Assigning redraws everything that shows books, so only do it when something changed.
             // Tags created, renamed or deleted on another device.
             if tagList != self.tagList {
@@ -559,9 +604,20 @@ final class AppModel {
         // A second tap while it downloads does not start it again.
         guard let url = fileURL(for: book), !downloading.contains(book.id) else { return }
         downloading.insert(book.id)
-        defer { downloading.remove(book.id) }
+        let id = book.id
+        defer {
+            downloading.remove(id)
+            downloadProgress[id] = nil
+        }
         do {
-            try await CloudFiles.download(url)
+            try await CloudFiles.download(url, expectedSize: book.size) { [weak self] fraction in
+                Task { @MainActor in
+                    guard let self, self.downloading.contains(id) else { return }
+                    // Whole percents only, so the reader isn't redrawn on every byte.
+                    let rounded = (fraction * 100).rounded() / 100
+                    if self.downloadProgress[id] != rounded { self.downloadProgress[id] = rounded }
+                }
+            }
             updateBook(book.id) { $0.isDownloaded = true }
             if downloadQueueTask == nil { readFileMetadata() }
         } catch {
@@ -1004,6 +1060,142 @@ final class AppModel {
             flags.updatedAt = Date()
             record.flags = flags
         }
+    }
+
+    // MARK: Ratings
+
+    /// Sets (or with nil, removes) the star rating of one or many books (#84).
+    func setRating(_ ids: Set<String>, _ value: Int?) {
+        let changed = updateBooks(ids) { $0.rating = value }
+        let now = Date()
+        updateRecords(changed) { record, _ in record.rating = .init(value: value, updatedAt: now) }
+    }
+
+    /// The average of a group's rated books, or nil if none is rated.
+    func averageRating(of group: SeriesGroup) -> Double? {
+        let ratings = group.books.compactMap { book(id: $0.id)?.rating }
+        guard !ratings.isEmpty else { return nil }
+        return Double(ratings.reduce(0, +)) / Double(ratings.count)
+    }
+
+    // MARK: Reading lists
+
+    var readingLists: [LibraryLists.Entry] { lists.shown(.reading) }
+
+    /// A reading list's books in the list's order, missing ones included (they show dimmed).
+    func listBooks(_ id: String) -> [Book] {
+        (lists.list(id)?.bookIds ?? []).compactMap { book(id: $0) }
+    }
+
+    /// Makes a reading list, with books in it if given, and returns its id.
+    @discardableResult
+    func newReadingList(named name: String, with bookIds: [String] = []) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let entry = LibraryLists.Entry(name: trimmed, kind: .reading, bookIds: bookIds, position: lists.nextPosition(.reading))
+        changeLists { $0.put(entry) }
+        return entry.id
+    }
+
+    func addToReadingList(_ id: String, bookIds: [String]) {
+        changeLists { $0.add(bookIds, to: id) }
+    }
+
+    /// Replaces a reading list's books, for reordering and removing (#83).
+    func setListBooks(_ id: String, _ bookIds: [String]) {
+        changeLists { lists in
+            guard var entry = lists.list(id) else { return }
+            entry.bookIds = bookIds
+            lists.put(entry)
+        }
+    }
+
+    func renameList(_ id: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        changeLists { lists in
+            guard var entry = lists.list(id) else { return }
+            entry.name = trimmed
+            lists.put(entry)
+        }
+    }
+
+    func moveList(_ id: String, by offset: Int) {
+        changeLists { $0.move(id, by: offset) }
+    }
+
+    func deleteList(_ id: String) {
+        changeLists { $0.delete(id) }
+        setPinned(.readingList(id), false)
+        if selection == .readingList(id) { selection = .all }
+    }
+
+    /// Changes the lists here at once and in the synced `lists.json` in the background.
+    func changeLists(_ change: @escaping @Sendable (inout LibraryLists) -> Void) {
+        var updated = lists
+        change(&updated)
+        lists = updated
+        guard let store else { return }
+        Task.detached(priority: .utility) { _ = try? store.updateLists(change) }
+    }
+
+    /// The book after `bookId` where it was opened from: the next one in that grid or reading
+    /// list, whatever series it is in, else the next volume of its own series (#83).
+    func nextBook(after bookId: String) -> NextBook? {
+        guard let current = book(id: bookId) else { return nil }
+        if let context = readingContext, let at = context.ids.firstIndex(of: bookId) {
+            guard let next = context.ids[(at + 1)...].lazy.compactMap({ self.book(id: $0) })
+                .first(where: { !$0.isMissing && $0.id != bookId }) else { return nil }
+            return NextBook(book: next, heading: heading(for: next, after: current, listName: context.listName))
+        }
+        let key = current.series.lowercased()
+        guard let group = catalog.series.first(where: { $0.name.lowercased() == key }),
+              let at = group.books.firstIndex(where: { $0.id == bookId }),
+              let next = group.books[(at + 1)...].first(where: { !$0.isMissing }) else { return nil }
+        return NextBook(book: next, heading: heading(for: next, after: current, listName: nil))
+    }
+
+    private func heading(for next: Book, after current: Book, listName: String?) -> String {
+        if let listName { return "Next in \(listName)" }
+        if !next.series.isEmpty, next.series.caseInsensitiveCompare(current.series) == .orderedSame {
+            return "Next in \(next.series)"
+        }
+        return "Up Next"
+    }
+
+    /// The book Read Now is waiting on while it downloads; Not Now clears it (#83).
+    @ObservationIgnored private var nextToOpen: String?
+
+    /// Not Now on the last page: a download already started carries on, but the book no
+    /// longer opens by itself when it is in.
+    func cancelNextInReader() {
+        nextToOpen = nil
+    }
+
+    /// Read Now on the reader's last page (#83): opens `book` in the reader in place of the
+    /// finished one, downloading it first if it is only in iCloud. The reader stays open.
+    func readNextInReader(_ book: Book) async {
+        var book = self.book(id: book.id) ?? book
+        nextToOpen = book.id
+        if !book.isDownloaded {
+            if downloading.contains(book.id) || queuedDownloads.contains(book.id) {
+                // Already on its way (asked for earlier, then Not Now): wait for it.
+                while downloading.contains(book.id) || queuedDownloads.contains(book.id) {
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+            } else {
+                await download(book)
+            }
+            guard let fresh = self.book(id: book.id), fresh.isDownloaded else { return }
+            book = fresh
+        }
+        // Not Now while it downloaded, or the reader closed: the download is kept, but the
+        // book waits for Read Now.
+        guard nextToOpen == book.id, openBook != nil else { return }
+        nextToOpen = nil
+        // The finished book's progress goes into the library before the next one takes over.
+        applyReadingProgress()
+        await open(book)
     }
 
     // MARK: Tags

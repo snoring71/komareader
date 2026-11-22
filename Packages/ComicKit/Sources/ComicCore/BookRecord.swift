@@ -27,6 +27,8 @@ public struct BookRecord: Codable, Equatable, Sendable {
     /// Set when the user deletes the book from the library after its file went missing.
     /// See `isRemoved`.
     public var removed: Removed?
+    /// The user's star rating (#84).
+    public var rating: Rating?
 
     public init(bookId: String, file: FileInfo) {
         self.schema = Self.currentSchema
@@ -159,6 +161,17 @@ public struct BookRecord: Codable, Equatable, Sendable {
         }
     }
 
+    /// One to five stars (#84). Removing a rating writes the group with no value, so the
+    /// removal syncs and wins over an older rating.
+    public struct Rating: Codable, Equatable, Sendable {
+        public var value: Int?
+        public var updatedAt: Date
+        public init(value: Int?, updatedAt: Date = Date()) {
+            self.value = value.flatMap { (1...5).contains($0) ? $0 : nil }
+            self.updatedAt = updatedAt
+        }
+    }
+
     /// The book was deleted from the library (only offered once its file is missing).
     public struct Removed: Codable, Equatable, Sendable {
         public var updatedAt: Date
@@ -172,7 +185,7 @@ public struct BookRecord: Codable, Equatable, Sendable {
         let others: [Date?] = [
             metadata?.updatedAt, tags?.updatedAt, cover?.updatedAt, flags?.updatedAt,
             readerSettings?.updatedAt, readerOptions?.updatedAt, latestProgress?.progress.updatedAt,
-            progressReset?.updatedAt, pageBookmarks?.updatedAt,
+            progressReset?.updatedAt, pageBookmarks?.updatedAt, rating?.updatedAt,
         ]
         return others.allSatisfy { ($0 ?? .distantPast) <= removed.updatedAt }
     }
@@ -317,6 +330,7 @@ public extension BookRecord {
         result.progressReset = Self.newer(progressReset, other.progressReset) { $0.updatedAt }
         result.pageBookmarks = Self.newer(pageBookmarks, other.pageBookmarks) { $0.updatedAt }
         result.removed = Self.newer(removed, other.removed) { $0.updatedAt }
+        result.rating = Self.newer(rating, other.rating) { $0.updatedAt }
         if result.file.fingerprint == nil { result.file.fingerprint = other.file.fingerprint }
         for (device, theirs) in other.progress {
             if let mine = result.progress[device], mine.updatedAt >= theirs.updatedAt { continue }

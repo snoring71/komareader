@@ -12,6 +12,7 @@ Comic Reader/
   Libraries/<libraryId>/
     library.json                    which library folder this data belongs to
     tags.json                       the library's tags, kept even with no books
+    lists.json                      reading lists and smart lists
     books/<bookId>.json             one record per book
     covers/<bookId>.jpg             default cover (first page, about 1200 px tall)
     covers/<bookId>.custom.jpg      cover edited by the user, if any
@@ -39,6 +40,25 @@ user deletes it. The library's tags are the entries not marked `deleted`, plus a
 book's record has. A deleted tag keeps its entry so an older copy cannot bring it back.
 Renaming writes a deleted entry for the old name and a new entry for the new one. Merge two
 copies tag by tag, keeping whichever entry has the later `updatedAt`.
+
+## lists.json
+
+```json
+{
+  "schema": 1,
+  "lists": {
+    "UUID": { "id": "UUID", "name": "Crossover order", "kind": "reading", "bookIds": ["UUID", "UUID"],
+              "position": 1, "deleted": false, "updatedAt": "..." }
+  }
+}
+```
+
+Lists the user makes. A `reading` list holds `bookIds` in the user's order; books whose file
+went missing stay in it. A `smart` list holds a `filter` instead, plus an optional `sort`,
+`ascending` and `limit` (see the app's filter format below). `position` orders lists in the
+sidebar, lowest first. Lists are keyed by `id` and merged one at a time: newest `updatedAt`
+wins. A deleted list keeps its entry with `"deleted": true`, so an older copy on another
+device does not bring it back.
 
 ## books/<bookId>.json
 
@@ -89,6 +109,8 @@ copies tag by tag, keeping whichever entry has the later `updatedAt`.
   show what the file's ComicInfo.xml says, else what the file name says. Comic files are never
   changed. Apps ignore keys they do not know, so new fields keep `schema` at 1.
 - `flags` holds the user's Favorite and Bookmarked marks.
+- `rating` (`{ "value": 4, "updatedAt": "..." }`) is the user's star rating, 1 to 5. Removing a
+  rating writes the group with no `value`, so the removal wins over an older rating.
 - `tags` holds the user's own tags for the book, in the user's spelling. Tags are matched
   ignoring case, and a book lists each tag once. Renaming or deleting a tag rewrites `tags`
   on every book that has it, and updates `tags.json`.

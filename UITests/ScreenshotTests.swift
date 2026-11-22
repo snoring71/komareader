@@ -451,6 +451,108 @@ final class ScreenshotTests: XCTestCase {
         save(app, "24-library-after-select")
     }
 
+    /// Authors from the demo's ComicInfo.xml (#78), a star rating (#84) and a new reading
+    /// list from Select mode (#83).
+    func testAuthorsRatingsAndLists() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.launch()
+        XCUIDevice.shared.orientation = .landscapeLeft
+
+        let book = app.buttons["book-Starfall 2"].firstMatch
+        XCTAssertTrue(book.waitForExistence(timeout: 90), "Demo library did not appear")
+        // The files' metadata is read in the background and shown a few seconds later.
+        sleep(10)
+
+        openSidebar(app)
+        let authorsRow = app.descendants(matching: .any)["sidebar-Authors"].firstMatch
+        XCTAssertTrue(authorsRow.waitForExistence(timeout: 5), "No Authors in the sidebar")
+        let label = app.staticTexts["Authors"].firstMatch
+        (label.isHittable ? label : authorsRow).tap()
+        let author = app.buttons["author-Mira Okada"].firstMatch
+        XCTAssertTrue(author.waitForExistence(timeout: 20), "The demo's author is not listed")
+        sleep(1)
+        save(app, "25-authors")
+        author.tap()
+        XCTAssertTrue(app.buttons["book-Starfall 1"].firstMatch.waitForExistence(timeout: 10), "The author's books did not show")
+        sleep(1)
+        save(app, "25b-author-books")
+
+        // Rate two books and add them to a new reading list, from Select mode.
+        app.buttons["library-options"].firstMatch.tap()
+        let select = app.buttons["library-select"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 5), "No Select in the options menu")
+        select.tap()
+        let done = app.buttons["selection-done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "Select mode did not start")
+        app.buttons["book-Starfall 1"].firstMatch.tap()
+        app.buttons["book-Starfall 2"].firstMatch.tap()
+        let actions = app.buttons["selection-actions"].firstMatch
+        actions.tap()
+        let addToList = app.buttons["selection-add-to-list"].firstMatch
+        XCTAssertTrue(addToList.waitForExistence(timeout: 5), "No Add to Reading List… in the Actions menu")
+        addToList.tap()
+        let newList = app.buttons["list-new"].firstMatch
+        XCTAssertTrue(newList.waitForExistence(timeout: 5), "The reading list picker did not open")
+        newList.tap()
+        // An alert's text field does not always carry its identifier, so find it in the alert.
+        let alert = app.alerts["New Reading List"].firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "No New Reading List alert")
+        let name = alert.textFields.firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "No name field for the new list")
+        name.tap()
+        name.typeText("Holiday")
+        alert.buttons["Create"].firstMatch.tap()
+        XCTAssertTrue(newList.waitForNonExistence(timeout: 5), "The picker did not close")
+        if done.exists { done.tap() }
+
+        openSidebar(app)
+        XCTAssertTrue(app.descendants(matching: .any)["sidebar-Holiday"].firstMatch.waitForExistence(timeout: 5),
+                      "The new reading list is not in the sidebar")
+        save(app, "26-sidebar-reading-list")
+        let listLabel = app.staticTexts["Holiday"].firstMatch
+        if listLabel.isHittable { listLabel.tap() } else { app.descendants(matching: .any)["sidebar-Holiday"].firstMatch.tap() }
+        XCTAssertTrue(app.buttons["book-Starfall 2"].firstMatch.waitForExistence(timeout: 10), "The list's books did not show")
+        sleep(1)
+        save(app, "26b-reading-list")
+    }
+
+    /// On from a book's last page: the next book where it was opened from, on a glass card,
+    /// and Read Now opens it in the reader (#83). Named to run last: it reads a book, and the
+    /// reading position outlives the app (other tests need Starfall 1 unread).
+    func testZNextBookPage() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.launch()
+        let first = app.buttons["book-Starfall 1"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 90), "Demo library did not appear")
+        sleep(3)
+        first.tap()
+        XCTAssertTrue(app.otherElements["reader-page"].firstMatch.waitForExistence(timeout: 20), "Reader did not open")
+        sleep(2)
+        let readNext = app.buttons["next-book-read"].firstMatch
+        for _ in 0..<24 where !readNext.exists {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+            usleep(700_000)
+        }
+        XCTAssertTrue(readNext.waitForExistence(timeout: 5), "No next book after the last page")
+        sleep(1)
+        save(app, "26c-reader-next-book")
+        // It fits a landscape screen too.
+        XCUIDevice.shared.orientation = .landscapeLeft
+        sleep(2)
+        save(app, "26d-reader-next-book-landscape")
+        XCTAssertTrue(readNext.isHittable, "Read Now is off screen in landscape")
+        XCUIDevice.shared.orientation = .portrait
+        sleep(2)
+        readNext.tap()
+        // The next book opens in the reader, which stays open.
+        XCTAssertTrue(readNext.waitForNonExistence(timeout: 20), "Read Now did not open the next book")
+        XCTAssertTrue(app.otherElements["reader-page"].firstMatch.waitForExistence(timeout: 20), "The reader closed")
+        sleep(1)
+        save(app, "26e-reader-next-book-opened")
+    }
+
     /// Each library view keeps its scroll position when the user goes to another view and
     /// back (#105).
     func testScrollPositionIsKept() throws {

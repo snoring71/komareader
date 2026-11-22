@@ -19,7 +19,10 @@ public enum CloudFiles {
     }
 
     /// Starts the download if needed and waits until the file is on the device.
-    public static func download(_ url: URL, timeout: TimeInterval = 600) async throws {
+    /// `progress` is told how far along it is (0…1) when that can be seen: from the space
+    /// the file takes on the device against `expectedSize`.
+    public static func download(_ url: URL, expectedSize: Int64? = nil, timeout: TimeInterval = 600,
+                                progress: (@Sendable (Double) -> Void)? = nil) async throws {
         if isDownloaded(url) { return }
         try startDownload(url)
         let deadline = Date().addingTimeInterval(timeout)
@@ -28,8 +31,12 @@ public enum CloudFiles {
             if Date() > deadline { throw CocoaError(.ubiquitousFileUnavailable) }
             var check = url
             check.removeAllCachedResourceValues()
-            if let error = (try? check.resourceValues(forKeys: [.ubiquitousItemDownloadingErrorKey]))?.ubiquitousItemDownloadingError {
+            let values = try? check.resourceValues(forKeys: [.ubiquitousItemDownloadingErrorKey, .totalFileAllocatedSizeKey])
+            if let error = values?.ubiquitousItemDownloadingError {
                 throw error
+            }
+            if let progress, let expectedSize, expectedSize > 0, let allocated = values?.totalFileAllocatedSize, allocated > 0 {
+                progress(min(0.99, Double(allocated) / Double(expectedSize)))
             }
             try await Task.sleep(for: .milliseconds(400))
         }
