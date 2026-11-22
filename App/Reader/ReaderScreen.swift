@@ -79,6 +79,11 @@ struct ReaderScreen: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                         .zIndex(5)
                 }
+                if state.comparing {
+                    CompareView(state: state)
+                        .transition(.opacity)
+                        .zIndex(6)
+                }
                 if let handOff {
                     handOffBanner(handOff)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -96,6 +101,7 @@ struct ReaderScreen: View {
         .animation(.easeInOut(duration: 0.25), value: handOff)
         .animation(.easeInOut(duration: 0.25), value: askingRestart)
         .animation(.easeInOut(duration: 0.2), value: state.selectingText)
+        .animation(.easeInOut(duration: 0.2), value: state.comparing)
         .animation(.easeInOut(duration: 0.2), value: state.textStatus)
         .sheet(isPresented: $showInfo) {
             BookInfoView(bookId: state.book.id, source: state.source)

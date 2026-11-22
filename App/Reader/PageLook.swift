@@ -255,7 +255,11 @@ enum PageFilter {
             output = larger
             extent = larger.extent
         }
-        let unit = max(extent.width, extent.height) / 2400
+        // How big the art is, for filters that work on detail (sharpening, descreen): from the
+        // page's height, since an image holding two pages is twice as wide but its art is no
+        // bigger. Measured from the longest side, a two-page spread was blurred and sharpened
+        // far harder than a single page.
+        let detail = min(max(extent.height / 2400, 0.5), 3)
 
         // A quick look at the page, when a fix depends on it.
         let needsStats = adjustments.autoFix || (adjustments.keepColor && adjustments.drainsColor)
@@ -263,7 +267,7 @@ enum PageFilter {
         let spareColor = adjustments.keepColor && stats?.isColor == true
 
         if adjustments.descreen >= 0.005 {
-            output = descreen(output, amount: adjustments.descreen, unit: unit)
+            output = descreen(output, amount: adjustments.descreen, unit: detail)
         }
         if adjustments.autoFix, let stats {
             output = autoLevels(output, stats: stats, keepTint: spareColor)
@@ -295,7 +299,7 @@ enum PageFilter {
             let filter = CIFilter.sharpenLuminance()
             filter.inputImage = output
             filter.sharpness = Float(adjustments.sharpness * 1.5)
-            filter.radius = 1.6
+            filter.radius = Float(1.6 * detail)
             if let result = filter.outputImage { output = result }
         }
         if adjustments.tint >= 0.005 {
@@ -366,17 +370,17 @@ enum PageFilter {
         let extent = image.extent
         let a = min(max(amount, 0), 1)
         let blurred = image.clampedToExtent()
-            .applyingGaussianBlur(sigma: Double(max(unit, 0.5)) * (0.5 + 1.3 * a))
+            .applyingGaussianBlur(sigma: Double(unit) * (0.3 + 0.9 * a))
             .cropped(to: extent)
         let noise = CIFilter.noiseReduction()
         noise.inputImage = blurred
-        noise.noiseLevel = Float(0.01 + 0.03 * a)
+        noise.noiseLevel = Float(0.005 + 0.02 * a)
         noise.sharpness = Float(0.6 + 0.8 * a)
         let smooth = noise.outputImage?.cropped(to: extent) ?? blurred
         let sharpen = CIFilter.unsharpMask()
         sharpen.inputImage = smooth
-        sharpen.radius = Float(max(unit, 0.5) * 2.5)
-        sharpen.intensity = Float(0.4 + 0.5 * a)
+        sharpen.radius = Float(unit * 2)
+        sharpen.intensity = Float(0.3 + 0.4 * a)
         return sharpen.outputImage?.cropped(to: extent) ?? smooth
     }
 
