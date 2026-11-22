@@ -9,6 +9,8 @@ import UIKit
 struct NextBookPage: View {
     @Environment(AppModel.self) private var model
     let next: AppModel.NextBook
+    /// The book just finished, to rate here (#129).
+    var finishedId: String?
     let coverURL: URL?
     let coverRevision: Int
     let onBack: () -> Void
@@ -25,6 +27,13 @@ struct NextBookPage: View {
                 background(size: geo.size)
                 card(coverWidth: coverWidth, landscape: landscape)
                     .padding(32)
+                if let finishedId, let finished = model.book(id: finishedId) {
+                    VStack {
+                        ratingBar(for: finished)
+                            .padding(.top, landscape ? 20 : 48)
+                        Spacer()
+                    }
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
@@ -57,6 +66,23 @@ struct NextBookPage: View {
         .padding(.horizontal, 36)
         .padding(.vertical, 30)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+    }
+
+    /// Rate the book just finished, in passing (#129). Tapping the same star again removes it.
+    private func ratingBar(for book: Book) -> some View {
+        HStack(spacing: 14) {
+            Text("Rate \(book.title)")
+                .font(.subheadline.weight(.medium))
+                .lineLimit(1)
+                .frame(maxWidth: 320, alignment: .leading)
+            StarRating(value: book.rating, size: 20) { value in
+                model.setRating([book.id], value)
+            }
+            .accessibilityIdentifier("next-book-rating")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .glassEffect(.regular, in: .capsule)
     }
 
     private var heading: some View {
