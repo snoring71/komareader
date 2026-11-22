@@ -23,6 +23,7 @@ struct SidebarView: View {
                     SidebarSection(nil) {
                         row(.all, count: counts[.all])
                         row(.continueReading, count: counts[.continueReading])
+                        row(.upNext, count: counts[.upNext])
                         row(.series, count: model.catalog.series.count)
                         // Less the "Unknown" group, which is not a name (#78).
                         row(.authors, count: model.catalog.authors.filter { !$0.name.isEmpty }.count)
@@ -75,6 +76,45 @@ struct SidebarView: View {
                             }
                         }
                     }
+                    let smart = model.smartLists
+                    SidebarSection("Smart Lists") {
+                        ForEach(Array(smart.enumerated()), id: \.element.id) { offset, list in
+                            let item = SidebarItem.smartList(list.id)
+                            row(item, count: model.smartCounts[list.id])
+                                .contextMenu {
+                                    Button("Edit…", systemImage: "pencil") {
+                                        model.smartEditor = .init(listId: list.id, filter: list.filter ?? LibraryFilter())
+                                    }
+                                    if offset > 0 {
+                                        Button("Move Up", systemImage: "arrow.up") { model.moveList(list.id, by: -1) }
+                                    }
+                                    if offset < smart.count - 1 {
+                                        Button("Move Down", systemImage: "arrow.down") { model.moveList(list.id, by: 1) }
+                                    }
+                                    let pinned = model.isPinned(item)
+                                    Button(pinned ? "Unpin from Sidebar" : "Pin to Sidebar", systemImage: pinned ? "pin.slash" : "pin") {
+                                        model.setPinned(item, !pinned)
+                                    }
+                                    Button("Delete List", systemImage: "trash", role: .destructive) { deletingList = list.id }
+                                }
+                        }
+                        Button {
+                            model.smartEditor = .init(listId: nil, filter: LibraryFilter(rules: [.init(.status, .isAnyOf, ["unread"])]))
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "plus").frame(width: 22)
+                                Text("New Smart List…")
+                                Spacer(minLength: 0)
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(Color.secondary)
+                            .padding(.horizontal, 18)
+                            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("sidebar-new-smart-list")
+                    }
                     if !model.summary.tags.isEmpty {
                         SidebarSection("Tags") {
                             ForEach(model.summary.tags) { tag in
@@ -106,7 +146,7 @@ struct SidebarView: View {
             Button("Cancel", role: .cancel) {}
             Button("Rename") { if let id = renamingList { model.renameList(id, to: newName) } }
         }
-        .confirmationDialog(deletingList.map { "Delete the reading list “\(SidebarItem.readingList($0).title)”?" } ?? "",
+        .confirmationDialog(deletingList.map { "Delete the list “\(SidebarItem.readingList($0).title)”?" } ?? "",
                             isPresented: Binding(get: { deletingList != nil }, set: { if !$0 { deletingList = nil } }), titleVisibility: .visible) {
             Button("Delete List", role: .destructive) { if let id = deletingList { model.deleteList(id) } }
         } message: {
@@ -130,6 +170,7 @@ struct SidebarView: View {
         case .publisher(let name):
             return model.catalog.publishers.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.books.count
         case .readingList(let id): return model.lists.list(id)?.bookIds?.count
+        case .smartList(let id): return model.smartCounts[id]
         default: return nil
         }
     }

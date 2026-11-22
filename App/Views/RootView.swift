@@ -83,6 +83,10 @@ struct RootView: View {
         .sheet(item: $model.tagEditor) { request in
             TagEditorView(bookIds: request.ids)
         }
+        .sheet(item: $model.smartEditor) { request in
+            SmartListEditor(listId: request.listId, initial: request.filter)
+                .toggleStyle(MonoToggleStyle())
+        }
         .sheet(item: $model.listPicker) { request in
             ReadingListPicker(bookIds: request.ids)
         }

@@ -370,3 +370,41 @@ import Testing
         #expect(try index.apply(scan: [scanned], records: []).count == 1)
     }
 }
+
+@Suite struct FilterMatchingTests {
+    func book(_ title: String) throws -> Book {
+        let index = try LibraryIndex()
+        let scanned = ScannedBook(url: URL(fileURLWithPath: "/lib/\(title).cbz"), relativePath: "\(title).cbz", format: .zip, size: 10, modified: nil, isDownloaded: true)
+        return try #require(try index.apply(scan: [scanned], records: []).first)
+    }
+
+    @Test func rulesMatchBooks() throws {
+        var aria = try book("[天野こずえ] ARIA 第07巻")
+        aria.rating = 4
+        aria.tags = ["To Read"]
+        aria.favorite = true
+        let now = Date()
+        func passes(_ rule: LibraryFilter.Rule) -> Bool { rule.matches(aria, now: now) }
+        #expect(passes(.init(.author, .contains, ["こずえ"])))
+        // Katakana and hiragana count as the same.
+        #expect(passes(.init(.author, .contains, ["コズエ"])))
+        #expect(passes(.init(.series, .is, ["aria"])))
+        #expect(!passes(.init(.series, .isNot, ["ARIA"])))
+        #expect(passes(.init(.tag, .isAnyOf, ["to read", "other"])))
+        #expect(!passes(.init(.tag, .isAllOf, ["to read", "other"])))
+        #expect(passes(.init(.status, .isAnyOf, ["unread"])))
+        #expect(passes(.init(.favorite, .isTrue)))
+        #expect(passes(.init(.rating, .between, ["3", "5"])))
+        #expect(!passes(.init(.rating, .atMost, ["0"])))
+        #expect(passes(.init(.added, .inLast, ["1"])))
+        #expect(passes(.init(.lastRead, .isNotSet)))
+        #expect(passes(.init(.format, .isAnyOf, ["zip"])))
+
+        let any = LibraryFilter(match: .any, rules: [.init(.favorite, .isFalse), .init(.rating, .atLeast, ["4"])])
+        #expect(any.matches(aria, matchesText: { _ in true }))
+        let all = LibraryFilter(match: .all, rules: [.init(.favorite, .isFalse), .init(.rating, .atLeast, ["4"])])
+        #expect(!all.matches(aria, matchesText: { _ in true }))
+        // Plain words are the caller's to match.
+        #expect(!LibraryFilter(text: "zzz").matches(aria, matchesText: { _ in false }))
+    }
+}

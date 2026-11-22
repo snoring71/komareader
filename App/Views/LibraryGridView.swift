@@ -25,6 +25,9 @@ struct LibraryGridView: View {
     @State private var confirmDeleteAll = false
     @State private var selectionConfirm: SelectionConfirm?
     @State private var reordering = false
+    /// The filter bar's filter (#80): kept while the app runs, cleared with another sidebar row.
+    @State private var filter = LibraryFilter()
+    @State private var showFilter = false
     @Environment(\.coverInfo) private var coverInfo
     /// The first book on screen and whether the grid is scrolled down, so turning Cover Info
     /// on or off (which changes the height of every cell) keeps the same books in view.
@@ -99,18 +102,18 @@ struct LibraryGridView: View {
     private var size: Double { pinchSize ?? coverSize }
 
     private var visibleBooks: [Book] {
-        let search = appliedSearch
+        // A typed search may hold field prefixes (#81); it and the filter bar are one filter.
+        let active = filter.combined(with: LibraryFilter.parse(appliedSearch))
         var books = baseBooks
-        if !search.isEmpty {
+        if !active.isEmpty {
             // Kana, kanji and romaji all find Japanese titles (#106).
-            let query = SearchQuery(search)
-            let model = model
             _ = model.searchKeysRevision
-            books = books.filter { book in
-                query.matches(model.searchKey(book.title)) || query.matches(model.searchKey(book.folder))
-                    || query.matches(model.searchKey(book.series)) || book.tags.contains { query.matches(model.searchKey($0)) }
-            }
+            let now = Date()
+            let text = model.textMatcher(active.text)
+            books = books.filter { active.matches($0, now: now, matchesText: text) }
         }
+        if item == .upNext { return books }
+        if case .smartList(let id) = item, model.lists.list(id)?.sort != nil { return books }
         if case .seriesNamed = item {
             return books.sorted(by: SeriesGroup.readingOrder)
         }
@@ -124,8 +127,12 @@ struct LibraryGridView: View {
     /// The books in this list before search and sorting. A reading list keeps its own order
     /// and its missing books (#83).
     private var baseBooks: [Book] {
-        if case .readingList(let id) = item { return model.listBooks(id) }
-        return model.books.filter(item.includes)
+        switch item {
+        case .readingList(let id): return model.listBooks(id)
+        case .smartList(let id): return model.smartListBooks(id, fallback: (sort, ascending))
+        case .upNext: return model.upNext.compactMap { model.book(id: $0) }
+        default: return model.books.filter(item.includes)
+        }
     }
 
     /// Books in a sort order (#79). Books without the value sorted by go last either way, in
@@ -218,7 +225,11 @@ struct LibraryGridView: View {
     var body: some View {
         let books = visibleBooks
         let letters = letterAnchors(books)
-        let continueReading = item == .all && search.isEmpty ? continueReading : []
+        let continueReading = item == .all && search.isEmpty && filter.isEmpty ? continueReading : []
+        // The next unread volume of each series in progress; ones part-way through are
+        // already in Continue Reading (#85).
+        let upNext = item == .all && search.isEmpty && filter.isEmpty
+            ? model.upNext.compactMap { model.book(id: $0) }.filter { $0.status == .unread } : []
         let subfolders = subfolders
         let listKey = item.storageKey
         let _ = (visible.books = books)
@@ -261,6 +272,30 @@ struct LibraryGridView: View {
                     }
                     .padding(.top, 8)
 
+                }
+                if !upNext.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Up Next").font(.title3.bold())
+                            .padding(.horizontal)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 16) {
+                                ForEach(upNext.prefix(12)) { book in
+                                    BookCell(book: book, isSelected: selection.map { $0.contains(book.id) }, place: "upnext") { toggle(book.id) }
+                                        .frame(width: size)
+                                        .environment(\.coverInfo, CoverInfo())
+                                        .id("upnext-\(book.id)")
+                                }
+                            }
+                            .padding(.bottom, 14)
+                        }
+                        .contentMargins(.leading, 16, for: .scrollContent)
+                        .contentMargins(.trailing, letters == nil ? 16 : EdgeFade.trailingRoom, for: .scrollContent)
+                        .scrollClipDisabled()
+                        .modifier(EdgeFade(isOn: letters != nil))
+                    }
+                    .padding(.top, continueReading.isEmpty ? 8 : 18)
+                }
+                if !continueReading.isEmpty || !upNext.isEmpty {
                     // Where the full list starts (#58). Plain views above the grid, not a
                     // section in it, so the grid stays one flat run of equal cells.
                     VStack(alignment: .leading, spacing: 0) {
@@ -302,7 +337,7 @@ struct LibraryGridView: View {
                 .padding(.horizontal)
                 .padding(.bottom)
                 // Under the All Books heading, the same 10 pt gap as under Continue Reading's.
-                .padding(.top, continueReading.isEmpty ? 16 : 10)
+                .padding(.top, continueReading.isEmpty && upNext.isEmpty ? 16 : 10)
                 .padding(.trailing, letters == nil ? 0 : 14) // room for the letter index
               }
               // Long-press menus for every tile on the page, Continue Reading included (#71).
@@ -365,7 +400,18 @@ struct LibraryGridView: View {
             }
         }
         .navigationTitle(selectionTitle ?? item.title)
+        // The active filters as chips (#80), and typed field searches (#81).
+        .safeAreaInset(edge: .top, spacing: 0) {
+            let typed = LibraryFilter.parse(appliedSearch)
+            if !filter.isEmpty || !typed.isEmpty {
+                FilterChips(filter: $filter, typed: typed) {
+                    model.smartEditor = .init(listId: nil, filter: filter.combined(with: typed))
+                }
+                .background(.bar)
+            }
+        }
         .searchable(text: $search, prompt: "Search books")
+        .searchSuggestions { SearchFieldSuggestions(search: $search) }
         .task(id: search) {
             // Filtering thousands of books on every keystroke makes typing lag, so wait for a pause.
             if !search.isEmpty, (try? await Task.sleep(for: .milliseconds(200))) == nil { return }
@@ -381,6 +427,15 @@ struct LibraryGridView: View {
                                    set: { sortDirection = $0 == sort.ascendingByDefault ? "" : ($0 ? "asc" : "desc") }),
                                showTitles: $showTitles) {
                     selection = []
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showFilter = true
+                    } label: {
+                        Label("Filter", systemImage: filter.isEmpty ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                    }
+                    .accessibilityIdentifier("library-filter")
+                    .popover(isPresented: $showFilter) { FilterPanel(filter: $filter) }
                 }
                 if case .readingList = item, !books.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
@@ -454,7 +509,9 @@ struct LibraryGridView: View {
     /// Series list in volume order and Continue Reading by last read, so no sort menu.
     private var showsSort: Bool {
         if case .seriesNamed = item { return false }
-        return item != .continueReading
+        // A smart list with its own sort keeps it (#82).
+        if case .smartList(let id) = item, model.lists.list(id)?.sort != nil { return false }
+        return item != .continueReading && item != .upNext
     }
 
     private var pinchGesture: some Gesture {
@@ -1010,6 +1067,10 @@ enum BookMenu {
             reading.append(Item.action("Mark as Unread", "circle") { model.setFinished(book, false) })
         }
         reading.append(directionMenu(book, model: model))
+        // Hides the series from Up Next until a volume of it is read again (#85).
+        if model.upNext.contains(book.id) {
+            reading.append(Item.action("Not Interested", "hand.thumbsdown") { model.hideFromUpNext(series: book.series) })
+        }
         let file: UIMenuElement
         if book.isDownloaded {
             file = Item.action("Remove from iPad", "icloud.and.arrow.up") { model.removeDownload(book) }

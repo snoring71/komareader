@@ -58,7 +58,14 @@ copies tag by tag, keeping whichever entry has the later `updatedAt`.
 
 Lists the user makes. A `reading` list holds `bookIds` in the user's order; books whose file
 went missing stay in it. A `smart` list holds a `filter` instead, plus an optional `sort`,
-`ascending` and `limit` (see the app's filter format below). `position` orders lists in the
+`ascending` and `limit`. A `filter` is `{ "match": "all" | "any", "rules": [...], "text": "words" }`;
+each rule is `{ "id": "...", "field": "status", "op": "isAnyOf", "values": ["unread"] }`. Fields:
+`title`, `series`, `author`, `publisher`, `folder`, `language` (text: `contains`, `is`, `isNot`,
+`beginsWith`); `tag`, `genre` (`isAnyOf`, `isAllOf`, `isNoneOf`); `format`, `status` (`isAnyOf`,
+`isNoneOf`); `favorite`, `bookmarked`, `downloaded` (`isTrue`, `isFalse`); `year`, `rating`,
+`pages` (`atLeast`, `atMost`, `between`, `is`); `added`, `lastRead`, `finished` (`inLast` or
+`notInLast` N days, `isSet`, `isNotSet`). Text compares ignoring case, width and kana type.
+An app may skip rules it does not know. `position` orders lists in the
 sidebar, lowest first. Lists are keyed by `id` and merged one at a time: newest `updatedAt`
 wins. A deleted list keeps its entry with `"deleted": true`, so an older copy on another
 device does not bring it back.

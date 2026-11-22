@@ -15,6 +15,10 @@ enum SidebarItem: Hashable {
     case publisher(String)
     /// A reading list, by its id (#83).
     case readingList(String)
+    /// A smart list, by its id (#82).
+    case smartList(String)
+    /// The next volume of each series in progress (#85).
+    case upNext
 
     /// Reading list names by id, kept up to date by the model, so a list's row and title can
     /// show its current name while the item itself (and pins of it) keep only the id.
@@ -29,6 +33,7 @@ enum SidebarItem: Hashable {
         case .author(let name): return "author:" + name
         case .publisher(let name): return "publisher:" + name
         case .readingList(let id): return "list:" + id
+        case .smartList(let id): return "smart:" + id
         default: return "\(self)"
         }
     }
@@ -46,6 +51,8 @@ enum SidebarItem: Hashable {
             self = .publisher(String(key.dropFirst("publisher:".count)))
         } else if key.hasPrefix("list:") {
             self = .readingList(String(key.dropFirst("list:".count)))
+        } else if key.hasPrefix("smart:") {
+            self = .smartList(String(key.dropFirst("smart:".count)))
         } else if let item = Self.plain.first(where: { "\($0)" == key }) {
             self = item
         } else {
@@ -56,12 +63,12 @@ enum SidebarItem: Hashable {
     /// Folders and series can be pinned to the sidebar (#72).
     var isPinnable: Bool {
         switch self {
-        case .folder, .seriesNamed, .author, .publisher, .readingList: return true
+        case .folder, .seriesNamed, .author, .publisher, .readingList, .smartList: return true
         default: return false
         }
     }
 
-    private static let plain: [SidebarItem] = [.all, .continueReading, .series, .folders, .downloaded, .unread, .reading, .read, .favorites, .bookmarked, .missing, .authors, .publishers]
+    private static let plain: [SidebarItem] = [.all, .continueReading, .series, .folders, .downloaded, .unread, .reading, .read, .favorites, .bookmarked, .missing, .authors, .publishers, .upNext]
 
     var title: String {
         switch self {
@@ -84,6 +91,8 @@ enum SidebarItem: Hashable {
         case .author(let name): return name.isEmpty ? "Unknown Author" : name
         case .publisher(let name): return name.isEmpty ? "Unknown Publisher" : name
         case .readingList(let id): return Self.listNames[id] ?? "Reading List"
+        case .smartList(let id): return Self.listNames[id] ?? "Smart List"
+        case .upNext: return "Up Next"
         }
     }
 
@@ -106,6 +115,8 @@ enum SidebarItem: Hashable {
         case .authors, .author: return "person.2"
         case .publishers, .publisher: return "building.columns"
         case .readingList: return "list.number"
+        case .smartList: return "line.3.horizontal.decrease.circle"
+        case .upNext: return "forward.end"
         }
     }
 
@@ -131,8 +142,8 @@ enum SidebarItem: Hashable {
         case .publisher(let name):
             guard !book.isMissing else { return false }
             return name.isEmpty ? book.publisher == nil : book.publisher?.caseInsensitiveCompare(name) == .orderedSame
-        // A reading list's books come from the list itself (`AppModel.listBooks`).
-        case .readingList: return false
+        // These lists' books come from the model (`listBooks`, `smartListBooks`, `upNext`).
+        case .readingList, .smartList, .upNext: return false
         }
     }
 }
