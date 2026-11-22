@@ -75,6 +75,7 @@ final class AppModel {
     private(set) var lists = LibraryLists() {
         didSet {
             SidebarItem.listNames = Dictionary(lists.lists.values.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+            if lists.shown(.smart) != oldValue.shown(.smart) { updateSmartCountsSoon() }
         }
     }
     /// The books Add to Reading List… is adding (#83).
@@ -83,6 +84,13 @@ final class AppModel {
     /// grid's books in order, and the reading list's name when it is one (#83). Nil for a
     /// book opened elsewhere (Continue Reading, Resume), which falls back to its series.
     @ObservationIgnored var readingContext: ReadingContext?
+    /// The smart list editor (#82): a new list from the filter bar or a search, or an existing one.
+    var smartEditor: SmartEditorRequest?
+    /// How many books each smart list holds, worked out off the main thread (#82).
+    private(set) var smartCounts: [String: Int] = [:]
+    @ObservationIgnored private var smartCountTask: Task<Void, Never>?
+    /// For every series in progress, its next volume to read, by when the series was last read (#85).
+    private(set) var upNext: [String] = []
     /// Folders and series pinned to the sidebar on this device, in the order they were pinned
     /// (#72). Saved as `SidebarItem.storageKey`s.
     var pinned: [SidebarItem] = AppModel.loadPinned() {
@@ -151,7 +159,11 @@ final class AppModel {
 
     private func booksDidChange(from old: [Book]) {
         updateSummary()
-        defer { updateSearchKeys() }
+        defer {
+            updateSearchKeys()
+            updateUpNext()
+            updateSmartCountsSoon()
+        }
         let structural = old.count != books.count || zip(old, books).contains { a, b in
             a.id != b.id || a.title != b.title || a.series != b.series || a.number != b.number || a.isMissing != b.isMissing
                 || a.relativePath != b.relativePath || a.author != b.author || a.publisher != b.publisher
@@ -206,6 +218,9 @@ final class AppModel {
             add(book.folder)
             add(book.series)
             book.tags.forEach(add)
+            // Plain words find authors and publishers too (#81).
+            book.authors.forEach(add)
+            if let publisher = book.publisher { add(publisher) }
         }
         for folder in catalog.folders.values { add(folder.name) }
         for group in catalog.series { add(group.name) }
@@ -250,6 +265,7 @@ final class AppModel {
             }
         }
         counts[.continueReading] = counts[.reading]
+        counts[.upNext] = upNext.count
         // Tags in the list with no books left are kept, with a count of 0.
         for name in tagList.names where tagCounts[name.lowercased()] == nil {
             tagCounts[name.lowercased()] = (name, 0)
@@ -292,6 +308,13 @@ final class AppModel {
 
     struct ListPickerRequest: Identifiable {
         let ids: [String]
+        let id = UUID()
+    }
+
+    struct SmartEditorRequest: Identifiable {
+        /// Nil for a new list.
+        var listId: String?
+        var filter: LibraryFilter
         let id = UUID()
     }
 
@@ -459,7 +482,7 @@ final class AppModel {
         case .tag(let name): return summary.tags.contains { $0.id == name.lowercased() }
         case .author(let name): return catalog.authors.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
         case .publisher(let name): return catalog.publishers.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
-        case .readingList(let id): return lists.list(id) != nil
+        case .readingList(let id), .smartList(let id): return lists.list(id) != nil
         case .missing: return summary.counts[.missing] != nil
         default: return true
         }
@@ -1127,7 +1150,8 @@ final class AppModel {
     func deleteList(_ id: String) {
         changeLists { $0.delete(id) }
         setPinned(.readingList(id), false)
-        if selection == .readingList(id) { selection = .all }
+        setPinned(.smartList(id), false)
+        if selection == .readingList(id) || selection == .smartList(id) { selection = .all }
     }
 
     /// Changes the lists here at once and in the synced `lists.json` in the background.
@@ -1196,6 +1220,137 @@ final class AppModel {
         // The finished book's progress goes into the library before the next one takes over.
         applyReadingProgress()
         await open(book)
+    }
+
+    // MARK: Filters and smart lists
+
+    /// Plain words of a search or filter, matched like the library's search (#106): titles,
+    /// folders, series, tags, authors and publishers (#81).
+    func textMatcher(_ text: String?) -> (Book) -> Bool {
+        guard let text, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return { _ in true } }
+        let query = SearchQuery(text)
+        return { [self] book in
+            query.matches(searchKey(book.title)) || query.matches(searchKey(book.folder))
+                || query.matches(searchKey(book.series)) || book.tags.contains { query.matches(self.searchKey($0)) }
+                || book.authors.contains { query.matches(self.searchKey($0)) }
+                || (book.publisher.map { query.matches(self.searchKey($0)) } ?? false)
+        }
+    }
+
+    var smartLists: [LibraryLists.Entry] { lists.shown(.smart) }
+
+    /// A smart list's books, in its own sort if it has one (else `fallback`), cut to its limit.
+    func smartListBooks(_ id: String, fallback: (sort: LibraryGridView.SortOrder, ascending: Bool)) -> [Book] {
+        guard let list = lists.list(id), let filter = list.filter else { return [] }
+        let now = Date()
+        let text = textMatcher(filter.text)
+        let matching = books.filter { !$0.isMissing && filter.matches($0, now: now, matchesText: text) }
+        let sort = list.sort.flatMap(LibraryGridView.SortOrder.init(rawValue:)) ?? fallback.sort
+        let ascending = list.sort == nil ? fallback.ascending : (list.ascending ?? sort.ascendingByDefault)
+        let sorted = LibraryGridView.sorted(matching, by: sort, ascending: ascending, model: self)
+        if let limit = list.limit, limit > 0 { return Array(sorted.prefix(limit)) }
+        return sorted
+    }
+
+    /// Saves a smart list from the editor: a new one at the end of the section, or changes.
+    func saveSmartList(id: String?, name: String, filter: LibraryFilter, sort: String?, ascending: Bool?, limit: Int?) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let existing = id.flatMap { lists.list($0) }
+        var entry = existing ?? LibraryLists.Entry(name: trimmed, kind: .smart, position: lists.nextPosition(.smart))
+        entry.name = trimmed
+        entry.filter = filter
+        entry.sort = sort
+        entry.ascending = ascending
+        entry.limit = limit
+        let saved = entry
+        changeLists { $0.put(saved) }
+        if existing == nil { selection = .smartList(saved.id) }
+    }
+
+    /// Counts for the Smart Lists section, after a short pause, off the main thread.
+    private func updateSmartCountsSoon() {
+        let smart = lists.shown(.smart)
+        guard !smart.isEmpty else {
+            if !smartCounts.isEmpty { smartCounts = [:] }
+            return
+        }
+        smartCountTask?.cancel()
+        let books = books, keys = searchKeys
+        smartCountTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            let counts = await Task.detached(priority: .utility) { () -> [String: Int] in
+                let now = Date()
+                var counts: [String: Int] = [:]
+                for list in smart {
+                    guard let filter = list.filter else { continue }
+                    let query = filter.text.map(SearchQuery.init)
+                    func key(_ text: String) -> SearchKey { keys[text] ?? SearchKey(plain: text) }
+                    let text: (Book) -> Bool = { book in
+                        guard let query else { return true }
+                        return query.matches(key(book.title)) || query.matches(key(book.folder)) || query.matches(key(book.series))
+                            || book.tags.contains { query.matches(key($0)) } || book.authors.contains { query.matches(key($0)) }
+                            || (book.publisher.map { query.matches(key($0)) } ?? false)
+                    }
+                    let count = books.lazy.filter { !$0.isMissing && filter.matches($0, now: now, matchesText: text) }.count
+                    counts[list.id] = list.limit.map { min($0, count) } ?? count
+                }
+                return counts
+            }.value
+            guard let self, !Task.isCancelled, counts != self.smartCounts else { return }
+            self.smartCounts = counts
+        }
+    }
+
+    // MARK: Up Next
+
+    private static let notInterestedKey = "upNextNotInterested"
+
+    /// Series hidden from Up Next, by lower-cased name, with when; a series read again after
+    /// that comes back (#85). Kept on this device.
+    private var notInterested: [String: Date] {
+        get { (UserDefaults.standard.dictionary(forKey: Self.notInterestedKey) as? [String: Date]) ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: Self.notInterestedKey) }
+    }
+
+    func hideFromUpNext(series: String) {
+        var hidden = notInterested
+        hidden[series.lowercased()] = Date()
+        notInterested = hidden
+        updateUpNext()
+    }
+
+    /// For each series with a volume Read or Reading: the volume part-way through (the one read
+    /// last, if several), else the first unread volume after the last one read. Ordered by when
+    /// the series was last read.
+    private func updateUpNext() {
+        let hidden = notInterested
+        var found: [(id: String, last: Date)] = []
+        for group in catalog.series where group.books.count > 1 {
+            let members = group.books.compactMap { book(id: $0.id) }
+            var lastRead: Date?
+            var reading: Book?
+            var lastFinished = -1
+            for (i, book) in members.enumerated() {
+                if let date = book.lastReadAt, date > (lastRead ?? .distantPast) { lastRead = date }
+                switch book.status {
+                case .reading:
+                    if (book.lastReadAt ?? .distantPast) >= (reading?.lastReadAt ?? .distantPast) { reading = book }
+                case .read: lastFinished = i
+                case .unread: break
+                }
+            }
+            guard reading != nil || lastFinished >= 0, let last = lastRead ?? (lastFinished >= 0 ? .distantPast : nil) else { continue }
+            if let hiddenAt = hidden[group.name.lowercased()], last <= hiddenAt { continue }
+            let next = reading ?? members[(lastFinished + 1)...].first { $0.status == .unread && !$0.isMissing }
+            if let next { found.append((next.id, last)) }
+        }
+        let ids = found.sorted { $0.last > $1.last }.map(\.id)
+        if ids != upNext {
+            upNext = ids
+            updateSummary()
+        }
     }
 
     // MARK: Tags

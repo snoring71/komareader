@@ -649,3 +649,27 @@ import Testing
         #expect(BookRecord.Rating(value: 9).value == nil)
     }
 }
+
+@Suite struct TypedSearchTests {
+    @Test func readsFieldPrefixesAndPlainWords() {
+        let filter = LibraryFilter.parse(#"author:"Kozue Amano" year:2010-2015 rating:>=4 is:favorite status:unread tag:to-read aria"#)
+        #expect(filter.text == "aria")
+        #expect(filter.rules.map(\.field) == [.author, .year, .rating, .favorite, .status, .tag])
+        #expect(filter.rules[0].values == ["Kozue Amano"])
+        #expect(filter.rules[1].op == .between && filter.rules[1].values == ["2010", "2015"])
+        #expect(filter.rules[2].op == .atLeast && filter.rules[2].values == ["4"])
+        #expect(filter.rules[3].op == .isTrue)
+
+        // ">3" is at least 4; an unknown prefix is a plain word.
+        #expect(LibraryFilter.parse("rating:>3").rules.first?.values == ["4"])
+        #expect(LibraryFilter.parse("re:zero").text == "re:zero")
+        #expect(LibraryFilter.parse("is:cloud").rules.first?.op == .isFalse)
+        #expect(LibraryFilter.parse("").isEmpty)
+    }
+
+    @Test func filtersRoundTrip() throws {
+        let filter = LibraryFilter(match: .any, rules: [.init(.added, .inLast, ["30"])], text: "x")
+        let data = try JSONEncoder().encode(filter)
+        #expect(try JSONDecoder().decode(LibraryFilter.self, from: data) == filter)
+    }
+}
