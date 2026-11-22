@@ -50,6 +50,9 @@ struct ReaderScreen: View {
             ZStack {
                 Color(uiColor: state.background.uiColor ?? .black).ignoresSafeArea()
                 PageViewer(state: state)
+                    // A curling pager is a different kind of pager, with its spine on the side
+                    // the book opens from: switching makes a new one (#125).
+                    .id(state.pageTurn == .curl ? (state.rightToLeft ? "curl-rtl" : "curl") : "slide")
                     .ignoresSafeArea()
                 // Each overlay has a fixed zIndex: without one, a view leaving a ZStack can drop
                 // behind the pages and vanish instead of fading out.

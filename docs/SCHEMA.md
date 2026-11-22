@@ -121,8 +121,10 @@ copies tag by tag, keeping whichever entry has the later `updatedAt`.
   and `autoTrim` (trim each page's plain border), each `true` or `false`; `descreen` (0 for none
   to 1); `nightMode` (`off`, `sepia`, `dim` or `invert`) and `nightOnlyInDark` (`true` to use it
   only while the system appearance is dark); `paperStock` (`plain`, `newsprint`, `cream` or
-  `glossy`, the paper `paperGrain` draws); and `crop`. Readers should treat an unknown
-  `nightMode` as `off` and an unknown `paperStock` as `plain`.
+  `glossy`, the paper `paperGrain` draws); `pageTurn` (`slide`, `curl`, `fade` or `instant`);
+  `pageEdges` (`true` to draw the stack of page edges beside the page); and `crop`. Readers should treat an unknown
+  `nightMode` as `off` and an unknown `paperStock` as `plain` and an
+  unknown `pageTurn` as `slide`.
 - `crop` trims the margins of every page. `left` and `right` are `[x, y, width, height]` as
   fractions of a page, for left pages and right pages as they sit in a two-page spread: the
   cover sits on the right (on the left in `rtl` books); after it, pages pair up with the first
