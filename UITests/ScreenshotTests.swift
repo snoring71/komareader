@@ -419,6 +419,68 @@ final class ScreenshotTests: XCTestCase {
         save(app, "24-library-after-select")
     }
 
+    /// Authors from the demo's ComicInfo.xml (#78), a star rating (#84) and a new reading
+    /// list from Select mode (#83).
+    func testAuthorsRatingsAndLists() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.launch()
+        XCUIDevice.shared.orientation = .landscapeLeft
+
+        let book = app.buttons["book-Starfall 2"].firstMatch
+        XCTAssertTrue(book.waitForExistence(timeout: 90), "Demo library did not appear")
+        // The files' metadata is read in the background and shown a few seconds later.
+        sleep(10)
+
+        openSidebar(app)
+        let authorsRow = app.descendants(matching: .any)["sidebar-Authors"].firstMatch
+        XCTAssertTrue(authorsRow.waitForExistence(timeout: 5), "No Authors in the sidebar")
+        let label = app.staticTexts["Authors"].firstMatch
+        (label.isHittable ? label : authorsRow).tap()
+        let author = app.buttons["author-Mira Okada"].firstMatch
+        XCTAssertTrue(author.waitForExistence(timeout: 20), "The demo's author is not listed")
+        sleep(1)
+        save(app, "25-authors")
+        author.tap()
+        XCTAssertTrue(app.buttons["book-Starfall 1"].firstMatch.waitForExistence(timeout: 10), "The author's books did not show")
+        sleep(1)
+        save(app, "25b-author-books")
+
+        // Rate two books and add them to a new reading list, from Select mode.
+        app.buttons["library-options"].firstMatch.tap()
+        let select = app.buttons["library-select"].firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 5), "No Select in the options menu")
+        select.tap()
+        let done = app.buttons["selection-done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "Select mode did not start")
+        app.buttons["book-Starfall 1"].firstMatch.tap()
+        app.buttons["book-Starfall 2"].firstMatch.tap()
+        let actions = app.buttons["selection-actions"].firstMatch
+        actions.tap()
+        let addToList = app.buttons["selection-add-to-list"].firstMatch
+        XCTAssertTrue(addToList.waitForExistence(timeout: 5), "No Add to Reading List… in the Actions menu")
+        addToList.tap()
+        let newList = app.buttons["list-new"].firstMatch
+        XCTAssertTrue(newList.waitForExistence(timeout: 5), "The reading list picker did not open")
+        newList.tap()
+        let name = app.textFields["list-name"].firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "No name field for the new list")
+        name.typeText("Holiday")
+        app.buttons["Create"].firstMatch.tap()
+        XCTAssertTrue(newList.waitForNonExistence(timeout: 5), "The picker did not close")
+        if done.exists { done.tap() }
+
+        openSidebar(app)
+        XCTAssertTrue(app.descendants(matching: .any)["sidebar-Holiday"].firstMatch.waitForExistence(timeout: 5),
+                      "The new reading list is not in the sidebar")
+        save(app, "26-sidebar-reading-list")
+        let listLabel = app.staticTexts["Holiday"].firstMatch
+        if listLabel.isHittable { listLabel.tap() } else { app.descendants(matching: .any)["sidebar-Holiday"].firstMatch.tap() }
+        XCTAssertTrue(app.buttons["book-Starfall 2"].firstMatch.waitForExistence(timeout: 10), "The list's books did not show")
+        sleep(1)
+        save(app, "26b-reading-list")
+    }
+
     /// Each library view keeps its scroll position when the user goes to another view and
     /// back (#105).
     func testScrollPositionIsKept() throws {

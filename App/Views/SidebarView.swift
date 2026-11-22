@@ -6,6 +6,9 @@ struct SidebarView: View {
     @State private var renaming: String?
     @State private var newName = ""
     @State private var deleting: String?
+    /// A reading list being renamed or deleted (#83).
+    @State private var renamingList: String?
+    @State private var deletingList: String?
     @Environment(\.sidebarToggle) private var sidebarToggle
 
     var body: some View {
@@ -21,6 +24,9 @@ struct SidebarView: View {
                         row(.all, count: counts[.all])
                         row(.continueReading, count: counts[.continueReading])
                         row(.series, count: model.catalog.series.count)
+                        // Less the "Unknown" group, which is not a name (#78).
+                        row(.authors, count: model.catalog.authors.filter { !$0.name.isEmpty }.count)
+                        row(.publishers, count: model.catalog.publishers.filter { !$0.name.isEmpty }.count)
                         row(.folders, count: max(0, model.catalog.folders.count - 1)) // less the library folder itself
                         row(.downloaded, count: counts[.downloaded])
                     }
@@ -42,6 +48,32 @@ struct SidebarView: View {
                         row(.favorites, count: counts[.favorites])
                         row(.bookmarked, count: counts[.bookmarked])
                         if let missing = counts[.missing] { row(.missing, count: missing) }
+                    }
+                    let lists = model.readingLists
+                    if !lists.isEmpty {
+                        SidebarSection("Reading Lists") {
+                            ForEach(Array(lists.enumerated()), id: \.element.id) { offset, list in
+                                let item = SidebarItem.readingList(list.id)
+                                row(item, count: list.bookIds?.count ?? 0)
+                                    .contextMenu {
+                                        Button("Rename…", systemImage: "pencil") {
+                                            newName = list.name
+                                            renamingList = list.id
+                                        }
+                                        if offset > 0 {
+                                            Button("Move Up", systemImage: "arrow.up") { model.moveList(list.id, by: -1) }
+                                        }
+                                        if offset < lists.count - 1 {
+                                            Button("Move Down", systemImage: "arrow.down") { model.moveList(list.id, by: 1) }
+                                        }
+                                        let pinned = model.isPinned(item)
+                                        Button(pinned ? "Unpin from Sidebar" : "Pin to Sidebar", systemImage: pinned ? "pin.slash" : "pin") {
+                                            model.setPinned(item, !pinned)
+                                        }
+                                        Button("Delete List", systemImage: "trash", role: .destructive) { deletingList = list.id }
+                                    }
+                            }
+                        }
                     }
                     if !model.summary.tags.isEmpty {
                         SidebarSection("Tags") {
@@ -69,6 +101,17 @@ struct SidebarView: View {
         } message: {
             Text("The tag is renamed on every book that has it.")
         }
+        .alert("Rename Reading List", isPresented: Binding(get: { renamingList != nil }, set: { if !$0 { renamingList = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") { if let id = renamingList { model.renameList(id, to: newName) } }
+        }
+        .confirmationDialog(deletingList.map { "Delete the reading list “\(SidebarItem.readingList($0).title)”?" } ?? "",
+                            isPresented: Binding(get: { deletingList != nil }, set: { if !$0 { deletingList = nil } }), titleVisibility: .visible) {
+            Button("Delete List", role: .destructive) { if let id = deletingList { model.deleteList(id) } }
+        } message: {
+            Text("The list is deleted on all your devices. The books in it are not.")
+        }
         .confirmationDialog(deleting.map { "Delete the tag “\($0)”?" } ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
             Button("Delete Tag", role: .destructive) { if let tag = deleting { model.deleteTag(tag) } }
         } message: {
@@ -82,6 +125,11 @@ struct SidebarView: View {
         case .folder(let path): return model.catalog.folders[path]?.count
         case .seriesNamed(let name):
             return model.catalog.series.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.books.count
+        case .author(let name):
+            return model.catalog.authors.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.books.count
+        case .publisher(let name):
+            return model.catalog.publishers.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.books.count
+        case .readingList(let id): return model.lists.list(id)?.bookIds?.count
         default: return nil
         }
     }

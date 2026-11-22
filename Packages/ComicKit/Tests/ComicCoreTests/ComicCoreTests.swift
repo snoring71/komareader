@@ -613,3 +613,39 @@ import Testing
         #expect(decoded.flags?.bookmarked == true)
     }
 }
+
+@Suite struct ListsAndRatingTests {
+    @Test func listsMergePerListAndDeletionsStick() throws {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        var a = LibraryLists()
+        a.put(.init(id: "L1", name: "Holiday", kind: .reading, bookIds: ["x"], position: 1), at: t0)
+        a.put(.init(id: "L2", name: "Crossover", kind: .reading, bookIds: [], position: 2), at: t0)
+        var b = a
+        a.add(["y", "x"], to: "L1", at: t0.addingTimeInterval(10))
+        b.delete("L2", at: t0.addingTimeInterval(5))
+        let merged = a.merged(with: b)
+        #expect(merged.list("L1")?.bookIds == ["x", "y"])
+        #expect(merged.list("L2") == nil)
+        #expect(merged.shown(.reading).map(\.id) == ["L1"])
+
+        var moved = a
+        moved.move("L2", by: -1, at: t0.addingTimeInterval(20))
+        #expect(moved.shown(.reading).map(\.id) == ["L2", "L1"])
+
+        let data = try RecordCoding.encoder().encode(merged)
+        #expect(try RecordCoding.decoder().decode(LibraryLists.self, from: data) == merged)
+    }
+
+    @Test func ratingsMergeAndCountAsUse() {
+        var record = BookRecord(bookId: "R", file: .init(path: "r.cbz", size: 1, modified: nil))
+        record.removed = .init(updatedAt: Date(timeIntervalSince1970: 1_000))
+        #expect(record.isRemoved)
+        var rated = record
+        rated.rating = .init(value: 4, updatedAt: Date(timeIntervalSince1970: 2_000))
+        #expect(!rated.isRemoved)
+        var cleared = record
+        cleared.rating = .init(value: nil, updatedAt: Date(timeIntervalSince1970: 3_000))
+        #expect(rated.merged(with: cleared).rating?.value == nil)
+        #expect(BookRecord.Rating(value: 9).value == nil)
+    }
+}

@@ -27,14 +27,15 @@ struct FolderBrowserView: View {
                 .naturallySorted(by: \.name)
         }
         switch sort {
-        case .title:
-            break
         case .recentlyAdded:
             let latest = latestDates { $0.addedAt }
             folders.sort { (latest[$0.path] ?? .distantPast) > (latest[$1.path] ?? .distantPast) }
         case .recentlyRead:
             let latest = latestDates { $0.lastReadAt }
             folders.sort { (latest[$0.path] ?? .distantPast) > (latest[$1.path] ?? .distantPast) }
+        default:
+            // By name; the other orders are for books.
+            break
         }
         return folders
     }
@@ -97,7 +98,7 @@ struct FolderBrowserView: View {
         }
         .navigationTitle("Folders")
         .searchable(text: $search, prompt: "Search folders")
-        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, sortsByName: true, showTitles: $showTitles) }
+        .toolbar { LibraryToolbar(sort: $sort, coverSize: $coverSize, showSettings: $showSettings, sortOptions: LibraryGridView.SortOrder.forGroups, sortsByName: true, showTitles: $showTitles) }
         .sheet(isPresented: $showSettings) { SettingsView().toggleStyle(MonoToggleStyle()) }
     }
 

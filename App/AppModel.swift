@@ -36,6 +36,7 @@ final class AppModel {
             if !reading {
                 applyReadingProgress()
                 flushFileMetadata()
+                if let closed = oldValue?.book.id { offerNextInList(after: closed) }
             }
         }
     }
@@ -66,6 +67,16 @@ final class AppModel {
     private(set) var summary = Summary()
     /// The library's synced tag list (`tags.json`), which keeps tags that have no books.
     @ObservationIgnored private var tagList = TagList()
+    /// The library's reading and smart lists (`lists.json`, #82, #83).
+    private(set) var lists = LibraryLists() {
+        didSet {
+            SidebarItem.listNames = Dictionary(lists.lists.values.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+        }
+    }
+    /// The books Add to Reading List… is adding (#83).
+    var listPicker: ListPickerRequest?
+    /// Offered when a book in a reading list is finished: the list's next book (#83).
+    var nextInList: NextInList?
     /// Folders and series pinned to the sidebar on this device, in the order they were pinned
     /// (#72). Saved as `SidebarItem.storageKey`s.
     var pinned: [SidebarItem] = AppModel.loadPinned() {
@@ -104,6 +115,9 @@ final class AppModel {
         /// The letter each book is filed under in the index.
         var indexKey: [String: String] = [:]
         var series: [SeriesGroup] = []
+        /// Books by author and by publisher (#78), "Unknown" last.
+        var authors: [SeriesGroup] = []
+        var publishers: [SeriesGroup] = []
         /// Every folder that holds books, by path. The library folder itself is "".
         var folders: [String: FolderInfo] = [:]
         /// Where each book is in `books`.
@@ -133,7 +147,8 @@ final class AppModel {
         updateSummary()
         defer { updateSearchKeys() }
         let structural = old.count != books.count || zip(old, books).contains { a, b in
-            a.id != b.id || a.title != b.title || a.series != b.series || a.number != b.number || a.isMissing != b.isMissing || a.relativePath != b.relativePath
+            a.id != b.id || a.title != b.title || a.series != b.series || a.number != b.number || a.isMissing != b.isMissing
+                || a.relativePath != b.relativePath || a.author != b.author || a.publisher != b.publisher
         }
         guard structural else { return }
         var catalog = Catalog()
@@ -154,6 +169,8 @@ final class AppModel {
             catalog.indexKey[book.id] = IndexKey.of(book.title)
         }
         catalog.series = SeriesGroup.groups(from: books)
+        catalog.authors = SeriesGroup.groups(from: books) { $0.authors }
+        catalog.publishers = SeriesGroup.groups(from: books) { $0.publisher.map { [$0] } ?? [] }
         catalog.folders = FolderInfo.tree(from: books, titleRank: catalog.titleRank)
         for (i, book) in books.enumerated() { catalog.position[book.id] = i }
         self.catalog = catalog
@@ -186,6 +203,8 @@ final class AppModel {
         }
         for folder in catalog.folders.values { add(folder.name) }
         for group in catalog.series { add(group.name) }
+        for group in catalog.authors { add(group.name) }
+        for group in catalog.publishers { add(group.name) }
         guard !missing.isEmpty else { return }
         searchKeysInProgress.formUnion(missing)
         let strings = Array(missing)
@@ -263,6 +282,17 @@ final class AppModel {
         case remove(String)
         /// Takes every tag off the books ("No Tags"). The tags stay in the library's tag list.
         case clear
+    }
+
+    struct ListPickerRequest: Identifiable {
+        let ids: [String]
+        let id = UUID()
+    }
+
+    struct NextInList: Identifiable {
+        let listName: String
+        let book: Book
+        var id: String { book.id }
     }
 
     struct DataEditorRequest: Identifiable {
@@ -372,10 +402,11 @@ final class AppModel {
             self.covers = covers
             // The cached book list and the covers already made, read in one go off the main
             // thread, so the library shows with its covers before the rescan finishes.
-            let (cached, thumbs, tagList) = await Task.detached(priority: .userInitiated) {
-                ((try? index.allBooks()) ?? [], covers.existingThumbnails(), store.readTagList())
+            let (cached, thumbs, tagList, lists) = await Task.detached(priority: .userInitiated) {
+                ((try? index.allBooks()) ?? [], covers.existingThumbnails(), store.readTagList(), store.readLists())
             }.value
             self.tagList = tagList
+            self.lists = lists
             self.thumbnails = thumbs
             self.books = cached
             restorePosition()
@@ -414,6 +445,9 @@ final class AppModel {
         case .folder(let path): return catalog.folders[path] != nil
         case .seriesNamed(let name): return catalog.series.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
         case .tag(let name): return summary.tags.contains { $0.id == name.lowercased() }
+        case .author(let name): return catalog.authors.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        case .publisher(let name): return catalog.publishers.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        case .readingList(let id): return lists.list(id) != nil
         case .missing: return summary.counts[.missing] != nil
         default: return true
         }
@@ -497,7 +531,7 @@ final class AppModel {
         let known = thumbnails
         let rules = fileNameRules
         do {
-            let (updated, staleCovers, found, tagList) = try await Task.detached(priority: .userInitiated) { () throws -> ([Book], [String], [String: URL], TagList) in
+            let (updated, staleCovers, found, tagList, lists) = try await Task.detached(priority: .userInitiated) { () throws -> ([Book], [String], [String: URL], TagList, LibraryLists) in
                 let scanned = LibraryScanner.scan(root: libraryURL)
                 let records = store.consolidatedRecords()
                 // Covers edited on another device since this device made its thumbnail.
@@ -514,8 +548,10 @@ final class AppModel {
                 for book in books where known[book.id] == nil {
                     if let thumb = covers?.existingThumbnail(bookId: book.id) { found[book.id] = thumb }
                 }
-                return (books, stale, found, store.readTagList())
+                return (books, stale, found, store.readTagList(), store.readLists())
             }.value
+            // Lists made, changed or deleted on another device.
+            if lists != self.lists { self.lists = lists }
             // Assigning redraws everything that shows books, so only do it when something changed.
             // Tags created, renamed or deleted on another device.
             if tagList != self.tagList {
@@ -1001,6 +1037,93 @@ final class AppModel {
             flags.updatedAt = Date()
             record.flags = flags
         }
+    }
+
+    // MARK: Ratings
+
+    /// Sets (or with nil, removes) the star rating of one or many books (#84).
+    func setRating(_ ids: Set<String>, _ value: Int?) {
+        let changed = updateBooks(ids) { $0.rating = value }
+        let now = Date()
+        updateRecords(changed) { record, _ in record.rating = .init(value: value, updatedAt: now) }
+    }
+
+    /// The average of a group's rated books, or nil if none is rated.
+    func averageRating(of group: SeriesGroup) -> Double? {
+        let ratings = group.books.compactMap { book(id: $0.id)?.rating }
+        guard !ratings.isEmpty else { return nil }
+        return Double(ratings.reduce(0, +)) / Double(ratings.count)
+    }
+
+    // MARK: Reading lists
+
+    var readingLists: [LibraryLists.Entry] { lists.shown(.reading) }
+
+    /// A reading list's books in the list's order, missing ones included (they show dimmed).
+    func listBooks(_ id: String) -> [Book] {
+        (lists.list(id)?.bookIds ?? []).compactMap { book(id: $0) }
+    }
+
+    /// Makes a reading list, with books in it if given, and returns its id.
+    @discardableResult
+    func newReadingList(named name: String, with bookIds: [String] = []) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let entry = LibraryLists.Entry(name: trimmed, kind: .reading, bookIds: bookIds, position: lists.nextPosition(.reading))
+        changeLists { $0.put(entry) }
+        return entry.id
+    }
+
+    func addToReadingList(_ id: String, bookIds: [String]) {
+        changeLists { $0.add(bookIds, to: id) }
+    }
+
+    /// Replaces a reading list's books, for reordering and removing (#83).
+    func setListBooks(_ id: String, _ bookIds: [String]) {
+        changeLists { lists in
+            guard var entry = lists.list(id) else { return }
+            entry.bookIds = bookIds
+            lists.put(entry)
+        }
+    }
+
+    func renameList(_ id: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        changeLists { lists in
+            guard var entry = lists.list(id) else { return }
+            entry.name = trimmed
+            lists.put(entry)
+        }
+    }
+
+    func moveList(_ id: String, by offset: Int) {
+        changeLists { $0.move(id, by: offset) }
+    }
+
+    func deleteList(_ id: String) {
+        changeLists { $0.delete(id) }
+        setPinned(.readingList(id), false)
+        if selection == .readingList(id) { selection = .all }
+    }
+
+    /// Changes the lists here at once and in the synced `lists.json` in the background.
+    func changeLists(_ change: @escaping @Sendable (inout LibraryLists) -> Void) {
+        var updated = lists
+        change(&updated)
+        lists = updated
+        guard let store else { return }
+        Task.detached(priority: .utility) { _ = try? store.updateLists(change) }
+    }
+
+    /// When the reader closes on a finished book while a reading list holding it is on screen,
+    /// offers the list's next book (#83).
+    private func offerNextInList(after bookId: String) {
+        guard case .readingList(let id) = libraryPath.last ?? selection, let list = lists.list(id),
+              book(id: bookId)?.finished == true, let ids = list.bookIds,
+              let at = ids.firstIndex(of: bookId) else { return }
+        let next = ids[(at + 1)...].lazy.compactMap { self.book(id: $0) }.first { !$0.isMissing }
+        if let next { nextInList = NextInList(listName: list.name, book: next) }
     }
 
     // MARK: Tags
