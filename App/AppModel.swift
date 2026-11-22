@@ -22,6 +22,8 @@ final class AppModel {
     private(set) var catalog = Catalog()
     var thumbnails: [String: URL] = [:]
     var downloading: Set<String> = []
+    /// How far along each download is, 0…1, where it can be told (#83).
+    var downloadProgress: [String: Double] = [:]
     /// Books waiting their turn to download: a download of many books fetches one at a time.
     var queuedDownloads: [String] = []
     @ObservationIgnored private var downloadQueueTask: Task<Void, Never>?
@@ -39,12 +41,6 @@ final class AppModel {
             if !reading {
                 applyReadingProgress()
                 flushFileMetadata()
-                // Read Next on the reader's last page: the reader has closed, so the finished
-                // book's progress is in; now the next one opens (#83).
-                if let next = pendingNext {
-                    pendingNext = nil
-                    Task { await activate(next) }
-                }
             }
         }
     }
@@ -87,8 +83,6 @@ final class AppModel {
     /// grid's books in order, and the reading list's name when it is one (#83). Nil for a
     /// book opened elsewhere (Continue Reading, Resume), which falls back to its series.
     @ObservationIgnored var readingContext: ReadingContext?
-    /// Read Next was picked on the last page: opened once the reader has closed.
-    @ObservationIgnored private var pendingNext: Book?
     /// Folders and series pinned to the sidebar on this device, in the order they were pinned
     /// (#72). Saved as `SidebarItem.storageKey`s.
     var pinned: [SidebarItem] = AppModel.loadPinned() {
@@ -610,9 +604,20 @@ final class AppModel {
         // A second tap while it downloads does not start it again.
         guard let url = fileURL(for: book), !downloading.contains(book.id) else { return }
         downloading.insert(book.id)
-        defer { downloading.remove(book.id) }
+        let id = book.id
+        defer {
+            downloading.remove(id)
+            downloadProgress[id] = nil
+        }
         do {
-            try await CloudFiles.download(url)
+            try await CloudFiles.download(url, expectedSize: book.size) { [weak self] fraction in
+                Task { @MainActor in
+                    guard let self, self.downloading.contains(id) else { return }
+                    // Whole percents only, so the reader isn't redrawn on every byte.
+                    let rounded = (fraction * 100).rounded() / 100
+                    if self.downloadProgress[id] != rounded { self.downloadProgress[id] = rounded }
+                }
+            }
             updateBook(book.id) { $0.isDownloaded = true }
             if downloadQueueTask == nil { readFileMetadata() }
         } catch {
@@ -1158,9 +1163,20 @@ final class AppModel {
         return "Up Next"
     }
 
-    /// Read Next on the reader's last page (#83): opens `book` once the reader has closed.
-    func readNext(_ book: Book) {
-        pendingNext = book
+    /// Read Now on the reader's last page (#83): opens `book` in the reader in place of the
+    /// finished one, downloading it first if it is only in iCloud. The reader stays open.
+    func readNextInReader(_ book: Book) async {
+        var book = self.book(id: book.id) ?? book
+        if !book.isDownloaded {
+            await download(book)
+            guard let fresh = self.book(id: book.id), fresh.isDownloaded else { return }
+            book = fresh
+        }
+        // Closed while it downloaded: leave it for the library.
+        guard openBook != nil else { return }
+        // The finished book's progress goes into the library before the next one takes over.
+        applyReadingProgress()
+        await open(book)
     }
 
     // MARK: Tags

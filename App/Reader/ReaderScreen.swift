@@ -133,15 +133,12 @@ struct ReaderScreen: View {
             if let next = model.nextBook(after: bookId) {
                 let style = coverStyle
                 let coverURL = model.thumbnails[next.book.id], revision = model.coverRevision[next.book.id] ?? 0
-                state.makeEndPage = { [weak readerState, weak appModel] in
+                state.makeEndPage = { [weak readerState] in
                     let page = UIHostingController(rootView: AnyView(
                         NextBookPage(next: next, coverURL: coverURL, coverRevision: revision,
-                                     onRead: {
-                                         appModel?.readNext(next.book)
-                                         readerState?.closeRequested = true
-                                     },
                                      onBack: { readerState?.leaveEndPage() })
                             .environment(\.coverStyle, style)
+                            .environment(appModel)
                     ))
                     page.safeAreaRegions = []
                     page.view.backgroundColor = .clear

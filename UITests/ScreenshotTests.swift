@@ -528,6 +528,13 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(readNext.waitForExistence(timeout: 5), "No next book after the last page")
         sleep(1)
         save(app, "26c-reader-next-book")
+        // It fits a landscape screen too.
+        XCUIDevice.shared.orientation = .landscapeLeft
+        sleep(2)
+        save(app, "26d-reader-next-book-landscape")
+        XCTAssertTrue(readNext.isHittable, "Read Now is off screen in landscape")
+        XCUIDevice.shared.orientation = .portrait
+        sleep(2)
         readNext.tap()
         // The finished book closes and the next one opens on its cover.
         XCTAssertTrue(app.descendants(matching: .any)["reader-cover-intro"].firstMatch.waitForExistence(timeout: 20),
