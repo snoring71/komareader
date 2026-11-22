@@ -268,6 +268,7 @@ final class ScreenshotTests: XCTestCase {
                     sleep(2)
                     save(app, "16b-reader-compare")
                     done.tap()
+                    XCTAssertTrue(done.waitForNonExistence(timeout: 3), "Done did not close Compare")
                     sleep(1)
                 }
             } else {
