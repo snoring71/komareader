@@ -35,11 +35,12 @@ struct CompareView: View {
                         .contentTransition(.opacity)
                         .accessibilityIdentifier("compare-label")
                     Spacer()
+                    // The system glass button: an interactive glass effect on a plain button
+                    // can take the touch itself and miss the tap.
                     Button("Done") { state.comparing = false }
                         .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .glassEffect(.regular.interactive(), in: .capsule)
+                        .buttonStyle(.glass)
+                        .controlSize(.large)
                         .tint(.primary)
                         .accessibilityIdentifier("compare-done")
                 }
