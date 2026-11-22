@@ -515,9 +515,19 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.buttons["book-Starfall 2"].firstMatch.waitForExistence(timeout: 10), "The list's books did not show")
         sleep(1)
         save(app, "26b-reading-list")
+    }
 
-        // On from the last page of a book in the list: its next book, on a glass card (#83).
-        app.buttons["book-Starfall 1"].firstMatch.tap()
+    /// On from a book's last page: the next book where it was opened from, on a glass card,
+    /// and Read Now opens it in the reader (#83). Named to run last: it reads a book, and the
+    /// reading position outlives the app (other tests need Starfall 1 unread).
+    func testZNextBookPage() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.launch()
+        let first = app.buttons["book-Starfall 1"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 90), "Demo library did not appear")
+        sleep(3)
+        first.tap()
         XCTAssertTrue(app.otherElements["reader-page"].firstMatch.waitForExistence(timeout: 20), "Reader did not open")
         sleep(2)
         let readNext = app.buttons["next-book-read"].firstMatch
@@ -536,13 +546,11 @@ final class ScreenshotTests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         sleep(2)
         readNext.tap()
-        // The finished book closes and the next one opens on its cover.
-        let nextCover = app.descendants(matching: .any)["reader-cover-intro"].firstMatch
-        XCTAssertTrue(nextCover.waitForExistence(timeout: 20), "Read Now did not open the next book")
+        // The next book opens in the reader, which stays open.
+        XCTAssertTrue(readNext.waitForNonExistence(timeout: 20), "Read Now did not open the next book")
+        XCTAssertTrue(app.otherElements["reader-page"].firstMatch.waitForExistence(timeout: 20), "The reader closed")
         sleep(1)
-        // Close the reader, or the next test's launch reopens this book over the library.
-        nextCover.swipeUp()
-        XCTAssertTrue(app.buttons["book-Starfall 1"].firstMatch.waitForExistence(timeout: 10), "The reader did not close")
+        save(app, "26e-reader-next-book-opened")
     }
 
     /// Each library view keeps its scroll position when the user goes to another view and
