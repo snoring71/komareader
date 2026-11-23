@@ -313,6 +313,9 @@ final class ReaderState {
         (isLandscape ? landscapeLayout : portraitLayout) == .double
     }
 
+    /// Page Curl with two pages on screen: the pages turn about the middle, one at a time.
+    var turnsFromMiddle: Bool { pageTurn == .curl && usesTwoPages }
+
     func setLandscape(_ landscape: Bool) {
         guard landscape != isLandscape else { return }
         isLandscape = landscape

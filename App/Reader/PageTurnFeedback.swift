@@ -44,7 +44,7 @@ final class PageTurnFeedback {
             // different, which keeps it from sounding mechanical.
             players = (0..<3).compactMap { seed in
                 (try? AVAudioPlayer(data: Self.paperSound(seed: UInt64(seed + 1)))).map { player in
-                    player.volume = 0.5
+                    player.volume = 0.35
                     player.prepareToPlay()
                     return player
                 }
@@ -57,10 +57,11 @@ final class PageTurnFeedback {
         player.play()
     }
 
-    /// A 16-bit mono WAV of a page turning: noise, low-passed so it is soft rather than
-    /// hissy, high-passed so it doesn't thump, shaped by a quick swell and a longer fade.
+    /// A 16-bit mono WAV of a page turning: a soft swish of noise, smoothed twice so there is
+    /// no hiss, its brightness rising and falling as the page sweeps over, with a gentle swell
+    /// and a long fade. No flutter or click, so it stays quiet under music and never rasps.
     static func paperSound(seed: UInt64, sampleRate: Int = 44_100) -> Data {
-        let duration = 0.26
+        let duration = 0.34
         let count = Int(Double(sampleRate) * duration)
         var state = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
         func noise() -> Double {
@@ -68,19 +69,26 @@ final class PageTurnFeedback {
             return Double(Int64(bitPattern: state >> 11) % 1_000_000) / 500_000 - 1
         }
         var samples = [Int16](repeating: 0, count: count)
-        var low = 0.0, lowSlow = 0.0
-        let peak = 0.05 + 0.02 * Double(seed % 3)
+        var low1 = 0.0, low2 = 0.0, floor = 0.0
+        // Each of the three takes is a little different, so quick turns don't sound mechanical.
+        let peak = 0.09 + 0.015 * Double(seed % 3)
+        let brightest = 1_300 + 150 * Double(seed % 3)
         for i in 0..<count {
             let t = Double(i) / Double(sampleRate)
-            let raw = noise()
-            // Two one-pole filters: a low-pass (soft) and a slower one taken away (no thump).
-            low += 0.18 * (raw - low)
-            lowSlow += 0.01 * (raw - lowSlow)
-            let band = low - lowSlow
-            // A swell to `peak` seconds, then a fade, with a little flutter as the page moves.
-            let envelope = t < peak ? pow(t / peak, 1.5) : exp(-(t - peak) * 16)
-            let flutter = 0.8 + 0.2 * sin(t * 2 * .pi * (38 + Double(seed) * 7))
-            let value = band * envelope * flutter * 2.2
+            // The sweep: the cutoff rises from 500 Hz to its brightest at the swell, then settles.
+            let sweep = t < peak ? t / peak : exp(-(t - peak) * 7)
+            let cutoff = 500 + (brightest - 500) * sweep
+            let a = 1 - exp(-2 * .pi * cutoff / Double(sampleRate))
+            low1 += a * (noise() - low1)
+            low2 += a * (low1 - low2)
+            // Take away what is under ~120 Hz, so it doesn't thump.
+            floor += 0.017 * (low2 - floor)
+            let band = low2 - floor
+            // A smooth swell (half a cosine) to the peak, then a long, soft fade.
+            let envelope = t < peak ? 0.5 - 0.5 * cos(.pi * t / peak) : exp(-(t - peak) * 11)
+            // Fade the last few milliseconds to silence, so it never ends on a click.
+            let tail = min(1, Double(count - i) / (0.01 * Double(sampleRate)))
+            let value = band * envelope * tail * 2.4
             samples[i] = Int16(max(-1, min(1, value)) * 32_000)
         }
         var data = Data()

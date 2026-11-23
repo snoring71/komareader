@@ -13,13 +13,16 @@ struct PageViewer: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIPageViewController {
         let controller: UIPageViewController
         if state.pageTurn == .curl {
-            // Page curl (#125): the spine on the left for left-to-right books, on the right for manga.
-            let spine: UIPageViewController.SpineLocation = state.rightToLeft ? .max : .min
+            // Page curl (#125): one page on screen turns about the side the book opens from (the
+            // left, or the right in manga); two pages turn about the middle, one leaf at a time.
+            let middle = state.turnsFromMiddle
+            let spine: UIPageViewController.SpineLocation = middle ? .mid : (state.rightToLeft ? .max : .min)
             controller = UIPageViewController(
                 transitionStyle: .pageCurl, navigationOrientation: .horizontal,
                 options: [.spineLocation: NSNumber(value: spine.rawValue)]
             )
-            controller.isDoubleSided = false
+            controller.isDoubleSided = middle
+            context.coordinator.curlsFromMiddle = middle
             // The curl's own taps on the page edges would turn the page a second time after
             // the reader's tap zones have turned it.
             for recognizer in controller.gestureRecognizers where recognizer is UITapGestureRecognizer {
@@ -98,8 +101,10 @@ struct PageViewer: UIViewControllerRepresentable {
         /// The pager curls its pages; next is then "after" in both directions, as the spine
         /// is on the side the book opens from.
         var curls = false
-        /// Whether next comes from the left on screen (manga, sliding).
-        private var physicalRightToLeft: Bool { state.rightToLeft && !curls }
+        /// Curling with two pages on screen: each page is its own leaf, turning about the middle.
+        var curlsFromMiddle = false
+        /// Whether next comes from the left on screen (manga, unless it curls about one side).
+        private var physicalRightToLeft: Bool { state.rightToLeft && !(curls && !curlsFromMiddle) }
         private weak var pageController: UIPageViewController?
         /// Every spread made and still alive (on screen, or kept ready beside it), so a new
         /// look reaches the neighbours too.
@@ -116,7 +121,8 @@ struct PageViewer: UIViewControllerRepresentable {
             cover.view.accessibilityIdentifier = "reader-cover-page"
             // Back comes from the left in left-to-right books, from the right in manga.
             let direction: UIPageViewController.NavigationDirection = physicalRightToLeft ? .forward : .reverse
-            controller.setViewControllers([CoverPageController(cover)], direction: direction, animated: true) { [weak self, weak controller] finished in
+            let pages = curlsFromMiddle ? leaves(-1) : [CoverPageController(cover)]
+            controller.setViewControllers(pages, direction: direction, animated: true) { [weak self, weak controller] finished in
                 guard let self, let controller, finished else { return }
                 self.coverPageShown(in: controller)
             }
@@ -127,7 +133,8 @@ struct PageViewer: UIViewControllerRepresentable {
             guard let end = state.makeEndPage?() else { return }
             let direction: UIPageViewController.NavigationDirection = physicalRightToLeft ? .reverse : .forward
             state.onEndPage = true
-            controller.setViewControllers([EndPageController(end)], direction: direction, animated: true) { [weak self] finished in
+            let pages = curlsFromMiddle ? leaves(state.spreads.count) : [EndPageController(end)]
+            controller.setViewControllers(pages, direction: direction, animated: true) { [weak self] finished in
                 if finished { self?.state.showChrome = false }
             }
         }
@@ -136,17 +143,20 @@ struct PageViewer: UIViewControllerRepresentable {
         func leaveEndPage(in controller: UIPageViewController) {
             let last = state.spreads.count - 1
             state.onEndPage = false
-            guard controller.viewControllers?.first is EndPageController, state.spreads.indices.contains(last) else { return }
+            guard controller.viewControllers?.contains(where: { $0 is EndPageController }) == true,
+                  state.spreads.indices.contains(last) else { return }
             let direction: UIPageViewController.NavigationDirection = physicalRightToLeft ? .forward : .reverse
             // The last screen of the layout now on screen, which a turn of the iPad may have
             // renumbered while the next-book page showed.
             displayedSpread = last
             // Not during this SwiftUI update: the reader's state follows a moment later.
             DispatchQueue.main.async { [state] in state.show(spread: last) }
-            let page = makeController(last)
-            controller.setViewControllers([page], direction: direction, animated: true)
-            followBackground(of: page)
-            becameCurrent(page)
+            let pages = curlsFromMiddle ? leaves(last) : [makeController(last)]
+            controller.setViewControllers(pages, direction: direction, animated: true)
+            if let page = Self.firstSpread(in: pages) {
+                followBackground(of: page)
+                becameCurrent(page)
+            }
         }
 
         /// The cover page is on screen: the reader's cover takes over (it looks the same, and
@@ -171,7 +181,7 @@ struct PageViewer: UIViewControllerRepresentable {
             let direction: UIPageViewController.NavigationDirection = (forward != physicalRightToLeft) ? .forward : .reverse
             // The next-book page stays through a new layout: turning the iPad renumbers the
             // screens (landscape pairs pages; split mode halves the last image in portrait).
-            let onEndPage = state.onEndPage && controller.viewControllers?.first is EndPageController
+            let onEndPage = state.onEndPage && controller.viewControllers?.contains(where: { $0 is EndPageController }) == true
             displayedSpread = target
             layoutVersion = state.layoutVersion
             rightToLeft = state.rightToLeft
@@ -180,20 +190,20 @@ struct PageViewer: UIViewControllerRepresentable {
             // its card lays itself out again for the new size (#83).
             if onEndPage { return }
             guard state.spreads.indices.contains(target) else { return }
-            let page = makeController(target)
+            let pages = curlsFromMiddle ? leaves(target) : [makeController(target)]
             switch (animated, state.pageTurn) {
             case (true, .fade):
                 // Fade and Instant (#125) change taps and buttons; a swipe still slides.
-                UIView.transition(with: controller.view, duration: 0.22, options: [.transitionCrossDissolve, .allowUserInteraction]) {
-                    controller.setViewControllers([page], direction: direction, animated: false)
-                }
+                crossFade(in: controller, to: pages, direction: direction)
             case (true, .instant):
-                controller.setViewControllers([page], direction: direction, animated: false)
+                controller.setViewControllers(pages, direction: direction, animated: false)
             default:
-                controller.setViewControllers([page], direction: direction, animated: animated)
+                controller.setViewControllers(pages, direction: direction, animated: animated)
             }
-            followBackground(of: page)
-            becameCurrent(page)
+            if let page = Self.firstSpread(in: pages) {
+                followBackground(of: page)
+                becameCurrent(page)
+            }
         }
 
         /// Copy All and the Select Text bar follow the spread on screen.
@@ -203,8 +213,113 @@ struct PageViewer: UIViewControllerRepresentable {
             page.reportTextStatus()
         }
 
-        private func makeController(_ spread: Int) -> SpreadViewController {
-            var pages = state.spreads[spread]
+        /// The first page screen of those on screen (a leaf beside it may be blank).
+        static func firstSpread(in pages: [UIViewController]) -> SpreadViewController? {
+            pages.lazy.compactMap { $0 as? SpreadViewController }.first
+        }
+
+        /// Turning the page by fading: the new page shows through the old one. The old page
+        /// is laid over the pager as a snapshot and fades out, so neither page ever dims (a
+        /// cross-dissolve of the whole pager flashed the background between them).
+        private func crossFade(in controller: UIPageViewController, to pages: [UIViewController],
+                               direction: UIPageViewController.NavigationDirection) {
+            let snapshot = controller.view.snapshotView(afterScreenUpdates: false)
+            controller.setViewControllers(pages, direction: direction, animated: false)
+            guard let snapshot else { return }
+            snapshot.frame = controller.view.bounds
+            snapshot.isUserInteractionEnabled = false
+            controller.view.addSubview(snapshot)
+            let incoming = pages.compactMap { $0 as? SpreadViewController }
+            // The old page stays until the new one has its image (a moment, as the pages beside
+            // are decoded ahead), so the fade never passes through an empty page.
+            func fade(waited: Int) {
+                guard waited >= 18 || incoming.allSatisfy(\.hasImages) else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { fade(waited: waited + 1) }
+                    return
+                }
+                UIView.animate(withDuration: 0.32, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) {
+                    snapshot.alpha = 0
+                } completion: { _ in
+                    snapshot.removeFromSuperview()
+                }
+            }
+            fade(waited: 0)
+        }
+
+        // MARK: Curling about the middle
+
+        /// The pages on each side of the middle for a screen, left then right on screen.
+        /// -1 is the cover before the first page and `spreads.count` the next-book page.
+        private func leafPages(_ spread: Int) -> (left: DisplayPage?, right: DisplayPage?) {
+            let pages = state.spreads[spread]
+            if pages.count >= 2 {
+                return state.rightToLeft ? (pages[1], pages[0]) : (pages[0], pages[1])
+            }
+            guard let page = pages.first else { return (nil, nil) }
+            // An image holding two pages: each half is its own leaf.
+            if page.part == .whole, state.sides.indices.contains(page.page), state.sides[page.page] == .both {
+                return (DisplayPage(page: page.page, part: .left), DisplayPage(page: page.page, part: .right))
+            }
+            // A page on its own: the first page where a book's first page is (the right, or
+            // the left in manga); any other on the side read first.
+            let onRight = (spread == 0) != state.rightToLeft
+            return onRight ? (nil, page) : (page, nil)
+        }
+
+        /// The two leaves of a screen, left then right on screen.
+        private func leaves(_ spread: Int) -> [UIViewController] {
+            [makeLeaf(spread, side: 0), makeLeaf(spread, side: 1)]
+        }
+
+        private func makeLeaf(_ spread: Int, side: Int) -> UIViewController {
+            let blank = { BlankLeafController(spreadIndex: spread, side: side, color: self.state.background.uiColor ?? .black) { [weak self] fraction in
+                self?.state.handleTap(atFraction: (CGFloat(side) + fraction) / 2)
+            } }
+            // The cover on the side a book's cover is; the next-book page on the side read first.
+            if spread == -1 || spread == state.spreads.count {
+                let coverSide = state.rightToLeft ? 0 : 1
+                let isCover = spread == -1
+                guard side == (isCover ? coverSide : 1 - coverSide) else { return blank() }
+                if isCover, let cover = state.makeCoverPage?() {
+                    cover.view.accessibilityIdentifier = "reader-cover-page"
+                    return CoverPageController(cover)
+                }
+                if !isCover, let end = state.makeEndPage?() { return EndPageController(end) }
+                return blank()
+            }
+            let pair = leafPages(spread)
+            guard let page = side == 0 ? pair.left : pair.right else { return blank() }
+            return makeController(spread, pages: [page], leafSide: side)
+        }
+
+        /// The screen and side of a leaf.
+        private func leafPlace(of controller: UIViewController) -> (spread: Int, side: Int)? {
+            switch controller {
+            case let page as SpreadViewController: return page.leafSide.map { (page.spreadIndex, $0) }
+            case let blank as BlankLeafController: return (blank.spreadIndex, blank.side)
+            case is CoverPageController: return (-1, state.rightToLeft ? 0 : 1)
+            case is EndPageController: return (state.spreads.count, state.rightToLeft ? 1 : 0)
+            default: return nil
+            }
+        }
+
+        /// The leaf beside or behind another: the pager's order runs left to right across a
+        /// screen, and on to the screen that a turn of the right-hand page brings.
+        private func leafNeighbour(of controller: UIViewController, step: Int) -> UIViewController? {
+            guard let place = leafPlace(of: controller) else { return nil }
+            let count = state.spreads.count
+            func position(_ spread: Int) -> Int { state.rightToLeft ? count - 1 - spread : spread }
+            let index = position(place.spread) * 2 + place.side + step
+            let pos = Int((Double(index) / 2).rounded(.down)), side = index - pos * 2
+            let spread = state.rightToLeft ? count - 1 - pos : pos
+            let first = state.makeCoverPage == nil ? 0 : -1
+            let last = state.makeEndPage == nil ? count - 1 : count
+            guard spread >= first, spread <= last else { return nil }
+            return makeLeaf(spread, side: side)
+        }
+
+        private func makeController(_ spread: Int, pages override: [DisplayPage]? = nil, leafSide: Int? = nil) -> SpreadViewController {
+            var pages = override ?? state.spreads[spread]
             // Both halves of one image on the same screen: show the image itself, so there is
             // no seam (or binding shadow) down the middle of a drawn spread.
             if pages.count == 2, pages[0].page == pages[1].page, pages[0].isHalf, pages[1].isHalf {
@@ -223,14 +338,21 @@ struct PageViewer: UIViewControllerRepresentable {
             let style = SpreadViewController.Style(
                 fit: state.fit, background: state.background, bindingShadow: CGFloat(state.bindingShadow),
                 autoTrim: state.autoTrim,
-                edgeProgress: state.pageEdges ? CGFloat(spread) / CGFloat(max(1, state.spreads.count - 1)) : nil
+                edgeProgress: state.pageEdges ? CGFloat(spread) / CGFloat(max(1, state.spreads.count - 1)) : nil,
+                // A leaf sits against the middle, with page edges only on its outer side.
+                leafSide: leafSide
             )
             let controller = SpreadViewController(
                 spreadIndex: spread, pieces: pieces, rightToLeft: state.rightToLeft,
                 style: style, source: state.source, cache: state.cache, edgeColors: state.edgeColors,
                 textAnalyzer: state.textAnalyzer
             )
-            controller.onTap = { [weak self] fraction in self?.state.handleTap(atFraction: fraction) }
+            controller.leafSide = leafSide
+            controller.onTap = { [weak self] fraction in
+                // A leaf is half the screen.
+                let across = leafSide.map { (CGFloat($0) + fraction) / 2 } ?? fraction
+                self?.state.handleTap(atFraction: across)
+            }
             // Only the spread on screen speaks for the screen; neighbours read their text quietly.
             controller.onTextStatus = { [weak self] index, status in
                 // Later, since this can run while SwiftUI is updating the page view.
@@ -257,6 +379,7 @@ struct PageViewer: UIViewControllerRepresentable {
         }
 
         private func neighbour(of controller: UIViewController, step: Int) -> UIViewController? {
+            if curlsFromMiddle { return leafNeighbour(of: controller, step: step) }
             // Back from the next-book page is the last page; there is nothing beyond it.
             if controller is EndPageController {
                 let last = state.spreads.count - 1
@@ -286,23 +409,29 @@ struct PageViewer: UIViewControllerRepresentable {
             neighbour(of: vc, step: 1)
         }
 
+        /// A turn of the iPad keeps the spine where it is: a change between one page and two
+        /// makes a new pager (see `ReaderScreen`), which a turn always comes with.
+        func pageViewController(_ pvc: UIPageViewController, spineLocationFor orientation: UIInterfaceOrientation) -> UIPageViewController.SpineLocation {
+            pvc.spineLocation
+        }
+
         func pageViewController(_ pvc: UIPageViewController, willTransitionTo pending: [UIViewController]) {
             // A neighbour made before Select Text was switched on catches up here.
             for case let page as SpreadViewController in pending { page.selectingText = state.selectingText }
         }
 
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-            guard completed else { return }
-            if pvc.viewControllers?.first is CoverPageController {
+            guard completed, let shown = pvc.viewControllers else { return }
+            if shown.contains(where: { $0 is CoverPageController }) {
                 coverPageShown(in: pvc)
                 return
             }
-            if pvc.viewControllers?.first is EndPageController {
+            if shown.contains(where: { $0 is EndPageController }) {
                 state.onEndPage = true
                 if state.showChrome { state.showChrome = false }
                 return
             }
-            guard let current = pvc.viewControllers?.first as? SpreadViewController else { return }
+            guard let current = Self.firstSpread(in: shown) else { return }
             state.onEndPage = false
             displayedSpread = current.spreadIndex
             state.show(spread: current.spreadIndex)
@@ -332,6 +461,35 @@ final class CoverPageController: UIViewController {
         content.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(content.view)
         content.didMove(toParent: self)
+    }
+}
+
+/// The empty side of a two-page curl: beside a page that stands alone, the cover or the
+/// next-book page. Taps still reach the reader's tap zones.
+final class BlankLeafController: UIViewController {
+    let spreadIndex: Int
+    let side: Int
+    private let color: UIColor
+    private let onTap: (CGFloat) -> Void
+
+    init(spreadIndex: Int, side: Int, color: UIColor, onTap: @escaping (CGFloat) -> Void) {
+        self.spreadIndex = spreadIndex
+        self.side = side
+        self.color = color
+        self.onTap = onTap
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = color
+        view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
+    }
+
+    @objc private func tapped(_ gesture: UITapGestureRecognizer) {
+        onTap(gesture.location(in: view).x / max(view.bounds.width, 1))
     }
 }
 
@@ -377,6 +535,8 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
         var autoTrim = false
         /// With page edges on (#126), how far through the book this spread is, 0 to 1.
         var edgeProgress: CGFloat?
+        /// One leaf of a two-page curl: 0 on the left of the middle, 1 on the right.
+        var leafSide: Int?
     }
 
     /// The most page edge drawn on one side, in points.
@@ -384,6 +544,8 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
 
     let spreadIndex: Int
     let pieces: [Piece]
+    /// For a leaf of a two-page curl, its side of the middle (0 left, 1 right).
+    var leafSide: Int?
     private let rightToLeft: Bool
     private let style: Style
     private let source: BookSource
@@ -571,10 +733,11 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
     private func layoutPages() {
         var bounds = scrollView.bounds.size
         guard bounds.width > 0, bounds.height > 0 else { return }
-        // Room for the page edges on both sides.
+        // Room for the page edges, on both sides (a leaf of a curl: its outer side only).
         let edgeRoom = pageEdges == nil ? 0 : Self.edgeMax + 2
+        let leftRoom = style.leafSide == 1 ? 0 : edgeRoom, rightRoom = style.leafSide == 0 ? 0 : edgeRoom
         let fullWidth = bounds.width
-        bounds.width = max(1, bounds.width - 2 * edgeRoom)
+        bounds.width = max(1, bounds.width - leftRoom - rightRoom)
         let aspects = imageViews.indices.map { slot -> CGFloat in
             // The cut image, not a resized copy, so rounding in the resize never moves the layout.
             guard let size = (cutImages[slot] ?? imageViews[slot].image)?.size, size.height > 0 else { return 2.0 / 3.0 }
@@ -587,7 +750,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
         case .width: height = bounds.width / totalAspect
         case .height: height = bounds.height
         }
-        let content = CGSize(width: max(fullWidth, (height * totalAspect).rounded() + 2 * edgeRoom), height: max(bounds.height, height.rounded()))
+        let content = CGSize(width: max(fullWidth, (height * totalAspect).rounded() + leftRoom + rightRoom), height: max(bounds.height, height.rounded()))
         if scrollView.zoomScale == 1 {
             contentView.frame = CGRect(origin: .zero, size: content)
             scrollView.contentSize = content
@@ -597,7 +760,13 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
             }
         }
         let area = contentView.bounds.size
-        var x = (area.width - height * totalAspect) / 2
+        // Centred; a leaf of a curl sits against the middle, so the two pages meet there.
+        var x: CGFloat
+        switch style.leafSide {
+        case 0: x = area.width - rightRoom - height * totalAspect
+        case 1: x = leftRoom
+        default: x = leftRoom + (area.width - leftRoom - rightRoom - height * totalAspect) / 2
+        }
         let y = max(0, (area.height - height) / 2).rounded()
         for (view, aspect) in zip(imageViews, aspects) {
             // Round the edges, not each frame, so neighbouring pages meet without a gap.
@@ -609,7 +778,9 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
         // The edges of the pages read (on the side the book opens from) and still to read.
         if let pageEdges, let progress = style.edgeProgress, let first = imageViews.first?.frame, let last = imageViews.last?.frame {
             let read = max(1.5, (progress * Self.edgeMax).rounded()), unread = max(1.5, ((1 - progress) * Self.edgeMax).rounded())
-            let leftWidth = rightToLeft ? unread : read, rightWidth = rightToLeft ? read : unread
+            var leftWidth = rightToLeft ? unread : read, rightWidth = rightToLeft ? read : unread
+            if style.leafSide == 1 { leftWidth = 0 }
+            if style.leafSide == 0 { rightWidth = 0 }
             let top = min(first.minY, last.minY), bottom = max(first.maxY, last.maxY)
             pageEdges.left.frame = CGRect(x: first.minX - leftWidth, y: top, width: leftWidth, height: bottom - top)
             pageEdges.right.frame = CGRect(x: last.maxX, y: top, width: rightWidth, height: bottom - top)
@@ -906,6 +1077,9 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
     }
 
     /// Puts a decoded image in its slot, cut to the half and crop this page shows.
+    /// Every page on this screen shows its image (perhaps a smaller copy for now).
+    var hasImages: Bool { isViewLoaded && imageViews.allSatisfy { $0.image != nil } }
+
     private func display(_ image: UIImage, in slot: Int) {
         uncutImages[slot] = image
         cut(slot)

@@ -80,12 +80,11 @@ struct PageLayoutPanel: View {
                                                   selection: setting(state, \.pageTurn) { $0.pageTurn = $1 })
                     .accessibilityIdentifier("settings-page-turn")
             }
-            if state.pageTurn == .fade || state.pageTurn == .instant {
-                Text("\(state.pageTurn.title) is for taps and the page buttons; a swipe still slides the page.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            // Always shown, so choosing a style never changes the panel's height.
+            Text("Fade and Instant are for taps and the page buttons; a swipe still slides the page.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-layout-panel")
