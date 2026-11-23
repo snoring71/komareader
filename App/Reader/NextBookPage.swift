@@ -16,6 +16,8 @@ struct NextBookPage: View {
     let onBack: () -> Void
 
     @State private var backdrop: UIImage?
+    /// The card's height, to set the rating in the space above it.
+    @State private var cardHeight: CGFloat = 0
     /// Read Now was tapped on a book still in iCloud: it downloads, then opens.
     @State private var waiting = false
 
@@ -26,13 +28,18 @@ struct NextBookPage: View {
             ZStack {
                 background(size: geo.size)
                 card(coverWidth: coverWidth, landscape: landscape)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0 }
                     .padding(32)
                 if let finishedId, let finished = model.book(id: finishedId) {
-                    VStack {
+                    // Halfway between the top of the page and the top of the card (which is
+                    // centred), so the space above and below the stars is the same.
+                    let above = max(0, (geo.size.height - cardHeight) / 2)
+                    VStack(spacing: 0) {
                         ratingBar(for: finished)
-                            .padding(.top, landscape ? 20 : 48)
-                        Spacer()
+                            .frame(height: above)
+                        Spacer(minLength: 0)
                     }
+                    .opacity(cardHeight > 0 ? 1 : 0)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
