@@ -792,8 +792,12 @@ final class AppModel {
         let intro = restoring ? nil : await coverIntro(for: current)
         // Something else may have opened in the meantime.
         if restoring, openBook != nil { return }
-        openBook = OpenBook(book: current, source: source, handOff: handOff, options: options, intro: intro,
-                            bookmarks: record?.pageBookmarks?.pages)
+        let opening = OpenBook(book: current, source: source, handOff: handOff, options: options, intro: intro,
+                               bookmarks: record?.pageBookmarks?.pages)
+        // Opened from a cover: no slide up, as the cover grows into the reader (#127).
+        var transaction = Transaction()
+        transaction.disablesAnimations = openedFrom != nil && openBook == nil
+        withTransaction(transaction) { openBook = opening }
     }
 
     /// Average cover colours, so a book opened again gets its background at once.
@@ -1743,7 +1747,7 @@ final class AppModel {
     }
 
     /// Puts the position reached in the reader into `books`, once, when the reader closes.
-    private func applyReadingProgress() {
+    func applyReadingProgress() {
         if let pending = directionAfterReading {
             directionAfterReading = nil
             updateBook(pending.id) { $0.direction = pending.direction }

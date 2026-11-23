@@ -12,8 +12,6 @@ struct RootView: View {
     @State private var sidebarShown = false
     /// The reader restore (#66) is tried once, when the library is first ready.
     @State private var restoreTried = false
-    /// Covers in the library and the reader zoom between each other in this (#127).
-    @Namespace private var shelfZoom
 
     var body: some View {
         @Bindable var model = model
@@ -62,7 +60,6 @@ struct RootView: View {
                 }
             }
         }
-        .environment(\.shelfZoom, ShelfZoom.isEnabled ? shelfZoom : nil)
         .onChange(of: model.openBook?.id) { _, id in
             ReaderRestore.note(bookId: id)
         }
@@ -82,10 +79,12 @@ struct RootView: View {
             set: { if $0 == nil { model.openBook = nil } }
         )) { presented in
             let open = presented.open
-            ReaderScreen(book: open.book, source: open.source, options: open.options, defaults: model.readerDefaults, handOff: open.handOff, intro: open.intro, bookmarks: open.bookmarks)
-                .toggleStyle(MonoToggleStyle())
-                .id(open.id)
-                .modifier(ShelfZoomDestination(sourceID: model.openedFrom, namespace: shelfZoom))
+            // The cover it was opened from grows into the reader and shrinks back (#127).
+            ShelfZoomContainer(bookId: open.book.id, from: model.openedFrom.flatMap { ShelfZoom.frames[$0] }) {
+                ReaderScreen(book: open.book, source: open.source, options: open.options, defaults: model.readerDefaults, handOff: open.handOff, intro: open.intro, bookmarks: open.bookmarks)
+                    .toggleStyle(MonoToggleStyle())
+                    .id(open.id)
+            }
         }
         .sheet(item: $model.bookInfo) { ref in
             BookInfoView(bookId: ref.id)

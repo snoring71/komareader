@@ -7,6 +7,7 @@ import SwiftUI
 struct ReaderScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.shelfZoomClose) private var shelfZoomClose
     @Environment(\.coverStyle) private var coverStyle
     @State private var state: ReaderState
     @State private var scrubPage: Double = 0
@@ -250,7 +251,7 @@ struct ReaderScreen: View {
         hidesStatusBar = false
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
-            dismiss()
+            if let shelfZoomClose { shelfZoomClose() } else { dismiss() }
         }
     }
 
@@ -258,6 +259,11 @@ struct ReaderScreen: View {
     private func closeBySwipe() {
         guard !closing else { return }
         hidesStatusBar = false
+        // Opened from a cover: back onto it, from where the page flew up to.
+        if let shelfZoomClose {
+            shelfZoomClose()
+            return
+        }
         withAnimation(.easeOut(duration: 0.25)) { closing = true }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
