@@ -376,23 +376,57 @@ enum PageFilter {
     }
 
     /// Clean Up JPEG: clears the light grey halo and specks JPEG leaves in the paper around
-    /// lines and text. Near-white goes to white (up to the top fifth of the range at full
-    /// strength) and the darkest few percent to black, a straight stretch in sRGB between
-    /// them, so mid tones keep their order and the change grows evenly with the slider.
-    /// Nothing is filtered by neighbourhood: a median filter tried first took screentone dots
-    /// and fine lines with the specks, even at the lowest setting.
+    /// lines and text, and keeps the page's grey shading. The strong clean-up (near-white to
+    /// white, the darkest few percent to black) applies only where the page is light, ink is
+    /// close by and so is plain paper: the halo round a line or a letter on a white ground.
+    /// Shaded areas (hair, skin, screentone) have no plain paper beside them and keep their
+    /// greys; elsewhere only the faintest specks in the paper go. Nothing is filtered by
+    /// neighbourhood: a median filter, tried first, took screentone and fine lines with it.
     static func cleanUpJPEG(_ image: CIImage, amount: Double, unit: CGFloat) -> CIImage {
         let extent = image.extent
         let a = min(max(amount, 0), 1)
-        let white = 1 - 0.2 * a, black = 0.06 * a
-        let scale = CGFloat(1 / (white - black)), bias = CGFloat(-black / (white - black))
         let srgb = image.applyingFilter("CILinearToSRGBToneCurve")
-        let stretched = multiply(srgb, red: scale, green: scale, blue: scale, bias: bias)
-            .applyingFilter("CIColorClamp", parameters: [
-                "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1),
-            ])
-        return stretched.applyingFilter("CISRGBToneCurveToLinear").cropped(to: extent)
+        let strong = stretch(srgb, white: 1 - 0.25 * a, black: 0.06 * a)
+        let gentle = stretch(srgb, white: 1 - 0.06 * a, black: 0)
+
+        // Lightness, as grey.
+        let weights = CIVector(x: 0.299, y: 0.587, z: 0.114, w: 0)
+        let lightness = srgb.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": weights, "inputGVector": weights, "inputBVector": weights,
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1), "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+        ]).clampedToExtent()
+        let radius = max(2, 3.5 * unit)
+        // Ink close by: the darkest pixel around is dark (1 below 0.3, 0 above 0.55).
+        let darkest = lightness.applyingFilter("CIMorphologyMinimum", parameters: [kCIInputRadiusKey: radius])
+        let nearInk = linearMap(darkest, scale: -4, bias: 2.2)
+        // Plain paper close by: the lightest pixel around is near white (0 below 0.88, 1 above 0.96).
+        let lightest = lightness.applyingFilter("CIMorphologyMaximum", parameters: [kCIInputRadiusKey: radius])
+        let nearPaper = linearMap(lightest, scale: 12.5, bias: -11)
+        let mask = nearInk.applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: nearPaper])
+            .applyingGaussianBlur(sigma: Double(unit))
+            .cropped(to: extent)
+
+        let blended = strong.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: gentle, kCIInputMaskImageKey: mask,
+        ])
+        return blended.applyingFilter("CISRGBToneCurveToLinear").cropped(to: extent)
+    }
+
+    /// A straight stretch of every channel: `black` to 0 and `white` to 1, clamped.
+    private static func stretch(_ image: CIImage, white: Double, black: Double) -> CIImage {
+        let scale = CGFloat(1 / (white - black)), bias = CGFloat(-black / (white - black))
+        return multiply(image, red: scale, green: scale, blue: scale, bias: bias).applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1),
+        ])
+    }
+
+    /// `scale × value + bias` on a grey image, clamped to 0…1, alpha kept at 1.
+    private static func linearMap(_ image: CIImage, scale: CGFloat, bias: CGFloat) -> CIImage {
+        multiply(image, red: scale, green: scale, blue: scale, bias: bias).applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1),
+        ])
     }
 
     /// Descreen (#119): blurs away halftone dots and JPEG blocks, then brings the line art's
