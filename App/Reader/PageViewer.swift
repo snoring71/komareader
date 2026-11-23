@@ -23,6 +23,8 @@ struct PageViewer: UIViewControllerRepresentable {
             )
             controller.isDoubleSided = middle
             context.coordinator.curlsFromMiddle = middle
+            // Two leaves zoom together, as one spread.
+            if middle { context.coordinator.pagerZoom = PagerZoom(pager: controller, state: state) }
             // The curl's own taps on the page edges would turn the page a second time after
             // the reader's tap zones have turned it.
             for recognizer in controller.gestureRecognizers where recognizer is UITapGestureRecognizer {
@@ -103,6 +105,8 @@ struct PageViewer: UIViewControllerRepresentable {
         var curls = false
         /// Curling with two pages on screen: each page is its own leaf, turning about the middle.
         var curlsFromMiddle = false
+        /// Zooms both leaves together when curling about the middle.
+        var pagerZoom: PagerZoom?
         /// Whether next comes from the left on screen (manga, unless it curls about one side).
         private var physicalRightToLeft: Bool { state.rightToLeft && !(curls && !curlsFromMiddle) }
         private weak var pageController: UIPageViewController?
@@ -175,6 +179,7 @@ struct PageViewer: UIViewControllerRepresentable {
         }
 
         func show(in controller: UIPageViewController, animated: Bool) {
+            pagerZoom?.reset(animated: false)
             let target = state.currentSpread
             let forward = target >= displayedSpread
             // Next comes from the right in left-to-right books, from the left in manga.
@@ -364,6 +369,10 @@ struct PageViewer: UIViewControllerRepresentable {
             controller.selectingText = state.selectingText
             controller.look = look
             controller.onSwipeUp = { [weak self] in self?.state.closeRequested = true }
+            // A leaf doesn't zoom by itself: a double tap zooms the whole spread.
+            if leafSide != nil {
+                controller.onDoubleTap = { [weak self] point in self?.pagerZoom?.doubleTap(at: point) }
+            }
             live.add(controller)
             controller.onBackgroundChange = { [weak self, weak controller] in
                 guard let self, let controller else { return }
@@ -573,6 +582,8 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
     }
     /// Called when the page has been swiped up past the point of closing the book.
     var onSwipeUp: (() -> Void)?
+    /// For a leaf of a two-page curl: a double tap, in window coordinates, to zoom the spread.
+    var onDoubleTap: ((CGPoint) -> Void)?
     /// Called when a Match Page background has been worked out.
     var onBackgroundChange: (() -> Void)?
     private(set) var currentBackground: UIColor?
@@ -645,7 +656,8 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
         view.backgroundColor = background
         scrollView.delegate = self
         scrollView.minimumZoomScale = 1
-        scrollView.maximumZoomScale = 5
+        // A leaf of a two-page curl zooms with its partner (see `PagerZoom`), not alone.
+        scrollView.maximumZoomScale = style.leafSide == nil ? 5 : 1
         scrollView.showsVerticalScrollIndicator = false
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.contentInsetAdjustmentBehavior = .never
@@ -690,7 +702,8 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
             scaleTasks.append(nil)
         }
         let isSpread = pieces.count == 2 || (pieces.count == 1 && pieces[0].fold.map { $0 > 0.1 && $0 < 0.9 } == true)
-        if isSpread, style.bindingShadow > 0 {
+        // A leaf of a two-page curl shades its side of the fold.
+        if isSpread || style.leafSide != nil, style.bindingShadow > 0 {
             let shadow = BindingShadowView(strength: style.bindingShadow)
             contentView.addSubview(shadow)
             bindingShadow = shadow
@@ -787,7 +800,12 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
         }
         // Where the two pages meet, darkened a little like the fold of a printed book.
         if let bindingShadow {
-            if imageViews.count == 2 {
+            if let side = style.leafSide, let frame = imageViews.first?.frame {
+                // Half of the shadow, on the inner edge (the scroll view clips the other half).
+                let width = (frame.width * 0.12).rounded()
+                let seam = side == 0 ? frame.maxX : frame.minX
+                bindingShadow.frame = CGRect(x: seam - width / 2, y: frame.minY, width: width, height: frame.height)
+            } else if imageViews.count == 2 {
                 let left = imageViews[0].frame, right = imageViews[1].frame
                 let width = (min(left.width, right.width) * 0.12).rounded()
                 let top = min(left.minY, right.minY), bottom = max(left.maxY, right.maxY)
@@ -1230,6 +1248,10 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
     }
 
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+        if let onDoubleTap {
+            onDoubleTap(gesture.location(in: nil))
+            return
+        }
         if scrollView.zoomScale > 1.01 {
             scrollView.setZoomScale(1, animated: true)
         } else {
@@ -1283,6 +1305,120 @@ final class PageEdgesView: UIView {
             context.setFillColor(UIColor(white: 0, alpha: 0.18).cgColor)
             context.fill(CGRect(x: gapX, y: sheet.minY, width: 0.5, height: sheet.height))
         }
+    }
+}
+
+/// Zoom for a two-page curl: each page is its own leaf in the pager, so the pager's view
+/// itself is scaled, and both pages zoom as one spread. Pinch to zoom, drag to look around,
+/// double-tap to zoom in or out. While zoomed the pages don't turn (a tap shows the controls).
+@MainActor
+final class PagerZoom: NSObject, UIGestureRecognizerDelegate {
+    private weak var pager: UIPageViewController?
+    private let state: ReaderState
+    private var zoom: CGFloat = 1
+    private var offset: CGPoint = .zero
+    private let pan = UIPanGestureRecognizer()
+    private let tap = UITapGestureRecognizer()
+    private let maxZoom: CGFloat = 5
+
+    init(pager: UIPageViewController, state: ReaderState) {
+        self.pager = pager
+        self.state = state
+        super.init()
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
+        pinch.delegate = self
+        pager.view.addGestureRecognizer(pinch)
+        pan.addTarget(self, action: #selector(panned(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.isEnabled = false
+        pager.view.addGestureRecognizer(pan)
+        tap.addTarget(self, action: #selector(tapped))
+        tap.isEnabled = false
+        pager.view.addGestureRecognizer(tap)
+    }
+
+    var isZoomed: Bool { zoom > 1.01 }
+
+    func reset(animated: Bool) {
+        guard zoom != 1 || offset != .zero else { return }
+        zoom = 1
+        offset = .zero
+        apply(animated: animated)
+    }
+
+    func doubleTap(at windowPoint: CGPoint) {
+        guard let view = pager?.view, let container = view.superview else { return }
+        if isZoomed {
+            reset(animated: true)
+        } else {
+            zoom(to: 2.5, keeping: container.convert(windowPoint, from: nil), in: view)
+            apply(animated: true)
+        }
+    }
+
+    /// Zooms so the point under `point` (in the superview) stays there.
+    private func zoom(to newZoom: CGFloat, keeping point: CGPoint, in view: UIView) {
+        let center = view.center
+        let content = CGPoint(x: (point.x - center.x - offset.x) / zoom, y: (point.y - center.y - offset.y) / zoom)
+        zoom = min(max(newZoom, 1), maxZoom)
+        offset = CGPoint(x: point.x - center.x - content.x * zoom, y: point.y - center.y - content.y * zoom)
+        clampOffset(in: view)
+    }
+
+    /// Keeps the pages covering the screen.
+    private func clampOffset(in view: UIView) {
+        let size = view.bounds.size
+        let limitX = (zoom - 1) * size.width / 2, limitY = (zoom - 1) * size.height / 2
+        offset = CGPoint(x: min(max(offset.x, -limitX), limitX), y: min(max(offset.y, -limitY), limitY))
+    }
+
+    private func apply(animated: Bool) {
+        guard let pager else { return }
+        let transform = CGAffineTransform(translationX: offset.x, y: offset.y).scaledBy(x: zoom, y: zoom)
+        let zoomed = isZoomed
+        // While zoomed: no curling, and the pages' own taps and swipes give way to panning.
+        for recognizer in pager.gestureRecognizers { recognizer.isEnabled = !zoomed && !(recognizer is UITapGestureRecognizer) }
+        for page in pager.viewControllers ?? [] { page.view.isUserInteractionEnabled = !zoomed }
+        pan.isEnabled = zoomed
+        tap.isEnabled = zoomed
+        if animated {
+            UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) {
+                pager.view.transform = transform
+            }
+        } else {
+            pager.view.transform = transform
+        }
+    }
+
+    @objc private func pinched(_ gesture: UIPinchGestureRecognizer) {
+        guard let view = pager?.view, let container = view.superview else { return }
+        switch gesture.state {
+        case .changed:
+            zoom(to: zoom * gesture.scale, keeping: gesture.location(in: container), in: view)
+            gesture.scale = 1
+            apply(animated: false)
+        case .ended, .cancelled:
+            if zoom < 1.05 { reset(animated: true) } else { apply(animated: false) }
+        default:
+            break
+        }
+    }
+
+    @objc private func panned(_ gesture: UIPanGestureRecognizer) {
+        guard let view = pager?.view, let container = view.superview else { return }
+        let moved = gesture.translation(in: container)
+        gesture.setTranslation(.zero, in: container)
+        offset = CGPoint(x: offset.x + moved.x, y: offset.y + moved.y)
+        clampOffset(in: view)
+        apply(animated: false)
+    }
+
+    @objc private func tapped() {
+        state.handleTap(atFraction: 0.5)
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
     }
 }
 
