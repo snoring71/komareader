@@ -225,6 +225,7 @@ final class ReaderState {
         resolved.nightMode = look.nightMode
         resolved.nightOnlyInDark = look.nightOnlyInDark
         resolved.descreen = look.descreen
+        resolved.jpegCleanup = look.jpegCleanup
         resolved.sharperScaling = look.sharperScaling
         resolved.keepColorPages = look.keepColorPages
         resolved.paperStock = look.paperStock

@@ -153,6 +153,8 @@ public extension BookRecord {
         public var nightOnlyInDark: Bool?
         /// Softens halftone dots and JPEG blocks, from 0 (none) to 1.
         public var descreen: Double?
+        /// Cleans up JPEG artifacts (the specks and halos around lines and text), 0 to 1.
+        public var jpegCleanup: Double?
         /// Resizes pages to the exact size on screen with Lanczos resampling.
         public var sharperScaling: Bool?
         /// Leaves colour pages in colour when a black-and-white fix (black and white, auto-fix's
@@ -202,7 +204,7 @@ public extension BookRecord {
         /// Whether any of the image settings added in phase 3 is set.
         var hasLookExtras: Bool {
             brightness != nil || gamma != nil || saturation != nil || blackAndWhite != nil || autoFix != nil
-                || nightMode != nil || nightOnlyInDark != nil || descreen != nil || sharperScaling != nil
+                || nightMode != nil || nightOnlyInDark != nil || descreen != nil || jpegCleanup != nil || sharperScaling != nil
                 || keepColorPages != nil || paperStock != nil || upscale != nil
         }
     }

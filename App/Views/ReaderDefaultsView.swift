@@ -84,6 +84,7 @@ struct ReaderDefaultsView: View {
             Section {
                 slider("Sharpness", value: $defaults.sharpness, in: 0...1)
                 slider("Descreen", value: $defaults.descreen, in: 0...1)
+                slider("Clean Up JPEG", value: $defaults.jpegCleanup, in: 0...1)
                 Toggle("Sharper Scaling", isOn: $defaults.sharperScaling)
                 if PageUpscaler.isSupported {
                     Toggle("Upscale Small Scans", isOn: $defaults.upscale)
