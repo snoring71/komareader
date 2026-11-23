@@ -31,6 +31,7 @@ final class ReaderDefaults {
     var nightMode: ReaderOptions.NightMode { didSet { save() } }
     var nightOnlyInDark: Bool { didSet { save() } }
     var descreen: Double { didSet { save() } }
+    var jpegCleanup: Double { didSet { save() } }
     var sharperScaling: Bool { didSet { save() } }
     var keepColorPages: Bool { didSet { save() } }
     var paperStock: ReaderOptions.PaperStock { didSet { save() } }
@@ -55,6 +56,7 @@ final class ReaderDefaults {
             look.nightMode = nightMode
             look.nightOnlyInDark = nightOnlyInDark
             look.descreen = descreen
+            look.jpegCleanup = jpegCleanup
             look.sharperScaling = sharperScaling
             look.keepColorPages = keepColorPages
             look.paperStock = paperStock
@@ -108,6 +110,7 @@ final class ReaderDefaults {
         var pageTurn: ReaderOptions.PageTurn?
         var pageEdges: Bool?
         var upscale: Bool?
+        var jpegCleanup: Double?
     }
 
     init() {
@@ -132,6 +135,7 @@ final class ReaderDefaults {
             nightMode = stored.nightMode ?? .off
             nightOnlyInDark = stored.nightOnlyInDark ?? false
             descreen = stored.descreen ?? 0
+            jpegCleanup = stored.jpegCleanup ?? 0
             sharperScaling = stored.sharperScaling ?? false
             keepColorPages = stored.keepColorPages ?? true
             paperStock = stored.paperStock ?? .plain
@@ -169,6 +173,7 @@ final class ReaderDefaults {
         nightMode = .off
         nightOnlyInDark = false
         descreen = 0
+        jpegCleanup = 0
         sharperScaling = false
         keepColorPages = true
         paperStock = .plain
@@ -185,7 +190,7 @@ final class ReaderDefaults {
                             brightness: brightness, gamma: gamma, saturation: saturation, blackAndWhite: blackAndWhite,
                             autoFix: autoFix, nightMode: nightMode, nightOnlyInDark: nightOnlyInDark, descreen: descreen,
                             sharperScaling: sharperScaling, keepColorPages: keepColorPages, paperStock: paperStock,
-                            autoTrim: autoTrim, pageTurn: pageTurn, pageEdges: pageEdges, upscale: upscale)
+                            autoTrim: autoTrim, pageTurn: pageTurn, pageEdges: pageEdges, upscale: upscale, jpegCleanup: jpegCleanup)
         if let data = try? JSONEncoder().encode(stored) { UserDefaults.standard.set(data, forKey: Self.key) }
     }
 
@@ -211,6 +216,7 @@ final class ReaderDefaults {
         if let value = options.nightMode { nightMode = value }
         if let value = options.nightOnlyInDark { nightOnlyInDark = value }
         if let value = options.descreen { descreen = value }
+        if let value = options.jpegCleanup { jpegCleanup = value }
         if let value = options.sharperScaling { sharperScaling = value }
         if let value = options.keepColorPages { keepColorPages = value }
         if let value = options.paperStock { paperStock = value }

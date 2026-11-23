@@ -290,6 +290,8 @@ struct AdjustmentsPanel: View {
                 .accessibilityIdentifier("adjust-sharpness")
             slider("Descreen", value: \.descreen, in: 0...1, shown: percent(look.descreen))
                 .accessibilityIdentifier("adjust-descreen")
+            slider("Clean Up JPEG", value: \.jpegCleanup, in: 0...1, shown: percent(look.jpegCleanup))
+                .accessibilityIdentifier("adjust-jpeg-cleanup")
             toggle("Sharper Scaling", value: \.sharperScaling, identifier: "adjust-lanczos")
             if PageUpscaler.isSupported {
                 toggle("Upscale Small Scans", value: \.upscale, identifier: "adjust-upscale")

@@ -30,6 +30,8 @@ struct PageLook: Equatable, Sendable {
     var nightOnlyInDark = false
     /// Halftone and JPEG smoothing, 0 to 1 (#119).
     var descreen: Double = 0
+    /// JPEG artifact cleanup, 0 to 1.
+    var jpegCleanup: Double = 0
     /// Lanczos resizing to the size on screen (#120). Applied when a page is shown, not baked in.
     var sharperScaling = false
     /// Colour pages keep their colour under a black-and-white fix (#122).
@@ -49,7 +51,7 @@ struct PageLook: Equatable, Sendable {
     var adjustments: PageAdjustments {
         PageAdjustments(contrast: contrast, sharpness: sharpness, tint: paperTint, grain: paperGrain,
                         brightness: brightness, gamma: gamma, saturation: saturation, mono: blackAndWhite,
-                        autoFix: autoFix, night: activeNightMode, descreen: descreen,
+                        autoFix: autoFix, night: activeNightMode, descreen: descreen, cleanup: jpegCleanup,
                         keepColor: keepColorPages, stock: paperStock, upscale: upscale)
     }
 
@@ -70,6 +72,7 @@ struct PageLook: Equatable, Sendable {
         options.nightMode = nightMode
         options.nightOnlyInDark = nightOnlyInDark
         options.descreen = descreen
+        options.jpegCleanup = jpegCleanup
         options.sharperScaling = sharperScaling
         options.keepColorPages = keepColorPages
         options.paperStock = paperStock
@@ -91,6 +94,7 @@ struct PageLook: Equatable, Sendable {
         nightMode = options.nightMode ?? base.nightMode
         nightOnlyInDark = options.nightOnlyInDark ?? base.nightOnlyInDark
         descreen = options.descreen ?? base.descreen
+        jpegCleanup = options.jpegCleanup ?? base.jpegCleanup
         sharperScaling = options.sharperScaling ?? base.sharperScaling
         keepColorPages = options.keepColorPages ?? base.keepColorPages
         paperStock = options.paperStock ?? base.paperStock
@@ -114,6 +118,7 @@ struct PageLook: Equatable, Sendable {
         if nightMode != saved.nightMode { options.nightMode = nightMode }
         if nightOnlyInDark != saved.nightOnlyInDark { options.nightOnlyInDark = nightOnlyInDark }
         if descreen != saved.descreen { options.descreen = descreen }
+        if jpegCleanup != saved.jpegCleanup { options.jpegCleanup = jpegCleanup }
         if sharperScaling != saved.sharperScaling { options.sharperScaling = sharperScaling }
         if keepColorPages != saved.keepColorPages { options.keepColorPages = keepColorPages }
         if paperStock != saved.paperStock { options.paperStock = paperStock }
@@ -134,6 +139,7 @@ struct PageLook: Equatable, Sendable {
         options.nightMode = nil
         options.nightOnlyInDark = nil
         options.descreen = nil
+        options.jpegCleanup = nil
         options.sharperScaling = nil
         options.keepColorPages = nil
         options.paperStock = nil
@@ -154,6 +160,7 @@ struct PageAdjustments: Hashable, Sendable {
     var autoFix = false
     var night: PageLook.NightMode = .off
     var descreen: Double = 0
+    var cleanup: Double = 0
     var keepColor = true
     var stock: PageLook.PaperStock = .plain
     var upscale = false
@@ -161,7 +168,7 @@ struct PageAdjustments: Hashable, Sendable {
     var isNone: Bool {
         abs(contrast) < 0.005 && sharpness < 0.005 && tint < 0.005 && grain < 0.005
             && abs(brightness) < 0.005 && abs(gamma) < 0.005 && abs(saturation) < 0.005
-            && !mono && !autoFix && night == .off && descreen < 0.005 && !upscale
+            && !mono && !autoFix && night == .off && descreen < 0.005 && cleanup < 0.005 && !upscale
     }
 
     /// A fix that drains colour, which colour pages are spared when `keepColor` is on.
@@ -170,6 +177,7 @@ struct PageAdjustments: Hashable, Sendable {
     /// Identifies the result in the page cache (to two decimals, as the sliders step).
     var key: String {
         String(format: "%.2f|%.2f|%.2f|%.2f|%.2f|%.2f|%.2f|%.2f", contrast, sharpness, tint, grain, brightness, gamma, saturation, descreen)
+            + String(format: "|%.2f", cleanup)
             + "|\(mono ? 1 : 0)\(autoFix ? 1 : 0)\(keepColor ? 1 : 0)\(upscale ? 1 : 0)|\(night.rawValue)|\(stock.rawValue)"
     }
 }
@@ -266,6 +274,9 @@ enum PageFilter {
         let stats = needsStats ? PageStats.measure(input, context: context) : nil
         let spareColor = adjustments.keepColor && stats?.isColor == true
 
+        if adjustments.cleanup >= 0.005 {
+            output = cleanUpJPEG(output, amount: adjustments.cleanup, unit: detail)
+        }
         if adjustments.descreen >= 0.005 {
             output = descreen(output, amount: adjustments.descreen, unit: detail)
         }
@@ -364,6 +375,41 @@ enum PageFilter {
             ])
     }
 
+    /// Clean Up JPEG: takes away the grey specks and halos JPEG leaves around lines and text
+    /// without blurring or sharpening the lines. A median filter removes the specks (each
+    /// pixel takes the middle value of those around it, so a speck goes but an edge stays put),
+    /// then near-white goes to white and near-black to black, which clears the faint halo
+    /// left in the paper beside the ink. Grey tones and colour in between are kept.
+    static func cleanUpJPEG(_ image: CIImage, amount: Double, unit: CGFloat) -> CIImage {
+        let extent = image.extent
+        let a = min(max(amount, 0), 1)
+        var output = image.clampedToExtent()
+        // CIMedian looks at the 3×3 pixels around each one; big pages get a second pass, as
+        // their specks are larger.
+        output = output.applyingFilter("CIMedianFilter")
+        if a > 0.5 || unit > 1.3 { output = output.applyingFilter("CIMedianFilter") }
+        output = output.cropped(to: extent)
+        // Levels in sRGB, where the halo's light greys sit: up to the top 22% goes to white
+        // and the bottom 10% to black, eased so the rest of the range bends smoothly.
+        let white = 1 - 0.22 * a, black = 0.10 * a
+        let srgb = output.applyingFilter("CILinearToSRGBToneCurve")
+        let curve = CIFilter.toneCurve()
+        curve.inputImage = srgb
+        curve.point0 = CGPoint(x: 0, y: 0)
+        curve.point1 = CGPoint(x: black, y: 0)
+        curve.point2 = CGPoint(x: (black + white) / 2, y: 0.5)
+        curve.point3 = CGPoint(x: white, y: 1)
+        curve.point4 = CGPoint(x: 1, y: 1)
+        // The curve through those points can overshoot a little past black and white.
+        let leveled = (curve.outputImage ?? srgb)
+            .applyingFilter("CIColorClamp", parameters: [
+                "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1),
+            ])
+            .applyingFilter("CISRGBToneCurveToLinear")
+        return leveled.cropped(to: extent)
+    }
+
     /// Descreen (#119): blurs away halftone dots and JPEG blocks, then brings the line art's
     /// edges back, so lines stay crisp while flat areas smooth out.
     static func descreen(_ image: CIImage, amount: Double, unit: CGFloat) -> CIImage {
@@ -375,12 +421,13 @@ enum PageFilter {
         let noise = CIFilter.noiseReduction()
         noise.inputImage = blurred
         noise.noiseLevel = Float(0.005 + 0.02 * a)
-        noise.sharpness = Float(0.6 + 0.8 * a)
+        // Gentle sharpening only: stronger outlined every line and brought the specks back.
+        noise.sharpness = Float(0.3 + 0.3 * a)
         let smooth = noise.outputImage?.cropped(to: extent) ?? blurred
         let sharpen = CIFilter.unsharpMask()
         sharpen.inputImage = smooth
         sharpen.radius = Float(unit * 2)
-        sharpen.intensity = Float(0.3 + 0.4 * a)
+        sharpen.intensity = Float(0.15 + 0.2 * a)
         return sharpen.outputImage?.cropped(to: extent) ?? smooth
     }
 

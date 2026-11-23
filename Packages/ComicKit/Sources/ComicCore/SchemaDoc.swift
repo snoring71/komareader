@@ -151,8 +151,8 @@ device does not bring it back.
   unchanged); `blackAndWhite`, `autoFix` (white point, black point and tint set from each page),
   `sharperScaling` (Lanczos resizing), `keepColorPages` (colour pages skip black-and-white fixes)
   `upscale` (double the resolution of small scans) and `autoTrim` (trim each page's plain
-  border), each `true` or `false`; `descreen` (0 for none
-  to 1); `nightMode` (`off`, `sepia`, `dim` or `invert`) and `nightOnlyInDark` (`true` to use it
+  border), each `true` or `false`; `descreen` and
+  `jpegCleanup` (0 for none to 1); `nightMode` (`off`, `sepia`, `dim` or `invert`) and `nightOnlyInDark` (`true` to use it
   only while the system appearance is dark); `paperStock` (`plain`, `newsprint`, `cream` or
   `glossy`, the paper `paperGrain` draws); `pageTurn` (`slide`, `curl`, `fade` or `instant`);
   `pageEdges` (`true` to draw the stack of page edges beside the page); and `crop`. Readers should treat an unknown
