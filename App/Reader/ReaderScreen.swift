@@ -23,6 +23,10 @@ struct ReaderScreen: View {
     @State private var coverWaits = false
     /// Fading out after a swipe up, before the reader goes away.
     @State private var closing = false
+    /// The status bar hides once the reader has finished opening, and shows again before it
+    /// closes: the library behind lays itself out around the status bar, so hiding it while
+    /// the library shows (as the cover zooms in or out) made the whole grid jump.
+    @State private var hidesStatusBar = false
     /// A newer position from another device, until the reader jumps there or says no.
     @State private var handOff: AppModel.HandOff?
     /// A Read book was turned off its last page: asks whether to start reading it again.
@@ -107,7 +111,11 @@ struct ReaderScreen: View {
         .onChange(of: liveBook.direction) { _, direction in
             state.adoptDirection(direction.flatMap(ReaderOptions.Direction.init(rawValue:)))
         }
-        .statusBarHidden(true)
+        .statusBarHidden(hidesStatusBar)
+        .task {
+            try? await Task.sleep(for: .milliseconds(600))
+            if !closing { hidesStatusBar = true }
+        }
         .persistentSystemOverlays(state.showChrome ? .automatic : .hidden)
         .onAppear {
             let bookId = state.book.id, count = state.pageCount
@@ -235,9 +243,21 @@ struct ReaderScreen: View {
         withAnimation(.easeInOut(duration: 0.4)) { showingCover = true }
     }
 
+    /// The close button: the status bar comes back first, so the library is already laid out
+    /// for it when it shows behind the closing reader.
+    private func close() {
+        guard !closing else { return }
+        hidesStatusBar = false
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            dismiss()
+        }
+    }
+
     /// After a swipe up: the page has flown up; fade the reader to the library and close.
     private func closeBySwipe() {
         guard !closing else { return }
+        hidesStatusBar = false
         withAnimation(.easeOut(duration: 0.25)) { closing = true }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
@@ -336,7 +356,7 @@ struct ReaderScreen: View {
     private var topBar: some View {
         HStack(spacing: 12) {
             Button {
-                dismiss()
+                close()
             } label: {
                 Image(systemName: "xmark").font(.body.weight(.semibold)).frame(width: 28, height: 28)
             }
