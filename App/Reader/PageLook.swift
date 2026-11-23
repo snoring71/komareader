@@ -375,39 +375,24 @@ enum PageFilter {
             ])
     }
 
-    /// Clean Up JPEG: takes away the grey specks and halos JPEG leaves around lines and text
-    /// without blurring or sharpening the lines. A median filter removes the specks (each
-    /// pixel takes the middle value of those around it, so a speck goes but an edge stays put),
-    /// then near-white goes to white and near-black to black, which clears the faint halo
-    /// left in the paper beside the ink. Grey tones and colour in between are kept.
+    /// Clean Up JPEG: clears the light grey halo and specks JPEG leaves in the paper around
+    /// lines and text. Near-white goes to white (up to the top fifth of the range at full
+    /// strength) and the darkest few percent to black, a straight stretch in sRGB between
+    /// them, so mid tones keep their order and the change grows evenly with the slider.
+    /// Nothing is filtered by neighbourhood: a median filter tried first took screentone dots
+    /// and fine lines with the specks, even at the lowest setting.
     static func cleanUpJPEG(_ image: CIImage, amount: Double, unit: CGFloat) -> CIImage {
         let extent = image.extent
         let a = min(max(amount, 0), 1)
-        var output = image.clampedToExtent()
-        // CIMedian looks at the 3×3 pixels around each one; big pages get a second pass, as
-        // their specks are larger.
-        output = output.applyingFilter("CIMedianFilter")
-        if a > 0.5 || unit > 1.3 { output = output.applyingFilter("CIMedianFilter") }
-        output = output.cropped(to: extent)
-        // Levels in sRGB, where the halo's light greys sit: up to the top 22% goes to white
-        // and the bottom 10% to black, eased so the rest of the range bends smoothly.
-        let white = 1 - 0.22 * a, black = 0.10 * a
-        let srgb = output.applyingFilter("CILinearToSRGBToneCurve")
-        let curve = CIFilter.toneCurve()
-        curve.inputImage = srgb
-        curve.point0 = CGPoint(x: 0, y: 0)
-        curve.point1 = CGPoint(x: black, y: 0)
-        curve.point2 = CGPoint(x: (black + white) / 2, y: 0.5)
-        curve.point3 = CGPoint(x: white, y: 1)
-        curve.point4 = CGPoint(x: 1, y: 1)
-        // The curve through those points can overshoot a little past black and white.
-        let leveled = (curve.outputImage ?? srgb)
+        let white = 1 - 0.2 * a, black = 0.06 * a
+        let scale = CGFloat(1 / (white - black)), bias = CGFloat(-black / (white - black))
+        let srgb = image.applyingFilter("CILinearToSRGBToneCurve")
+        let stretched = multiply(srgb, red: scale, green: scale, blue: scale, bias: bias)
             .applyingFilter("CIColorClamp", parameters: [
                 "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
                 "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1),
             ])
-            .applyingFilter("CISRGBToneCurveToLinear")
-        return leveled.cropped(to: extent)
+        return stretched.applyingFilter("CISRGBToneCurveToLinear").cropped(to: extent)
     }
 
     /// Descreen (#119): blurs away halftone dots and JPEG blocks, then brings the line art's
