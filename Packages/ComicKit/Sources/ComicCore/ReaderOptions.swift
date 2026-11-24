@@ -166,6 +166,10 @@ public extension BookRecord {
         public var paperStock: PaperStock?
         /// Trims each page's blank border as it loads (a hand-set `crop` wins).
         public var autoTrim: Bool?
+        /// How pages turn (#125).
+        public var pageTurn: PageTurn?
+        /// Draws a stack of page edges beside the page that shifts as you read (#126).
+        public var pageEdges: Bool?
         /// Only set per book; there is no default crop.
         public var crop: PageCrop?
         public var updatedAt: Date
@@ -189,6 +193,16 @@ public extension BookRecord {
             }
         }
 
+        /// How a tap or a page button turns the page. ("curl", from a build that had it, reads
+        /// as slide.)
+        public enum PageTurn: String, Codable, CaseIterable, Sendable {
+            case slide, fade, instant
+
+            public init(from decoder: Decoder) throws {
+                self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .slide
+            }
+        }
+
         public init(updatedAt: Date = Date()) {
             self.updatedAt = updatedAt
         }
@@ -198,7 +212,7 @@ public extension BookRecord {
             direction == nil && portraitLayout == nil && landscapeLayout == nil && fit == nil
                 && background == nil && bindingShadow == nil && splitDoublePages == nil && crop == nil
                 && contrast == nil && sharpness == nil && paperGrain == nil && paperTint == nil
-                && !hasLookExtras && autoTrim == nil
+                && !hasLookExtras && autoTrim == nil && pageTurn == nil && pageEdges == nil
         }
 
         /// Whether any of the image settings added in phase 3 is set.

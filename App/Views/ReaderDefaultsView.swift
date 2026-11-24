@@ -33,10 +33,14 @@ struct ReaderDefaultsView: View {
                 )) {
                     ForEach(BindingShadowStrength.allCases) { Text($0.title).tag($0) }
                 }
+                Toggle("Page Edges", isOn: $defaults.pageEdges)
+                Picker("Page Turn", selection: $defaults.pageTurn) {
+                    ForEach(ReaderOptions.PageTurn.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
             } header: {
                 Text("Page Layout")
             } footer: {
-                Text("Split Double Pages shows an image that holds two pages as two separate pages, in reading order. With Two Pages, the halves still share the screen. Binding Shadow darkens the middle of two-page spreads, like the fold of a printed book.")
+                Text("Split Double Pages shows an image that holds two pages as two separate pages, in reading order. With Two Pages, the halves still share the screen. Binding Shadow darkens the middle of two-page spreads, like the fold of a printed book. Page Edges draws the stack of pages beside the page, shifting as you read. Fade and Instant page turns are for taps; a swipe still slides.")
             }
 
             Section {

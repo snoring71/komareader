@@ -72,6 +72,19 @@ struct PageLayoutPanel: View {
                     set: { strength in state.change { $0.bindingShadow = strength.rawValue } }
                 ))
             }
+            Toggle("Page Edges", isOn: setting(state, \.pageEdges) { $0.pageEdges = $1 })
+                .font(.subheadline.weight(.medium))
+                .accessibilityIdentifier("settings-page-edges")
+            PanelRow(title: "Page Turn") {
+                ChoiceBar<ReaderOptions.PageTurn>(ReaderOptions.PageTurn.allCases.map { ($0, $0.title) },
+                                                  selection: setting(state, \.pageTurn) { $0.pageTurn = $1 })
+                    .accessibilityIdentifier("settings-page-turn")
+            }
+            // Always shown, so choosing a style never changes the panel's height.
+            Text("Fade and Instant are for taps and the page buttons; a swipe still slides the page.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader-layout-panel")

@@ -36,6 +36,8 @@ final class ReaderDefaults {
     var keepColorPages: Bool { didSet { save() } }
     var paperStock: ReaderOptions.PaperStock { didSet { save() } }
     var autoTrim: Bool { didSet { save() } }
+    var pageTurn: ReaderOptions.PageTurn { didSet { save() } }
+    var pageEdges: Bool { didSet { save() } }
     var upscale: Bool { didSet { save() } }
 
     /// How pages are drawn for a book that sets nothing itself.
@@ -105,6 +107,8 @@ final class ReaderDefaults {
         var keepColorPages: Bool?
         var paperStock: ReaderOptions.PaperStock?
         var autoTrim: Bool?
+        var pageTurn: ReaderOptions.PageTurn?
+        var pageEdges: Bool?
         var upscale: Bool?
         var jpegCleanup: Double?
     }
@@ -136,6 +140,8 @@ final class ReaderDefaults {
             keepColorPages = stored.keepColorPages ?? true
             paperStock = stored.paperStock ?? .plain
             autoTrim = stored.autoTrim ?? false
+            pageTurn = stored.pageTurn ?? .slide
+            pageEdges = stored.pageEdges ?? false
             upscale = stored.upscale ?? false
             return
         }
@@ -172,6 +178,8 @@ final class ReaderDefaults {
         keepColorPages = true
         paperStock = .plain
         autoTrim = false
+        pageTurn = .slide
+        pageEdges = false
         upscale = false
     }
 
@@ -182,7 +190,7 @@ final class ReaderDefaults {
                             brightness: brightness, gamma: gamma, saturation: saturation, blackAndWhite: blackAndWhite,
                             autoFix: autoFix, nightMode: nightMode, nightOnlyInDark: nightOnlyInDark, descreen: descreen,
                             sharperScaling: sharperScaling, keepColorPages: keepColorPages, paperStock: paperStock,
-                            autoTrim: autoTrim, upscale: upscale, jpegCleanup: jpegCleanup)
+                            autoTrim: autoTrim, pageTurn: pageTurn, pageEdges: pageEdges, upscale: upscale, jpegCleanup: jpegCleanup)
         if let data = try? JSONEncoder().encode(stored) { UserDefaults.standard.set(data, forKey: Self.key) }
     }
 
@@ -213,6 +221,8 @@ final class ReaderDefaults {
         if let value = options.keepColorPages { keepColorPages = value }
         if let value = options.paperStock { paperStock = value }
         if let value = options.autoTrim { autoTrim = value }
+        if let value = options.pageTurn { pageTurn = value }
+        if let value = options.pageEdges { pageEdges = value }
         if let value = options.upscale { upscale = value }
     }
 }
@@ -232,6 +242,16 @@ struct NamedLook: Codable, Identifiable, Equatable {
 }
 
 // MARK: - Names and colours
+
+extension ReaderOptions.PageTurn {
+    var title: String {
+        switch self {
+        case .slide: return "Slide"
+        case .fade: return "Fade"
+        case .instant: return "Instant"
+        }
+    }
+}
 
 extension ReaderOptions.Direction {
     var title: String { self == .rightToLeft ? "Right to Left (Manga)" : "Left to Right" }

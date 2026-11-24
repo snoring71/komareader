@@ -159,9 +159,44 @@ struct PageViewer: UIViewControllerRepresentable {
             if onEndPage { return }
             guard state.spreads.indices.contains(target) else { return }
             let page = makeController(target)
-            controller.setViewControllers([page], direction: direction, animated: animated)
+            switch (animated, state.pageTurn) {
+            case (true, .fade):
+                // Fade and Instant (#125) change taps and buttons; a swipe still slides.
+                crossFade(in: controller, to: page, direction: direction)
+            case (true, .instant):
+                controller.setViewControllers([page], direction: direction, animated: false)
+            default:
+                controller.setViewControllers([page], direction: direction, animated: animated)
+            }
             followBackground(of: page)
             becameCurrent(page)
+        }
+
+        /// Turning the page by fading: the new page shows through the old one. The old page
+        /// is laid over the pager as a snapshot and fades out, so neither page ever dims (a
+        /// cross-dissolve of the whole pager flashed the background between them).
+        private func crossFade(in controller: UIPageViewController, to page: SpreadViewController,
+                               direction: UIPageViewController.NavigationDirection) {
+            let snapshot = controller.view.snapshotView(afterScreenUpdates: false)
+            controller.setViewControllers([page], direction: direction, animated: false)
+            guard let snapshot else { return }
+            snapshot.frame = controller.view.bounds
+            snapshot.isUserInteractionEnabled = false
+            controller.view.addSubview(snapshot)
+            // The old page stays until the new one has its image (a moment, as the pages beside
+            // are decoded ahead), so the fade never passes through an empty page.
+            func fade(waited: Int) {
+                guard waited >= 18 || page.hasImages else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { fade(waited: waited + 1) }
+                    return
+                }
+                UIView.animate(withDuration: 0.32, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) {
+                    snapshot.alpha = 0
+                } completion: { _ in
+                    snapshot.removeFromSuperview()
+                }
+            }
+            fade(waited: 0)
         }
 
         /// Copy All and the Select Text bar follow the spread on screen.
@@ -190,7 +225,8 @@ struct PageViewer: UIViewControllerRepresentable {
             }
             let style = SpreadViewController.Style(
                 fit: state.fit, background: state.background, bindingShadow: CGFloat(state.bindingShadow),
-                autoTrim: state.autoTrim
+                autoTrim: state.autoTrim,
+                edgeProgress: state.pageEdges ? CGFloat(spread) / CGFloat(max(1, state.spreads.count - 1)) : nil
             )
             let controller = SpreadViewController(
                 spreadIndex: spread, pieces: pieces, rightToLeft: state.rightToLeft,
@@ -342,7 +378,12 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
         let bindingShadow: CGFloat
         /// Trim each page's plain margins as it loads (#116), where no crop is set.
         var autoTrim = false
+        /// With page edges on (#126), how far through the book this spread is, 0 to 1.
+        var edgeProgress: CGFloat?
     }
+
+    /// The most page edge drawn on one side, in points.
+    static let edgeMax: CGFloat = 12
 
     let spreadIndex: Int
     let pieces: [Piece]
@@ -395,6 +436,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
     private var swipeToClose: UIPanGestureRecognizer?
     private var spinners: [UIActivityIndicatorView] = []
     private var bindingShadow: BindingShadowView?
+    private var pageEdges: (left: PageEdgesView, right: PageEdgesView)?
     private var loadTasks: [Task<Void, Never>] = []
     private var colorTask: Task<Void, Never>?
     private var loadedSize: CGFloat = 0
@@ -495,6 +537,13 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
             bindingShadow = shadow
         }
 
+        if style.edgeProgress != nil {
+            let left = PageEdgesView(side: .left), right = PageEdgesView(side: .right)
+            contentView.addSubview(left)
+            contentView.addSubview(right)
+            pageEdges = (left, right)
+        }
+
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
         doubleTap.numberOfTapsRequired = 2
         scrollView.addGestureRecognizer(doubleTap)
@@ -523,8 +572,12 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
     /// Fit Screen shows the whole spread; Fit Width and Fit Height can run past the screen,
     /// and the spread then scrolls (down for width, sideways for height).
     private func layoutPages() {
-        let bounds = scrollView.bounds.size
+        var bounds = scrollView.bounds.size
         guard bounds.width > 0, bounds.height > 0 else { return }
+        // Room for the page edges on both sides.
+        let edgeRoom = pageEdges == nil ? 0 : Self.edgeMax + 2
+        let fullWidth = bounds.width
+        bounds.width = max(1, bounds.width - 2 * edgeRoom)
         let aspects = imageViews.indices.map { slot -> CGFloat in
             // The cut image, not a resized copy, so rounding in the resize never moves the layout.
             guard let size = (cutImages[slot] ?? imageViews[slot].image)?.size, size.height > 0 else { return 2.0 / 3.0 }
@@ -537,7 +590,7 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
         case .width: height = bounds.width / totalAspect
         case .height: height = bounds.height
         }
-        let content = CGSize(width: max(bounds.width, (height * totalAspect).rounded()), height: max(bounds.height, height.rounded()))
+        let content = CGSize(width: max(fullWidth, (height * totalAspect).rounded() + 2 * edgeRoom), height: max(bounds.height, height.rounded()))
         if scrollView.zoomScale == 1 {
             contentView.frame = CGRect(origin: .zero, size: content)
             scrollView.contentSize = content
@@ -555,6 +608,14 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
             view.frame = CGRect(x: minX, y: y, width: maxX - minX, height: height.rounded())
             view.subviews.first?.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
             x += height * aspect
+        }
+        // The edges of the pages read (on the side the book opens from) and still to read.
+        if let pageEdges, let progress = style.edgeProgress, let first = imageViews.first?.frame, let last = imageViews.last?.frame {
+            let read = max(1.5, (progress * Self.edgeMax).rounded()), unread = max(1.5, ((1 - progress) * Self.edgeMax).rounded())
+            let leftWidth = rightToLeft ? unread : read, rightWidth = rightToLeft ? read : unread
+            let top = min(first.minY, last.minY), bottom = max(first.maxY, last.maxY)
+            pageEdges.left.frame = CGRect(x: first.minX - leftWidth, y: top, width: leftWidth, height: bottom - top)
+            pageEdges.right.frame = CGRect(x: last.maxX, y: top, width: rightWidth, height: bottom - top)
         }
         // Where the two pages meet, darkened a little like the fold of a printed book.
         if let bindingShadow {
@@ -848,6 +909,9 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
     }
 
     /// Puts a decoded image in its slot, cut to the half and crop this page shows.
+    /// Every page on this screen shows its image (perhaps a smaller copy for now).
+    var hasImages: Bool { isViewLoaded && imageViews.allSatisfy { $0.image != nil } }
+
     private func display(_ image: UIImage, in slot: Int) {
         uncutImages[slot] = image
         cut(slot)
@@ -1014,6 +1078,43 @@ final class SpreadViewController: UIViewController, UIScrollViewDelegate, UIGest
             return
         }
         onTap?(gesture.location(in: view).x / max(view.bounds.width, 1))
+    }
+}
+
+/// The edges of a stack of pages beside the page (#126): thin paper-coloured lines, each a
+/// little shorter than the one inside it, shading off away from the page.
+final class PageEdgesView: UIView {
+    enum Side { case left, right }
+    private let side: Side
+
+    init(side: Side) {
+        self.side = side
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        isOpaque = false
+        backgroundColor = .clear
+        contentMode = .redraw
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext(), bounds.width > 0 else { return }
+        let pitch: CGFloat = 1.5
+        let count = max(1, Int(bounds.width / pitch))
+        for index in 0..<count {
+            // Counted outwards from the page.
+            let fraction = CGFloat(index) / CGFloat(max(count, 1))
+            let x = side == .right ? CGFloat(index) * pitch : bounds.width - CGFloat(index + 1) * pitch
+            let inset = CGFloat(index) * 0.35
+            let sheet = CGRect(x: x, y: inset, width: pitch, height: bounds.height - 2 * inset)
+            context.setFillColor(UIColor(white: 0.92 - 0.22 * fraction, alpha: 1).cgColor)
+            context.fill(sheet)
+            // The thin gap between two sheets.
+            let gapX = side == .right ? sheet.maxX - 0.5 : sheet.minX
+            context.setFillColor(UIColor(white: 0, alpha: 0.18).cgColor)
+            context.fill(CGRect(x: gapX, y: sheet.minY, width: 0.5, height: sheet.height))
+        }
     }
 }
 

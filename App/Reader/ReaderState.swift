@@ -158,6 +158,8 @@ final class ReaderState {
 
     /// Trims each page's blank border as it loads (#116); a hand-set crop wins.
     var autoTrim: Bool { options.autoTrim ?? defaults.autoTrim }
+    var pageTurn: ReaderOptions.PageTurn { options.pageTurn ?? defaults.pageTurn }
+    var pageEdges: Bool { options.pageEdges ?? defaults.pageEdges }
 
     /// Slider values shown live but not saved yet (see `commitLook`).
     var previewLook: PageLook?
@@ -231,6 +233,8 @@ final class ReaderState {
         resolved.paperStock = look.paperStock
         resolved.upscale = look.upscale
         resolved.autoTrim = autoTrim
+        resolved.pageTurn = pageTurn
+        resolved.pageEdges = pageEdges
         return resolved
     }
 
@@ -459,6 +463,7 @@ final class ReaderState {
     }
 
     private func pageDidChange() {
+        PageTurnFeedback.shared.pageTurned()
         let finished = currentPages.contains(pageCount - 1)
         onPageChange?(currentPage, finished)
         prefetch()
