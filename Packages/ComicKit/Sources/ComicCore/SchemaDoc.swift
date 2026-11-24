@@ -154,7 +154,7 @@ device does not bring it back.
   border), each `true` or `false`; `descreen` and
   `jpegCleanup` (0 for none to 1); `nightMode` (`off`, `sepia`, `dim` or `invert`) and `nightOnlyInDark` (`true` to use it
   only while the system appearance is dark); `paperStock` (`plain`, `newsprint`, `cream` or
-  `glossy`, the paper `paperGrain` draws); `pageTurn` (`slide`, `curl`, `fade` or `instant`);
+  `glossy`, the paper `paperGrain` draws); `pageTurn` (`slide`, `fade` or `instant`);
   `pageEdges` (`true` to draw the stack of page edges beside the page); and `crop`. Readers should treat an unknown
   `nightMode` as `off` and an unknown `paperStock` as `plain` and an
   unknown `pageTurn` as `slide`.

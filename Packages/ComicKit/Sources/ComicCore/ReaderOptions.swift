@@ -193,8 +193,10 @@ public extension BookRecord {
             }
         }
 
+        /// How a tap or a page button turns the page. ("curl", from a build that had it, reads
+        /// as slide.)
         public enum PageTurn: String, Codable, CaseIterable, Sendable {
-            case slide, curl, fade, instant
+            case slide, fade, instant
 
             public init(from decoder: Decoder) throws {
                 self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .slide

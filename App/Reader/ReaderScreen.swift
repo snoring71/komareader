@@ -45,24 +45,11 @@ struct ReaderScreen: View {
     /// The live row for this book (Favorite and Bookmarked can change while reading).
     private var liveBook: Book { model.books.first { $0.id == state.book.id } ?? state.book }
 
-    /// Which pager the pages need (see `PageViewer`).
-    private var pagerKind: String {
-        // A new layout (a turn of the iPad) can change one page to two.
-        _ = state.layoutVersion
-        guard state.pageTurn == .curl else { return "slide" }
-        if state.turnsFromMiddle { return "curl-middle" }
-        return state.rightToLeft ? "curl-rtl" : "curl"
-    }
-
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 Color(uiColor: state.background.uiColor ?? .black).ignoresSafeArea()
                 PageViewer(state: state)
-                    // A curling pager is a different kind of pager, with its spine on the side
-                    // the book opens from, or in the middle for two pages: switching makes a
-                    // new one (#125).
-                    .id(pagerKind)
                     .ignoresSafeArea()
                 // Each overlay has a fixed zIndex: without one, a view leaving a ZStack can drop
                 // behind the pages and vanish instead of fading out.

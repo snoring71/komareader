@@ -247,7 +247,6 @@ extension ReaderOptions.PageTurn {
     var title: String {
         switch self {
         case .slide: return "Slide"
-        case .curl: return "Curl"
         case .fade: return "Fade"
         case .instant: return "Instant"
         }
