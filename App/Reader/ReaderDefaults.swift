@@ -23,8 +23,62 @@ final class ReaderDefaults {
     var sharpness: Double { didSet { save() } }
     var paperGrain: Double { didSet { save() } }
     var paperTint: Double { didSet { save() } }
+    var brightness: Double { didSet { save() } }
+    var gamma: Double { didSet { save() } }
+    var saturation: Double { didSet { save() } }
+    var blackAndWhite: Bool { didSet { save() } }
+    var autoFix: Bool { didSet { save() } }
+    var nightMode: ReaderOptions.NightMode { didSet { save() } }
+    var nightOnlyInDark: Bool { didSet { save() } }
+    var descreen: Double { didSet { save() } }
+    var jpegCleanup: Double { didSet { save() } }
+    var sharperScaling: Bool { didSet { save() } }
+    var keepColorPages: Bool { didSet { save() } }
+    var paperStock: ReaderOptions.PaperStock { didSet { save() } }
+    var autoTrim: Bool { didSet { save() } }
+    var upscale: Bool { didSet { save() } }
+
+    /// How pages are drawn for a book that sets nothing itself.
+    var look: PageLook {
+        get {
+            var look = PageLook()
+            look.contrast = contrast
+            look.sharpness = sharpness
+            look.paperGrain = paperGrain
+            look.paperTint = paperTint
+            look.brightness = brightness
+            look.gamma = gamma
+            look.saturation = saturation
+            look.blackAndWhite = blackAndWhite
+            look.autoFix = autoFix
+            look.nightMode = nightMode
+            look.nightOnlyInDark = nightOnlyInDark
+            look.descreen = descreen
+            look.jpegCleanup = jpegCleanup
+            look.sharperScaling = sharperScaling
+            look.keepColorPages = keepColorPages
+            look.paperStock = paperStock
+            look.upscale = upscale
+            return look
+        }
+        set { adopt(newValue.options) }
+    }
 
     private static let key = "readerDefaults"
+
+    /// Saved sets of image adjustments (#123), in the order they were made. On this device.
+    var namedLooks: [NamedLook] = ReaderDefaults.loadLooks() {
+        didSet {
+            if let data = try? JSONEncoder().encode(namedLooks) { UserDefaults.standard.set(data, forKey: Self.looksKey) }
+        }
+    }
+
+    private static let looksKey = "namedLooks"
+
+    private static func loadLooks() -> [NamedLook] {
+        guard let data = UserDefaults.standard.data(forKey: looksKey) else { return [] }
+        return (try? JSONDecoder().decode([NamedLook].self, from: data)) ?? []
+    }
 
     private struct Stored: Codable {
         var direction: ReaderOptions.Direction
@@ -39,6 +93,20 @@ final class ReaderDefaults {
         var sharpness: Double?
         var paperGrain: Double?
         var paperTint: Double?
+        var brightness: Double?
+        var gamma: Double?
+        var saturation: Double?
+        var blackAndWhite: Bool?
+        var autoFix: Bool?
+        var nightMode: ReaderOptions.NightMode?
+        var nightOnlyInDark: Bool?
+        var descreen: Double?
+        var sharperScaling: Bool?
+        var keepColorPages: Bool?
+        var paperStock: ReaderOptions.PaperStock?
+        var autoTrim: Bool?
+        var upscale: Bool?
+        var jpegCleanup: Double?
     }
 
     init() {
@@ -55,6 +123,20 @@ final class ReaderDefaults {
             sharpness = stored.sharpness ?? 0
             paperGrain = stored.paperGrain ?? 0
             paperTint = stored.paperTint ?? 0
+            brightness = stored.brightness ?? 0
+            gamma = stored.gamma ?? 0
+            saturation = stored.saturation ?? 0
+            blackAndWhite = stored.blackAndWhite ?? false
+            autoFix = stored.autoFix ?? false
+            nightMode = stored.nightMode ?? .off
+            nightOnlyInDark = stored.nightOnlyInDark ?? false
+            descreen = stored.descreen ?? 0
+            jpegCleanup = stored.jpegCleanup ?? 0
+            sharperScaling = stored.sharperScaling ?? false
+            keepColorPages = stored.keepColorPages ?? true
+            paperStock = stored.paperStock ?? .plain
+            autoTrim = stored.autoTrim ?? false
+            upscale = stored.upscale ?? false
             return
         }
         // Start from what the reader last used before defaults existed (version 0.1 kept one
@@ -77,12 +159,30 @@ final class ReaderDefaults {
         sharpness = 0
         paperGrain = 0
         paperTint = 0
+        brightness = 0
+        gamma = 0
+        saturation = 0
+        blackAndWhite = false
+        autoFix = false
+        nightMode = .off
+        nightOnlyInDark = false
+        descreen = 0
+        jpegCleanup = 0
+        sharperScaling = false
+        keepColorPages = true
+        paperStock = .plain
+        autoTrim = false
+        upscale = false
     }
 
     private func save() {
         let stored = Stored(direction: direction, portraitLayout: portraitLayout, landscapeLayout: landscapeLayout,
                             fit: fit, background: background, bindingShadow: bindingShadow, splitDoublePages: splitDoublePages,
-                            contrast: contrast, sharpness: sharpness, paperGrain: paperGrain, paperTint: paperTint)
+                            contrast: contrast, sharpness: sharpness, paperGrain: paperGrain, paperTint: paperTint,
+                            brightness: brightness, gamma: gamma, saturation: saturation, blackAndWhite: blackAndWhite,
+                            autoFix: autoFix, nightMode: nightMode, nightOnlyInDark: nightOnlyInDark, descreen: descreen,
+                            sharperScaling: sharperScaling, keepColorPages: keepColorPages, paperStock: paperStock,
+                            autoTrim: autoTrim, upscale: upscale, jpegCleanup: jpegCleanup)
         if let data = try? JSONEncoder().encode(stored) { UserDefaults.standard.set(data, forKey: Self.key) }
     }
 
@@ -100,6 +200,34 @@ final class ReaderDefaults {
         if let value = options.sharpness { sharpness = value }
         if let value = options.paperGrain { paperGrain = value }
         if let value = options.paperTint { paperTint = value }
+        if let value = options.brightness { brightness = value }
+        if let value = options.gamma { gamma = value }
+        if let value = options.saturation { saturation = value }
+        if let value = options.blackAndWhite { blackAndWhite = value }
+        if let value = options.autoFix { autoFix = value }
+        if let value = options.nightMode { nightMode = value }
+        if let value = options.nightOnlyInDark { nightOnlyInDark = value }
+        if let value = options.descreen { descreen = value }
+        if let value = options.jpegCleanup { jpegCleanup = value }
+        if let value = options.sharperScaling { sharperScaling = value }
+        if let value = options.keepColorPages { keepColorPages = value }
+        if let value = options.paperStock { paperStock = value }
+        if let value = options.autoTrim { autoTrim = value }
+        if let value = options.upscale { upscale = value }
+    }
+}
+
+/// A named set of image adjustments, such as "1980s tankobon" (#123).
+struct NamedLook: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var name: String
+    /// Every image setting, as a book would save them.
+    var options: ReaderOptions
+
+    func look(darkAppearance: Bool) -> PageLook {
+        var base = PageLook()
+        base.darkAppearance = darkAppearance
+        return PageLook(options: options, base: base)
     }
 }
 
