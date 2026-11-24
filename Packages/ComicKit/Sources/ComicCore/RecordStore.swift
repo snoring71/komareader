@@ -139,14 +139,43 @@ public final class RecordStore: @unchecked Sendable {
     }
 
     /// Every record in the folder. Files still in iCloud only are skipped (they arrive later).
+    ///
+    /// Every rescan (each return to the app, and changes in the library folder) reads them all,
+    /// so records whose file has the same size and date as last time come from memory instead
+    /// of being read and decoded again: thousands of small file reads per rescan became a
+    /// directory listing.
     public func allRecords() -> [BookRecord] {
         let decoder = RecordCoding.decoder()
-        let urls = (try? fileManager.contentsOfDirectory(at: booksDirectory, includingPropertiesForKeys: nil)) ?? []
-        return urls.compactMap { url in
-            guard url.pathExtension == "json", let data = try? Data(contentsOf: url) else { return nil }
-            return try? decoder.decode(BookRecord.self, from: data)
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey]
+        let urls = (try? fileManager.contentsOfDirectory(at: booksDirectory, includingPropertiesForKeys: keys)) ?? []
+        let known = recordCache.withLock { $0 }
+        var seen: [String: CachedRecord] = [:]
+        seen.reserveCapacity(urls.count)
+        let records = urls.compactMap { url -> BookRecord? in
+            guard url.pathExtension == "json" else { return nil }
+            let name = url.lastPathComponent
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            let modified = values?.contentModificationDate, size = values?.fileSize
+            if let modified, let size, let cached = known[name], cached.modified == modified, cached.size == size {
+                seen[name] = cached
+                return cached.record
+            }
+            guard let data = try? Data(contentsOf: url), let record = try? decoder.decode(BookRecord.self, from: data) else { return nil }
+            if let modified, let size { seen[name] = CachedRecord(modified: modified, size: size, record: record) }
+            return record
         }
+        recordCache.withLock { $0 = seen }
+        return records
     }
+
+    private struct CachedRecord {
+        let modified: Date
+        let size: Int
+        let record: BookRecord
+    }
+
+    /// Records as `allRecords` last read them, by file name.
+    private let recordCache = RecordStoreLocked<[String: CachedRecord]>([:])
 
     /// Every record, after folding together records that describe the same file under
     /// different ids. That happens when two devices first saw a book before iCloud synced. The
@@ -366,5 +395,19 @@ public final class RecordStore: @unchecked Sendable {
         let url = dataRoot.appendingPathComponent("SCHEMA.md")
         guard !fileManager.fileExists(atPath: url.path) else { return }
         try Self.coordinatedWrite(Data(SchemaDoc.markdown.utf8), to: url)
+    }
+}
+
+/// A value behind a lock, for `RecordStore`'s record cache (the store is used from many tasks).
+private final class RecordStoreLocked<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+
+    init(_ value: Value) { self.value = value }
+
+    func withLock<Result>(_ body: (inout Value) -> Result) -> Result {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&value)
     }
 }

@@ -195,6 +195,22 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("SCHEMA.md").path))
     }
 
+    /// `allRecords` keeps what it read in memory; a record changed on disk is read again.
+    @Test func allRecordsSeesChangedRecords() throws {
+        let store = try RecordStore.open(dataRoot: tempRoot(), folderName: "Comics")
+        var record = BookRecord(bookId: "B", file: .init(path: "b.cbz", size: 1, modified: nil))
+        record.progress["ipad"] = .init(page: 1, pageCount: 5, finished: false, updatedAt: Date(timeIntervalSince1970: 10))
+        try store.write(record)
+        #expect(store.allRecords().first?.progress.keys.sorted() == ["ipad"])
+        #expect(store.allRecords().first?.progress.keys.sorted() == ["ipad"])
+        var other = BookRecord(bookId: "B", file: .init(path: "b.cbz", size: 1, modified: nil))
+        other.progress["win"] = .init(page: 4, pageCount: 5, finished: false, updatedAt: Date(timeIntervalSince1970: 20))
+        try store.write(other)
+        #expect(store.allRecords().first?.progress.keys.sorted() == ["ipad", "win"])
+        try store.write(BookRecord(bookId: "C", file: .init(path: "c.cbz", size: 1, modified: nil)))
+        #expect(store.allRecords().map(\.bookId).sorted() == ["B", "C"])
+    }
+
     @Test func stableIdsMatchTheDocumentedRecipe() {
         #expect(StableID.library(folderName: "Comics") == "20E7415A-EB37-81FE-87FB-C83F1AF87C00")
         #expect(StableID.book(path: "Saga/Saga 001.cbz") == "D0E63AF5-7548-8B27-8544-DCCDDEB4C6FA")

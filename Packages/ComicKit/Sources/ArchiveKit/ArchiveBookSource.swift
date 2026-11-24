@@ -22,13 +22,45 @@ public final class ArchiveBookSource: BookSource, @unchecked Sendable {
     private var finalFailure: Error?
     private var extractionTask: Task<Void, Never>?
 
-    public init(url: URL, cacheRoot: URL) throws {
+    /// - Parameter unpackWhileListing: keep each page's bytes while listing the archive, for RAR
+    ///   and 7z. Those are usually solid, so listing them unpacks the whole book anyway, and
+    ///   unpacking it a second time to save the pages took twice as long and twice the battery.
+    public init(url: URL, cacheRoot: URL, unpackWhileListing: Bool = false) throws {
         self.url = url
-        self.pagePaths = try LibArchive.pagePaths(in: url)
         let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         let key = "\(url.lastPathComponent)|\(values?.fileSize ?? 0)|\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
-        self.cacheDirectory = cacheRoot.appendingPathComponent(Self.stableHash(key), isDirectory: true)
+        let cacheDirectory = cacheRoot.appendingPathComponent(Self.stableHash(key), isDirectory: true)
         try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        self.cacheDirectory = cacheDirectory
+
+        // The page list from an earlier open: the folder is named for this exact file (name,
+        // size and date), so it still holds. Without it, opening a book again listed the whole
+        // archive again, which for a solid one meant unpacking it all just to count pages.
+        let manifest = cacheDirectory.appendingPathComponent(Self.manifestName)
+        var staged: [String: URL] = [:]
+        let staging = cacheDirectory.appendingPathComponent("staging", isDirectory: true)
+        if let data = try? Data(contentsOf: manifest), let paths = try? JSONDecoder().decode([String].self, from: data) {
+            self.pagePaths = paths
+        } else {
+            if unpackWhileListing, let listed = try? Self.listAndStage(url: url, into: staging) {
+                self.pagePaths = listed.paths
+                staged = listed.staged
+            } else {
+                self.pagePaths = try LibArchive.pagePaths(in: url)
+            }
+            if let data = try? JSONEncoder().encode(pagePaths) { try? data.write(to: manifest, options: .atomic) }
+        }
+        // Pages kept while listing go to their place in reading order.
+        if !staged.isEmpty {
+            let fm = FileManager.default
+            for (index, path) in pagePaths.enumerated() {
+                guard let file = staged.removeValue(forKey: path) else { continue }
+                let target = pageFile(index)
+                try? fm.removeItem(at: target)
+                try? fm.moveItem(at: file, to: target)
+            }
+        }
+        try? FileManager.default.removeItem(at: staging)
 
         // Reuse pages unpacked earlier.
         for index in pagePaths.indices {
@@ -158,6 +190,43 @@ public final class ArchiveBookSource: BookSource, @unchecked Sendable {
         waiters.removeAll()
         lock.unlock()
         pending.forEach { $0.resume(throwing: error) }
+    }
+
+    private static let manifestName = "pages.json"
+
+    /// Lists the archive's pages in one pass, writing each page's bytes into `directory` (named
+    /// by archive position) as it goes. Throws if any page cannot be read, leaving nothing
+    /// behind: the usual list-then-extract path handles damaged archives page by page.
+    private static func listAndStage(url: URL, into directory: URL) throws -> (paths: [String], staged: [String: URL]) {
+        let fm = FileManager.default
+        try? fm.removeItem(at: directory)
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        var paths: [String] = []
+        var staged: [String: URL] = [:]
+        var failed = false
+        do {
+            try LibArchive.forEachEntry(in: url) { path, reader in
+                guard PageFilter.isPage(path: path) else { return .next }
+                paths.append(path)
+                guard staged[path] == nil else { return .next }
+                let read = reader.readAvailable()
+                if read.error != nil {
+                    failed = true
+                    return .stop
+                }
+                let file = directory.appendingPathComponent(String(format: "%05d", paths.count - 1))
+                try read.data.write(to: file)
+                staged[path] = file
+                return .next
+            }
+        } catch {
+            failed = true
+        }
+        if failed {
+            try? fm.removeItem(at: directory)
+            throw ArchiveError(message: "Could not unpack \(url.lastPathComponent) in one pass")
+        }
+        return (PageOrder.sorted(paths), staged)
     }
 
     /// Marks the cache folder as recently used (for future LRU cleanup).

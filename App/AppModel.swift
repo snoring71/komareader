@@ -41,8 +41,20 @@ final class AppModel {
             if !reading {
                 applyReadingProgress()
                 flushFileMetadata()
+                let waiting = readerClosedWaiters
+                readerClosedWaiters = []
+                waiting.forEach { $0.resume() }
             }
         }
+    }
+    /// Background work waiting for the reader to close (see `waitForReaderToClose`).
+    @ObservationIgnored private var readerClosedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Returns once no book is open. Waiting here, rather than checking every few seconds,
+    /// lets the app sleep while a book is read.
+    func waitForReaderToClose() async {
+        guard openBook != nil else { return }
+        await withCheckedContinuation { readerClosedWaiters.append($0) }
     }
     /// The open book with its latest position. It is kept out of `books` until the reader
     /// closes: changing `books` redraws the library behind the reader, and doing that on
@@ -157,7 +169,12 @@ final class AppModel {
         return books[i]
     }
 
+    /// Bumped on every change to `books`, so a view can keep work it did on them (the grid's
+    /// filtered and sorted list) until they change.
+    private(set) var booksVersion = 0
+
     private func booksDidChange(from old: [Book]) {
+        booksVersion &+= 1
         updateSummary()
         defer {
             updateSearchKeys()
@@ -422,10 +439,7 @@ final class AppModel {
             self.index = index
             let covers = CoverService(store: store, thumbnailDirectory: cacheRoot.appendingPathComponent("Thumbnails/\(store.info.libraryId)", isDirectory: true))
             await covers.setHandler { [weak self] id, url in
-                Task { @MainActor in
-                    self?.thumbnails[id] = url
-                    self?.coverRevision[id, default: 0] += 1
-                }
+                Task { @MainActor in self?.noteCoverReady(id, url) }
             }
             await covers.setMetadataHandler { [weak self] id, metadata in
                 Task { @MainActor in self?.noteFileMetadata([id: metadata]) }
@@ -485,6 +499,32 @@ final class AppModel {
         case .readingList(let id), .smartList(let id): return lists.list(id) != nil
         case .missing: return summary.counts[.missing] != nil
         default: return true
+        }
+    }
+
+    /// Covers made since the grid last heard, put into `thumbnails` a few times a second.
+    /// Every cell on screen reads `thumbnails`, so changing it once per finished cover redrew
+    /// the whole visible library for each one while a big library's covers were being made.
+    @ObservationIgnored private var readyCovers: [String: URL] = [:]
+    @ObservationIgnored private var readyCoversTask: Task<Void, Never>?
+
+    private func noteCoverReady(_ id: String, _ url: URL) {
+        readyCovers[id] = url
+        guard readyCoversTask == nil else { return }
+        readyCoversTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self else { return }
+            self.readyCoversTask = nil
+            let ready = self.readyCovers
+            self.readyCovers = [:]
+            var thumbs = self.thumbnails
+            var revisions = self.coverRevision
+            for (id, url) in ready {
+                thumbs[id] = url
+                revisions[id, default: 0] += 1
+            }
+            self.thumbnails = thumbs
+            self.coverRevision = revisions
         }
     }
 
@@ -1559,6 +1599,7 @@ final class AppModel {
         var revisions = coverRevision
         for book in targets {
             thumbs[book.id] = nil
+            readyCovers[book.id] = nil
             revisions[book.id, default: 0] += 1
         }
         thumbnails = thumbs
@@ -1611,7 +1652,7 @@ final class AppModel {
         metadataTask = Task { [weak self] in
             for item in todo {
                 // Stay out of the way of the reader.
-                while self?.openBook != nil, !Task.isCancelled { try? await Task.sleep(for: .seconds(2)) }
+                await self?.waitForReaderToClose()
                 guard self != nil, !Task.isCancelled else { break }
                 let metadata = await Task.detached(priority: .utility) { () -> BookData? in
                     // A book removed from the iPad meanwhile is left for later.
@@ -1722,6 +1763,7 @@ final class AppModel {
     private func refreshCover(_ book: Book) async {
         await covers?.invalidate(bookId: book.id)
         thumbnails[book.id] = nil
+        readyCovers[book.id] = nil
         coverRevision[book.id, default: 0] += 1
         requestCover(for: book, urgent: true)
     }
