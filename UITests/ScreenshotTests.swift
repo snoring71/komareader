@@ -246,14 +246,35 @@ final class ScreenshotTests: XCTestCase {
         let adjust = app.buttons["reader-bar-adjust"]
         if adjust.waitForExistence(timeout: 3) {
             adjust.tap()
+            // The panel has tabs (#115-#124): adjustments first, then paper.
+            let adjustTab = app.buttons["Adjust"]
+            if adjustTab.waitForExistence(timeout: 3) { adjustTab.tap() }
             let contrast = app.sliders["adjust-contrast"]
             if contrast.waitForExistence(timeout: 3) { contrast.adjust(toNormalizedSliderPosition: 0.85) }
+            sleep(1)
+            save(app, "16a-reader-adjust-tab")
+            let paperTab = app.buttons["Paper"]
+            if paperTab.waitForExistence(timeout: 3) { paperTab.tap() }
             let grain = app.sliders["adjust-grain"]
             if grain.waitForExistence(timeout: 3) { grain.adjust(toNormalizedSliderPosition: 0.7) }
             sleep(2)
             save(app, "16-reader-adjustments")
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
-            sleep(1)
+            // Compare: the adjusted page, with Done to go back.
+            let compare = app.buttons["adjust-compare"]
+            if compare.waitForExistence(timeout: 3), compare.isEnabled {
+                compare.tap()
+                let done = app.buttons["compare-done"]
+                if done.waitForExistence(timeout: 5) {
+                    sleep(2)
+                    save(app, "16b-reader-compare")
+                    done.tap()
+                    XCTAssertTrue(done.waitForNonExistence(timeout: 3), "Done did not close Compare")
+                    sleep(1)
+                }
+            } else {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
+                sleep(1)
+            }
         }
         let more = app.buttons["reader-bar-more"]
         if more.waitForExistence(timeout: 3) {

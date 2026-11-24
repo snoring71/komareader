@@ -141,9 +141,25 @@ final class ReaderState {
     var look: PageLook { previewLook ?? savedLook }
 
     var savedLook: PageLook {
-        PageLook(contrast: options.contrast ?? defaults.contrast, sharpness: options.sharpness ?? defaults.sharpness,
-                 paperGrain: options.paperGrain ?? defaults.paperGrain, paperTint: options.paperTint ?? defaults.paperTint)
+        var base = defaults.look
+        base.darkAppearance = darkAppearance
+        return PageLook(options: options, base: base)
     }
+
+    /// Whether the system appearance is dark (set by the reader screen), for night modes
+    /// that follow it.
+    var darkAppearance = false {
+        didSet {
+            guard darkAppearance != oldValue else { return }
+            if previewLook != nil { previewLook?.darkAppearance = darkAppearance }
+            prefetch()
+        }
+    }
+
+    /// Trims each page's blank border as it loads (#116); a hand-set crop wins.
+    var autoTrim: Bool { options.autoTrim ?? defaults.autoTrim }
+    var pageTurn: ReaderOptions.PageTurn { options.pageTurn ?? defaults.pageTurn }
+    var pageEdges: Bool { options.pageEdges ?? defaults.pageEdges }
 
     /// Slider values shown live but not saved yet (see `commitLook`).
     var previewLook: PageLook?
@@ -152,14 +168,12 @@ final class ReaderState {
     func commitLook() {
         guard let preview = previewLook else { return }
         let saved = savedLook
-        change { options in
-            if preview.contrast != saved.contrast { options.contrast = preview.contrast }
-            if preview.sharpness != saved.sharpness { options.sharpness = preview.sharpness }
-            if preview.paperGrain != saved.paperGrain { options.paperGrain = preview.paperGrain }
-            if preview.paperTint != saved.paperTint { options.paperTint = preview.paperTint }
-        }
+        change { options in preview.write(changesFrom: saved, into: &options) }
         previewLook = nil
     }
+
+    /// The Compare view is showing: the pages with and without their adjustments.
+    var comparing = false
 
     /// Set by a swipe up on the page: the reader closes.
     var closeRequested = false
@@ -200,11 +214,27 @@ final class ReaderState {
         resolved.background = background
         resolved.bindingShadow = bindingShadow
         resolved.splitDoublePages = splitDoublePages
-        let look = savedLook
+        let look = savedLook.options
         resolved.contrast = look.contrast
         resolved.sharpness = look.sharpness
         resolved.paperGrain = look.paperGrain
         resolved.paperTint = look.paperTint
+        resolved.brightness = look.brightness
+        resolved.gamma = look.gamma
+        resolved.saturation = look.saturation
+        resolved.blackAndWhite = look.blackAndWhite
+        resolved.autoFix = look.autoFix
+        resolved.nightMode = look.nightMode
+        resolved.nightOnlyInDark = look.nightOnlyInDark
+        resolved.descreen = look.descreen
+        resolved.jpegCleanup = look.jpegCleanup
+        resolved.sharperScaling = look.sharperScaling
+        resolved.keepColorPages = look.keepColorPages
+        resolved.paperStock = look.paperStock
+        resolved.upscale = look.upscale
+        resolved.autoTrim = autoTrim
+        resolved.pageTurn = pageTurn
+        resolved.pageEdges = pageEdges
         return resolved
     }
 
@@ -229,10 +259,7 @@ final class ReaderState {
     /// The settings that decide which pages show where, leaving out how they are drawn.
     private static func withoutLook(_ options: ReaderOptions) -> ReaderOptions {
         var options = options
-        options.contrast = nil
-        options.sharpness = nil
-        options.paperGrain = nil
-        options.paperTint = nil
+        PageLook.clear(&options)
         options.updatedAt = .distantPast
         return options
     }
@@ -436,6 +463,7 @@ final class ReaderState {
     }
 
     private func pageDidChange() {
+        PageTurnFeedback.shared.pageTurned()
         let finished = currentPages.contains(pageCount - 1)
         onPageChange?(currentPage, finished)
         prefetch()
@@ -461,11 +489,12 @@ final class ReaderState {
             for page in spreads[spread] where !indices.contains(page.page) { indices.append(page.page) }
         }
         let source = source, cache = cache, size = PageImageCache.screenPixelSize
-        let adjustments = savedLook.adjustments
+        let adjustments = savedLook.adjustments, trims = autoTrim && options.crop == nil
         prefetchTask = Task.detached(priority: .userInitiated) {
             for page in indices {
                 if Task.isCancelled { return }
                 _ = await cache.load(page: page, size: size, from: source, adjustments: adjustments)
+                if trims { _ = await cache.trim(for: page, from: source) }
             }
         }
     }
@@ -539,6 +568,32 @@ final class PageImageCache: @unchecked Sendable {
             return task
         }
         return await task.value
+    }
+
+    // MARK: Automatic margin trim (#116)
+
+    /// Each page's content inside its plain margins, as fractions of the page (nil: none found).
+    private var trims: [Int: CGRect?] = [:]
+
+    /// The trim for `page` if it has been measured.
+    func knownTrim(for page: Int) -> CGRect?? {
+        lock.withLock { trims[page] }
+    }
+
+    /// Measures `page`'s margins (on a small copy of the decoded page) and keeps the result.
+    func trim(for page: Int, from source: BookSource) async -> CGRect? {
+        if let known = knownTrim(for: page) { return known }
+        let raw = await load(page: page, size: 640, from: source)
+        guard let image = raw?.cgImage else { return nil }
+        let bounds = ImageAnalysis.contentBounds(of: image)
+        // Trim only real margins, and never more than a fifth off any side, so a page with
+        // little on it is not blown up.
+        let minX = min(bounds[0], 0.2), minY = min(bounds[1], 0.2)
+        let maxX = max(bounds[0] + bounds[2], 0.8), maxY = max(bounds[1] + bounds[3], 0.8)
+        var rect: CGRect? = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        if maxX - minX > 0.995, maxY - minY > 0.995 { rect = nil }
+        lock.withLock { trims[page] = .some(rect) }
+        return rect
     }
 
     // MARK: Adjusted pages

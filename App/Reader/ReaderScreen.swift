@@ -8,6 +8,7 @@ struct ReaderScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.coverStyle) private var coverStyle
+    @Environment(\.colorScheme) private var colorScheme
     @State private var state: ReaderState
     @State private var scrubPage: Double = 0
     @State private var isScrubbing = false
@@ -78,6 +79,11 @@ struct ReaderScreen: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                         .zIndex(5)
                 }
+                if state.comparing {
+                    CompareView(state: state)
+                        .transition(.opacity)
+                        .zIndex(6)
+                }
                 if let handOff {
                     handOffBanner(handOff)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -95,6 +101,7 @@ struct ReaderScreen: View {
         .animation(.easeInOut(duration: 0.25), value: handOff)
         .animation(.easeInOut(duration: 0.25), value: askingRestart)
         .animation(.easeInOut(duration: 0.2), value: state.selectingText)
+        .animation(.easeInOut(duration: 0.2), value: state.comparing)
         .animation(.easeInOut(duration: 0.2), value: state.textStatus)
         .sheet(isPresented: $showInfo) {
             BookInfoView(bookId: state.book.id, source: state.source)
@@ -107,6 +114,9 @@ struct ReaderScreen: View {
         .onChange(of: liveBook.direction) { _, direction in
             state.adoptDirection(direction.flatMap(ReaderOptions.Direction.init(rawValue:)))
         }
+        // Night modes can follow the system appearance (#118).
+        .onAppear { state.darkAppearance = colorScheme == .dark }
+        .onChange(of: colorScheme) { _, scheme in state.darkAppearance = scheme == .dark }
         .statusBarHidden(true)
         .persistentSystemOverlays(state.showChrome ? .automatic : .hidden)
         .onAppear {
@@ -135,7 +145,7 @@ struct ReaderScreen: View {
                 let coverURL = model.thumbnails[next.book.id], revision = model.coverRevision[next.book.id] ?? 0
                 state.makeEndPage = { [weak readerState] in
                     let page = UIHostingController(rootView: AnyView(
-                        NextBookPage(next: next, coverURL: coverURL, coverRevision: revision,
+                        NextBookPage(next: next, finishedId: bookId, coverURL: coverURL, coverRevision: revision,
                                      onBack: { readerState?.leaveEndPage() })
                             .environment(\.coverStyle, style)
                             .environment(appModel)

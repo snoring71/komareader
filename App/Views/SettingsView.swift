@@ -8,6 +8,8 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.coverShadowDirection) private var shadowDirection: CoverShadowDirection = .around
     @AppStorage(SettingsKeys.roundedCorners) private var roundedCorners = true
     @AppStorage(CoverIntro.settingKey) private var showCoverIntro = true
+    @AppStorage(PageTurnFeedback.soundKey) private var pageTurnSound = false
+    @AppStorage(PageTurnFeedback.hapticKey) private var pageTurnHaptic = false
 
     var body: some View {
         @Bindable var policy = model.coverPolicy
@@ -63,10 +65,17 @@ struct SettingsView: View {
                     // For every book alike, so here rather than among the Book Defaults (#93).
                     Toggle("Show Cover First", isOn: $showCoverIntro)
                         .accessibilityIdentifier("settings-show-cover-first")
+                    // A soft paper sound and a tap on each turn (#128).
+                    Toggle("Page Turn Sound", isOn: $pageTurnSound)
+                        .accessibilityIdentifier("settings-page-sound")
+                        .onChange(of: pageTurnSound) { _, on in if on { PageTurnFeedback.shared.playSound() } }
+                    if PageTurnFeedback.supportsHaptics {
+                        Toggle("Page Turn Haptics", isOn: $pageTurnHaptic)
+                    }
                 } header: {
                     Text("Reading")
                 } footer: {
-                    Text("Book Defaults are how books open until you change a setting while reading one. Show Cover First shows the cover when a book opens: for a moment if you've read it before, or until you turn to the first page.")
+                    Text("Book Defaults are how books open until you change a setting while reading one. Show Cover First shows the cover when a book opens: for a moment if you've read it before, or until you turn to the first page. Page Turn Sound follows the silent switch and volume.")
                 }
 
                 Section("Library") {

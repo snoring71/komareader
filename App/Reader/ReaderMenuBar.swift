@@ -144,7 +144,7 @@ extension ReaderBarItem {
         let changed = !state.look.isNone
         return ReaderBarItem(id: "adjust", group: .look, label: changed ? "Image Adjustments, on" : "Image Adjustments",
                              icon: AnyView(AdjustmentsIcon()),
-                             behavior: .panel { _ in AnyView(AdjustmentsPanel(state: state)) },
+                             behavior: .panel { close in AnyView(AdjustmentsPanel(state: state, close: close)) },
                              isOn: changed)
     }
 
