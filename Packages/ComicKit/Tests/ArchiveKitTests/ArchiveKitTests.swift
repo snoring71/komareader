@@ -194,6 +194,51 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: page.path))
     }
 
+    /// RAR and 7z books are unpacked while they are listed: every page is there as soon as the
+    /// book opens, in reading order, with no second pass.
+    @Test func unpacksWhileListing() async throws {
+        let cache = try tempDir()
+        let url = try fixture("sample.cbz")
+        let plain = try ArchiveBookSource(url: url, cacheRoot: try tempDir())
+        let source = try ArchiveBookSource(url: url, cacheRoot: cache, unpackWhileListing: true)
+        #expect(source.pagePaths == plain.pagePaths)
+        for index in 0..<source.pageCount {
+            let page = try await source.pageURL(at: index)
+            let expected = try await plain.pageURL(at: index)
+            #expect(try Data(contentsOf: page) == Data(contentsOf: expected))
+        }
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: cache.path)
+            .flatMap { try FileManager.default.contentsOfDirectory(atPath: cache.appendingPathComponent($0).path) }
+        #expect(!leftovers.contains("staging"))
+    }
+
+    /// A book opened again takes its page list from the cache instead of listing the archive.
+    @Test func reopenUsesSavedPageList() async throws {
+        let cache = try tempDir()
+        let original = try fixture("sample.cbz")
+        let url = try tempDir().appendingPathComponent("book.cbz")
+        try FileManager.default.copyItem(at: original, to: url)
+        let first = try ArchiveBookSource(url: url, cacheRoot: cache)
+        let count = first.pageCount
+        for index in 0..<count { _ = try await first.pageURL(at: index) }
+        // Same name, size and date, but no longer an archive: only the cache can answer.
+        let size = try Data(contentsOf: url).count
+        let date = try #require(try url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+        try Data(repeating: 0, count: size).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+        let again = try ArchiveBookSource(url: url, cacheRoot: cache)
+        #expect(again.pageCount == count)
+        let page = try await again.pageURL(at: count - 1)
+        #expect(FileManager.default.fileExists(atPath: page.path))
+    }
+
+    @Test func damagedArchiveStillOpensWhenUnpackedWhileListing() async throws {
+        let source = try ArchiveBookSource(url: try fixture("damaged.cbz"), cacheRoot: try tempDir(), unpackWhileListing: true)
+        #expect(source.pageCount == 3)
+        let second = try await source.image(at: 1, maxPixelSize: 150)
+        #expect(second.height == 150)
+    }
+
     @Test func firstPageForCovers() async throws {
         let image = try await BookSourceFactory.firstPageImage(url: try fixture("sample.cbz"), format: .zip, maxPixelSize: 60)
         #expect(image.height == 60)

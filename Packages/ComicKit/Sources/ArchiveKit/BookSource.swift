@@ -23,7 +23,7 @@ public enum BookSourceFactory {
             case .folder:
                 return try FolderBookSource(url: url)
             case .zip, .rar, .sevenZip, .tar, .epub:
-                return try ArchiveBookSource(url: url, cacheRoot: cacheDirectory)
+                return try ArchiveBookSource(url: url, cacheRoot: cacheDirectory, unpackWhileListing: format == .rar || format == .sevenZip)
             }
         }.value
     }
